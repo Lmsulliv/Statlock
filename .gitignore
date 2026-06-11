@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Database (never commit match data)
+*.db
+*.sqlite3
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Secrets and local config
+.env
+CLAUDE.local.md
+
+# Frontend (Phase 5)
+frontend/node_modules/
+frontend/dist/
+
+# Logs
+*.log
+
+# OS noise
+Thumbs.db
+.DS_Store
