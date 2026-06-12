@@ -1,0 +1,122 @@
+[
+  {
+    "id": 1,
+    "name": "Infernus",
+    "images": {
+      "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_card.png",
+      "icon_hero_card_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_card.webp",
+      "icon_image_small": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_sm.png",
+      "icon_image_small_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_sm.webp",
+      "minimap_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_mm.png",
+      "minimap_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_mm.webp",
+      "hero_card_critical": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_card_critical.png",
+      "hero_card_critical_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_card_critical.webp",
+      "hero_card_gloat": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_card_gloat.png",
+      "hero_card_gloat_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_card_gloat.webp",
+      "top_bar_vertical_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_vertical.png",
+      "top_bar_vertical_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_vertical.webp",
+      "background_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/backgrounds/infernus_bg.png",
+      "background_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/backgrounds/infernus_bg.webp",
+      "name_image": "https://assets-bucket.deadlock-api.com/assets-api-res/icons/infernus.svg"
+    },
+    "disabled": false,
+    "in_development": false,
+    "player_selectable": true
+  },
+  {
+    "id": 2,
+    "name": "Seven",
+    "images": {
+      "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/gigawatt_card.png",
+      "icon_hero_card_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/gigawatt_card.webp",
+      "icon_image_small": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/gigawatt_sm.png",
+      "icon_image_small_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/gigawatt_sm.webp",
+      "minimap_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/gigawatt_mm.png",
+      "minimap_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/gigawatt_mm.webp",
+      "hero_card_critical": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/gigawatt_card_critical.png",
+      "hero_card_critical_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/gigawatt_card_critical.webp",
+      "hero_card_gloat": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/gigawatt_card_gloat.png",
+      "hero_card_gloat_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/gigawatt_card_gloat.webp",
+      "top_bar_vertical_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/gigawatt_vertical.png",
+      "top_bar_vertical_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/gigawatt_vertical.webp",
+      "background_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/backgrounds/seven_bg.png",
+      "background_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/backgrounds/seven_bg.webp",
+      "name_image": "https://assets-bucket.deadlock-api.com/assets-api-res/icons/seven.svg"
+    },
+    "disabled": false,
+    "in_development": false,
+    "player_selectable": true
+  },
+  {
+    "id": 3,
+    "name": "Vindicta",
+    "images": {
+      "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/hornet_card.png",
+      "icon_hero_card_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/hornet_card.webp",
+      "icon_image_small": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/hornet_sm.png",
+      "icon_image_small_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/hornet_sm.webp",
+      "minimap_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/hornet_mm.png",
+      "minimap_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/hornet_mm.webp",
+      "hero_card_critical": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/hornet_card_critical.png",
+      "hero_card_critical_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/hornet_card_critical.webp",
+      "hero_card_gloat": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/hornet_card_gloat.png",
+      "hero_card_gloat_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/hornet_card_gloat.webp",
+      "top_bar_vertical_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/hornet_vertical.png",
+      "top_bar_vertical_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/hornet_vertical.webp",
+      "background_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/backgrounds/vindicta_bg.png",
+      "background_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/backgrounds/vindicta_bg.webp",
+      "name_image": "https://assets-bucket.deadlock-api.com/assets-api-res/icons/vindicta.svg"
+    },
+    "disabled": false,
+    "in_development": false,
+    "player_selectable": true
+  },
+  {
+    "id": 4,
+    "name": "Lady Geist",
+    "images": {
+      "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/spectre_card.png",
+      "icon_hero_card_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/spectre_card.webp",
+      "icon_image_small": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/spectre_sm.png",
+      "icon_image_small_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/spectre_sm.webp",
+      "minimap_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/spectre_mm.png",
+      "minimap_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/spectre_mm.webp",
+      "hero_card_critical": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/spectre_card_critical.png",
+      "hero_card_critical_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/spectre_card_critical.webp",
+      "hero_card_gloat": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/spectre_card_gloat.png",
+      "hero_card_gloat_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/spectre_card_gloat.webp",
+      "top_bar_vertical_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/spectre_vertical.png",
+      "top_bar_vertical_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/spectre_vertical.webp",
+      "background_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/backgrounds/geist_bg.png",
+      "background_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/backgrounds/geist_bg.webp",
+      "name_image": "https://assets-bucket.deadlock-api.com/assets-api-res/icons/lady_geist.svg"
+    },
+    "disabled": false,
+    "in_development": false,
+    "player_selectable": true
+  },
+  {
+    "id": 6,
+    "name": "Abrams",
+    "images": {
+      "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/bull_card.png",
+      "icon_hero_card_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/bull_card.webp",
+      "icon_image_small": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/bull_sm.png",
+      "icon_image_small_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/bull_sm.webp",
+      "minimap_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/bull_mm.png",
+      "minimap_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/bull_mm.webp",
+      "hero_card_critical": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/bull_card_critical.png",
+      "hero_card_critical_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/bull_card_critical.webp",
+      "hero_card_gloat": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/bull_card_gloat.png",
+      "hero_card_gloat_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/bull_card_gloat.webp",
+      "top_bar_vertical_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/bull_vertical.png",
+      "top_bar_vertical_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/bull_vertical.webp",
+      "background_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/backgrounds/abrams_bg.png",
+      "background_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/backgrounds/abrams_bg.webp",
+      "name_image": "https://assets-bucket.deadlock-api.com/assets-api-res/icons/abrams.svg"
+    },
+    "disabled": false,
+    "in_development": false,
+    "player_selectable": true
+  }
+]

@@ -297,8 +297,51 @@ Use Steam News as the primary source, big-days as a sanity cross-check.
 - Which team number is Amber vs. Sapphire (`data-model.md` says 0 = Amber);
   nothing in the responses names the teams.
 - Whether 322 history entries is truly the complete history or capped.
-- Exact meaning of `items[].flags` and how to distinguish shop purchases
-  from ability entries robustly (current plan: join against
-  `/v1/assets/items`).
 - Published rate limits: nothing was throttled at 1 req/5 s; no limit
   headers were observed on responses.
+
+---
+
+## Assets endpoints (verified 2026-06-11)
+
+Raw samples: `spikes/out/06_assets_heroes.json`, `spikes/out/06_assets_items.json`.
+
+### `GET /v1/assets/heroes` — 61 entries
+
+Fields always present: `id` (INTEGER), `name` (TEXT, human-readable e.g. "Infernus"),
+`class_name` (TEXT, internal e.g. "hero_inferno"), `images` (object),
+`disabled` (bool), `in_development` (bool), `player_selectable` (bool).
+
+Image URL key: `images.icon_hero_card` is the canonical card art URL (present in
+58/61). `images.icon_hero_card_webp` is the WebP variant. Other keys:
+`icon_image_small`, `minimap_image`, `top_bar_vertical_image`, etc.
+
+Loader mapping to `heroes`: `id → hero_id`, `name → name`,
+`images.icon_hero_card → image_url` (may be NULL for 3 unreleased heroes).
+
+IDs are small non-sequential integers: 1–83 range with gaps.
+
+### `GET /v1/assets/items` — 726 entries; 251 are shop items
+
+**Discriminator: `type == "upgrade"`** → shop/purchaseable item. The other 475
+entries are `"ability"` (hero abilities, 389) or `"weapon"` (hero gun items, 86).
+Only `"upgrade"` entries ever have `item_tier` or `item_slot_type`.
+
+**Filter for `match_item_purchases`**: join `item_id` against the set of IDs where
+`type == "upgrade"` (resolves the open question about distinguishing shop
+purchases from ability entries in per-player `items[]`).
+
+Fields on every `"upgrade"` entry (251 total):
+`id` (INTEGER), `name` (TEXT, human-readable, always differs from `class_name`),
+`item_slot_type` (TEXT: `"weapon"`, `"vitality"`, or `"spirit"`),
+`item_tier` (INTEGER: 1–5), `cost` (INTEGER, soul cost).
+`image` present in 232/251; `shop_image` present in 184/251 — prefer `shop_image`
+when loading `items.image_url`, fall back to `image`.
+
+Active vs disabled upgrades: `shopable == True, disabled == null/False` (173
+items) are live; `shopable == False, disabled == True` (78 items) are disabled
+and should still be loaded (needed to parse older matches).
+
+Loader mapping to `items`: `id → item_id`, `name → name`,
+`item_tier → tier`, `item_slot_type → slot_type`,
+`shop_image ?? image → image_url`.

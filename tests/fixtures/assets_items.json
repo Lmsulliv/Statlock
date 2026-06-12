@@ -1,0 +1,80 @@
+[
+  {
+    "id": 1548066885,
+    "name": "Extended Magazine",
+    "class_name": "upgrade_clip_size",
+    "type": "upgrade",
+    "item_slot_type": "weapon",
+    "item_tier": 1,
+    "cost": 800,
+    "shop_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/items/weapon/basic_magazine.png",
+    "image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/clip_size.png",
+    "shopable": true,
+    "disabled": null
+  },
+  {
+    "id": 1009965641,
+    "name": "Monster Rounds",
+    "class_name": "upgrade_non_player_bonus",
+    "type": "upgrade",
+    "item_slot_type": "weapon",
+    "item_tier": 1,
+    "cost": 800,
+    "shop_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/items/weapon/monster_rounds.png",
+    "image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/reaper_rounds.png",
+    "shopable": true,
+    "disabled": null
+  },
+  {
+    "id": 1437614329,
+    "name": "Melee Lifesteal",
+    "class_name": "upgrade_lifestrike_gauntlets",
+    "type": "upgrade",
+    "item_slot_type": "vitality",
+    "item_tier": 1,
+    "cost": 800,
+    "shop_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/items/vitality/melee_lifesteal.png",
+    "image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/lifestrike_gauntlets.png",
+    "shopable": true,
+    "disabled": false
+  },
+  {
+    "id": 4204808176,
+    "name": "Rebuttal",
+    "class_name": "upgrade_melee_rebuttal",
+    "type": "upgrade",
+    "item_slot_type": "vitality",
+    "item_tier": 1,
+    "cost": 800,
+    "shop_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/items/vitality/rebuttal.png",
+    "image": "https://assets-bucket.deadlock-api.com/assets-api-res/icons/icon_parry.svg",
+    "shopable": true,
+    "disabled": null
+  },
+  {
+    "id": 619484391,
+    "name": "Silence Wave",
+    "class_name": "upgrade_targeted_silence",
+    "type": "upgrade",
+    "item_slot_type": "spirit",
+    "item_tier": 3,
+    "cost": 3200,
+    "shop_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/items/spirit/silence_glyph.png",
+    "image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/targeted_silence.png",
+    "shopable": true,
+    "disabled": null
+  },
+  {
+    "id": 968099481,
+    "name": "Extra Spirit",
+    "class_name": "upgrade_improved_spirit",
+    "type": "upgrade",
+    "item_slot_type": "spirit",
+    "item_tier": 1,
+    "cost": 800,
+    "shop_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/items/spirit/extra_spirit.png",
+    "image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/tech_damage.png",
+    "shopable": true,
+    "disabled": null
+  }
+]

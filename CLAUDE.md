@@ -22,7 +22,9 @@ silently picking one:
 - Python 3.12+, FastAPI, SQLite (stdlib sqlite3 or SQLAlchemy Core; no ORM models)
 - pytest for all backend tests
 - React + Vite frontend in frontend/ (Phase 5 only)
-- No other dependencies without asking first
+- Runtime dependencies require asking first. Dev-only dependencies
+  (testing, linting, type checking) may be proposed freely but still
+  need approval before installing.
 
 ## Hard rules
 
