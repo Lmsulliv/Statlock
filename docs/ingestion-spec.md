@@ -47,8 +47,8 @@ forever:
     response = GET match-metadata(row.match_id)
 
     case response:
-        200 -> parse, write matches / match_players / match_item_purchases
-               in ONE transaction, mark status='fetched'
+        200 -> parse (see Parsing notes), write matches / match_players /
+            match_item_purchases in ONE transaction, mark status='fetched'
         404 or "not yet available" ->
                attempts += 1
                if attempts >= 5: status='unavailable'
@@ -86,6 +86,24 @@ The intuition: if something failed just now, it'll probably still fail in one se
 
 Mixing these up is a classic ingestion bug: a flaky network at 3 a.m. permanently marks 50 perfectly good matches as unavailable.
 
+### Parsing notes
+
+The metadata payload has no flat damage or healing fields. Each player
+carries a `stats` time series sampled across the match, and the final
+totals are whatever the LAST entry of that series holds. The parser
+extracts player_damage, obj_damage, and healing from there (see
+docs/api-findings.md for the exact shape).
+
+Two rules follow:
+
+- **A missing or empty series yields NULLs, never zeros.** A zero is a
+  claim ("this player did no damage"); a NULL is an admission ("we don't
+  know"). Averages and baselines must not be polluted by fake zeros.
+- **The full series stays in raw_json untouched.** This finding confirms
+  the per-minute data exists, which means future features (soul curves,
+  death timing) backfill from already-ingested matches with no
+  re-fetching. Do not extract more than the finals for now.
+
 ### Crash safety
 
 Two rules make the worker survivable:
@@ -104,7 +122,9 @@ once per day (e.g. 4 a.m.):
      WHERE status='unavailable'
        AND last_attempt_at < now() - 24h;
 
-    refresh baseline_hero_matchups / baseline_hero_item_stats
+    refresh baselines, one request per era:
+        for each era in patch_eras, plus one explicit all-time span, call analytics with min/max date params set to that era's
+        boundaries. NEVER omit the date params: the endpoint defaults to a trailing 30-day window, which would silently store recent-meta numbers under an older era's label.
         (new snapshot_id; old snapshots kept for time-travel debugging)
 
     refresh heroes / items from assets API

@@ -1,0 +1,304 @@
+# API Findings (verified 2026-06-11)
+
+Verified facts about the live APIs, gathered with the throwaway scripts in
+`spikes/`. Every claim cites the raw archived response in `spikes/out/` it
+came from. Per CLAUDE.md, this document trumps assumptions in the other
+spec docs.
+
+Base URL: `https://api.deadlock-api.com`. All calls below succeeded
+unauthenticated at 1 request / 5 s; no 429 or `Retry-After` was ever seen.
+
+---
+
+## Contradictions with the spec docs
+
+Found while verifying; spec docs are unchanged, amendments proposed here.
+
+1. **No per-player badge in match metadata.** `data-model.md` defines
+   `match_players.badge` ("player rank at match time"), but the metadata
+   response contains no per-player rank anywhere — the only badge fields in
+   the entire 1.5 MB response are match-level `average_badge_team0` and
+   `average_badge_team1` (verified in two matches:
+   `out/02_match_metadata_86714494.json`, `out/05_match_metadata_86707774.json`).
+   *Proposed amendment:* drop `match_players.badge`; add
+   `average_badge_team0/1` to `matches` (replacing the single
+   `average_badge`). For **tracked** accounts only, per-match rank is
+   available from `GET /v1/players/{account_id}/mmr-history`, whose rows
+   carry `match_id` and `rank` (tier·10+subtier) — a small optional table
+   if per-player rank graphs are wanted.
+
+2. **No party information in match metadata.** `data-model.md` defines
+   `match_players.party_id`; no party-related key exists in the response
+   (same two files). The only related field is the match-level boolean
+   `is_high_skill_range_parties`.
+   *Proposed amendment:* drop `party_id` (or keep it always-NULL as a
+   placeholder until another source appears).
+
+3. **No game build/version in match metadata.** `data-model.md` says "the
+   match metadata includes a game version you can map to" `patches`. It
+   does not: the only `*version*` keys are `game_mode_version` and the
+   path-encoding `match_paths.version`. No `build`/`patch` key exists.
+   *Proposed amendment:* bind matches to eras by `start_time` date ranges
+   (or equivalently `match_id` ranges — IDs are monotonic and every
+   analytics endpoint filters on `min/max_match_id` too). `matches.patch_id`
+   cannot be populated from metadata; either drop it or derive it by
+   bucketing `start_time` against patch-notes dates.
+
+4. **Lane is an integer, not text.** `match_players.lane TEXT` in the data
+   model vs. `assigned_lane` integer in the response (values like 1, 4).
+   *Proposed amendment:* `assigned_lane INTEGER`.
+
+5. **Damage/healing totals are not flat per-player fields.**
+   `player_damage`, `obj_damage`, `healing` in `match_players` have no
+   direct counterparts. They live in the per-player `stats` time series
+   (one snapshot per ~180 s); the **last** snapshot holds final totals:
+   `player_damage`, `player_healing` (also `self_healing`,
+   `player_damage_taken`), and `boss_damage` (closest to objective damage).
+   *Proposed amendment:* populate these columns from the final `stats`
+   entry and note the source.
+
+6. **Rank brackets are numeric badge values, and the matchup baseline
+   endpoint cannot bucket by them.** `baseline_*.rank_bracket TEXT`
+   suggests named brackets; actually all rank filtering is numeric
+   `min/max_average_badge` (0–116). `hero-counter-stats` (the matchup
+   baseline source) has **no** badge bucketing — one snapshot per bracket
+   costs one request per bracket. `hero-stats` does offer
+   `bucket=avg_badge` in a single call.
+   *Proposed amendment:* make `rank_bracket` an integer pair
+   (`badge_min`, `badge_max`) or store the single badge level as INTEGER;
+   pick a bracket scheme (e.g. 11 tiers) that keeps a baseline snapshot to
+   ~11 requests per endpoint.
+
+7. **Analytics default time window is the last 30 days, not all-time.**
+   `min_unix_timestamp` defaults to "30 days ago" per the OpenAPI spec
+   (`out/03_openapi.json`). Omitting filters does NOT give an all-time
+   baseline; pass an explicit `min_unix_timestamp` (e.g. 0) for that.
+
+---
+
+## Account ID format and `to_account_id()`
+
+`GET /v1/players/{account_id}/match-history` was called with both formats
+(`out/01_match_history_account_id32.json`, `out/01_match_history_steamid64.json`):
+
+| Input | Result |
+| --- | --- |
+| `891231519` (32-bit account ID) | 200, 322 matches |
+| `76561198851497247` (SteamID64) | 200, byte-identical response |
+
+The server normalizes SteamID64 to the 32-bit account ID, but the OpenAPI
+spec documents the parameter as "The players `SteamID3`" with
+`format: int32` — so SteamID64 acceptance is undocumented behavior.
+**Normalize client-side and always send the 32-bit account ID.**
+
+**`to_account_id()` helper (Phase 1 utility):** friends will paste any of:
+
+- 32-bit account ID / friend ID: use as-is (`891231519`)
+- SteamID64: `account_id = steamid64 - 76561197960265728`
+  (76561198851497247 → 891231519, verified)
+- Profile URL `steamcommunity.com/profiles/<steamid64>`: extract the
+  number, subtract as above
+- Vanity URL `steamcommunity.com/id/<name>`: not resolvable offline —
+  needs Steam's `ResolveVanityURL` (requires an API key) or
+  `GET /v1/players/steam-search?search_query=...` on deadlock-api;
+  acceptable to reject with a helpful message at first.
+
+Heuristic: values ≥ 76561197960265728 are SteamID64; smaller positive
+integers are account IDs.
+
+---
+
+## Endpoints verified
+
+| Endpoint | Purpose | Raw sample |
+| --- | --- | --- |
+| `GET /v1/players/{account_id}/match-history` | discovery loop | `out/01_match_history_account_id32.json` |
+| `GET /v1/matches/{match_id}/metadata` | full match ingestion | `out/02_match_metadata_86714494.json` |
+| `GET /v1/analytics/hero-counter-stats` | matchup baselines | `out/03c_counter_default.json` |
+| `GET /v1/analytics/item-stats` | item baselines | `out/03d_item_stats_hero7.json` |
+| `GET /v1/analytics/hero-stats` | per-badge hero baselines | `out/03d_hero_stats_badge_bucket.json` |
+| `GET /v1/assets/ranks` | badge → name mapping | `out/03c_ranks.json` |
+| `GET /v1/patches/big-days` | big-patch dates | `out/03c_big_days.json` |
+| `GET https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid=1422450` | era candidates | `out/04_steam_news.json` |
+
+Also present in the OpenAPI spec (103 paths, `out/03_openapi.json`) and
+relevant later: `/v1/players/{account_id}/mmr-history` (rank per match —
+the Overview screen's MMR graph), `/v1/players/{account_id}/enemy-stats`
+and `/mate-stats`, `/v1/assets/heroes`, `/v1/assets/items`, `/v1/patches`
+(Valve forum RSS as JSON), `/v2/patches`, `/v1/matches/{match_id}/metadata/raw`.
+
+---
+
+## Match history response shape
+
+A plain JSON array (322 entries for account 891231519 — apparently the
+full history, no pagination parameters exist; only a `force_refetch` flag
+that triggers stricter rate limits). Fields per row, all observed non-null
+unless noted:
+
+```text
+account_id, match_id, hero_id, hero_level, start_time (unix s),
+game_mode (int, 1=normal), match_mode (int), player_team (0/1),
+player_kills, player_deaths, player_assists, denies, net_worth,
+last_hits, team_abandoned (bool), abandoned_time_s (null),
+match_duration_s, match_result, objectives_mask_team0/1,
+brawl_score_team0/1 (null), brawl_avg_round_time_s (null)
+```
+
+**`match_result` is the winning team's number, not a won-flag.** Verified
+by spike 05: match 86707774 had `player_team=0, match_result=1` and its
+metadata says `winning_team=1` (`out/05_match_metadata_86707774.json`).
+So: `won = (player_team == match_result)`. Note history rows already carry
+enough (hero, K/D/A, result) for the Overview's "last 10 matches" without
+metadata.
+
+---
+
+## Match metadata: field population
+
+`GET /v1/matches/{match_id}/metadata` returns `{match_info, hero_build_ids,
+banned_hero_ids}`, ~1.2–1.6 MB per match. Verified against two matches.
+
+Match-level (`match_info`), mapping to the `matches` table:
+
+| Spec column | Found? | Actual source |
+| --- | --- | --- |
+| `match_id`, `start_time`, `duration_s` | yes | same names (`start_time` unix int) |
+| `game_mode` | yes | `game_mode` + `match_mode` (ints) |
+| `winning_team` | yes | `winning_team` (0/1; also `match_outcome`) |
+| `patch_id` (game version) | **no** | absent — see contradiction 3 |
+| `average_badge` | partly | `average_badge_team0`, `average_badge_team1` (e.g. 53 = tier 5 subtier 3) |
+
+Per-player (`match_info.players[]`, 12 entries), mapping to `match_players`:
+
+| Spec column | Found? | Actual source |
+| --- | --- | --- |
+| `account_id`, `hero_id`, `team` | yes | same names (+ `player_slot`) |
+| `lane` | yes | `assigned_lane` (integer) |
+| `party_id` | **no** | absent — see contradiction 2 |
+| `badge` | **no** | absent — see contradiction 1 |
+| `kills`, `deaths`, `assists` | yes | same names |
+| `net_worth`, `last_hits`, `denies` | yes | same names |
+| `player_damage`, `obj_damage`, `healing` | derived | last entry of `stats[]`: `player_damage`, `boss_damage`, `player_healing` |
+| `won` | derived | `team == winning_team` |
+
+Item purchases (`players[].items[]`, ~40 entries/player):
+
+- `game_time_s` (purchase time, present), `item_id`, `sold_time_s` (0 =
+  never sold, >0 = seconds into match when sold), `flags`,
+  `imbued_ability_id`, `upgrade_id`, `upgrade_info`.
+- **Caution:** the array mixes shop purchases with ability/level-up entries
+  (same `item_id` recurring with changing `upgrade_id`). Filter entries by
+  membership in `/v1/assets/items` shop items before inserting into
+  `match_item_purchases`.
+
+Also present and worth knowing about (lives in `raw_json` for later):
+`death_details[]` (timestamps + killer + positions), `stats[]` time series
+(net worth, damage, healing, accuracy every ~3 min), `damage_matrix`,
+`match_paths` (positions), `objectives[]`, `mid_boss[]`, `accolades[]`.
+
+---
+
+## Analytics endpoints: filters and rank granularity
+
+All analytics endpoints share these query params (full list per endpoint
+in `out/03_openapi.json`):
+
+- `min/max_unix_timestamp` — filter by match start time. **Date-range
+  filtering works**, so eras map directly onto explicit timestamp ranges.
+  Verified shrinkage on `hero-counter-stats`: default 30 d ≈ 33.4 M
+  matches_played summed, last 7 d ≈ 5.87 M, 7 d + Eternus-only ≈ 0.16 M
+  (`out/03c_counter_default.json`, `..._7d.json`, `..._7d_eternus.json`).
+- `min/max_average_badge` (0–116) — see badge encoding below.
+- `min/max_match_id` — alternative era boundary (IDs are monotonic).
+- `min/max_duration_s`, `min_matches`, `account_id(s)`, `game_mode`.
+- **No patch/version filter exists.** Eras must be expressed as timestamp
+  or match-id ranges. Default window is the last 30 days (contradiction 7).
+
+**Badge encoding:** `badge = tier * 10 + subtier`, subtier 1–6. Tiers from
+`/v1/assets/ranks` (`out/03c_ranks.json`): 0 Obscurus, 1 Initiate,
+2 Seeker, 3 Alchemist, 4 Arcanist, 5 Ritualist, 6 Emissary, 7 Archon,
+8 Oracle, 9 Phantom, 10 Ascendant, 11 Eternus. Observed buckets in live
+data: 12–116, 65 distinct values (no tier 0, no badge 11 in that window),
+see `out/03d_hero_stats_badge_bucket.json`. **Finest granularity: a single
+badge value** (tier+subtier) via equal `min_average_badge` and
+`max_average_badge`. Note the filter applies to the *match's team-average*
+badge, not to individual players.
+
+Endpoint specifics:
+
+- **`/v1/analytics/hero-counter-stats`** — one row per
+  `(hero_id, enemy_hero_id)` with `wins`, `matches_played` (exactly what
+  `baseline_hero_matchups` needs) plus aggregate K/D/A, net worth,
+  obj_damage, etc. for both sides. Has `same_lane_filter` (lane-opponent
+  baselines!) and `min_matches`. **No bucket param**, so fetching N rank
+  brackets costs N requests (~1,406 rows, ~550 KB each).
+- **`/v1/analytics/item-stats`** — one row per item (146 rows for
+  hero_id=7) with `wins`, `losses`, `matches`, `players`,
+  `avg_buy_time_s` (the spec's `avg_purchase_s`), `avg_sell_time_s`,
+  and relative (% of match duration) variants. Filter by `hero_id`. Its
+  `bucket` enum is `no_bucket, hero, team, start_time_*, game_time_*,
+  net_worth_by_*` — **no `avg_badge` bucket** (a literal
+  `bucket=avg_badge` call returns 400, `out/03c_item_stats_badge_bucket.json`),
+  so per-bracket item baselines also cost one request per bracket.
+- **`/v1/analytics/hero-stats`** — supports `bucket=avg_badge`: one call
+  returns per-hero-per-badge rows (2,470 rows, ~1.1 MB) with
+  `wins/losses/matches` and totals, plus `matches_per_bucket`. Useful for
+  overall hero baselines at the finest granularity in a single request.
+
+Budget note for the nightly baseline snapshot: at tier granularity
+(11 brackets), matchups + items is roughly 11 + 11 requests, about
+2 minutes at the 1-per-5 s limit. Finest granularity (66 brackets) would
+be ~11 minutes. Both fine.
+
+---
+
+## Patch sources for era detection
+
+**Steam News API** (`GetNewsForApp`, appid 1422450 confirmed in the
+response, `out/04_steam_news.json`):
+
+- No key required; `?appid=1422450&count=30&maxlength=0` returns mixed
+  feeds — filter to `feedlabel == "Community Announcements"`
+  (`feedname == "steam_community_announcements"`) to get only Valve posts.
+- Item fields: `gid, title, url, is_external_url, author, contents,
+  feedlabel, date (unix), feedname, feed_type, appid`.
+- `contents` is BBCode-ish on a single line: paragraphs as `[p]...[/p]`,
+  change lines start with `- `. No newlines, no `<br>`, no `<li>`.
+  Change-line heuristic that works: count regex matches of `\[p\]\s*-\s`.
+- Valve's own titles already classify updates:
+
+| Post | Change lines | Chars |
+| --- | --- | --- |
+| Gameplay Update - 03-06-2026 (major) | 1177 | 92,167 |
+| Gameplay Update - 05-22-2026 (major) | 307 | 25,897 |
+| Gameplay Update - 04-30-2026 (major) | 162 | 12,211 |
+| Minor Update - 06-04-2026 | 14 | 1,348 |
+| Minor Update - 05-25-2026 | 1 | 890 |
+| Apollo - A Cut Above (hero release) | 0 | 1,295 |
+
+  Calibration: the title prefix (`Gameplay Update` vs `Minor Update`) is a
+  near-perfect major/minor classifier on its own; a change-line count
+  above ~100 separates the same classes. Hero-release posts have ~0 change
+  lines but are era-worthy — score titles that aren't `Minor Update`
+  generously.
+
+**deadlock-api patch endpoints** (supplement): `/v1/patches` returns the
+Valve forum RSS as JSON (`title, pub_date, link, content_encoded`);
+`/v1/patches/big-days` returns just the big-patch dates
+(`out/03c_big_days.json`) — but it appears to **lag**: its latest entry is
+2026-03-11 even though Gameplay Updates shipped 2026-04-30 and 2026-05-22.
+Use Steam News as the primary source, big-days as a sanity cross-check.
+
+---
+
+## Open questions (not yet verified — do not assume)
+
+- Which team number is Amber vs. Sapphire (`data-model.md` says 0 = Amber);
+  nothing in the responses names the teams.
+- Whether 322 history entries is truly the complete history or capped.
+- Exact meaning of `items[].flags` and how to distinguish shop purchases
+  from ability entries robustly (current plan: join against
+  `/v1/assets/items`).
+- Published rate limits: nothing was throttled at 1 req/5 s; no limit
+  headers were observed on responses.

@@ -12,6 +12,7 @@ htmlcov/
 *.db-wal
 *.db-shm
 *.db-journal
+spikes/out/
 
 # Secrets and local config
 .env

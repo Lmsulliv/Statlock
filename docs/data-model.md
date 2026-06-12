@@ -36,12 +36,6 @@ CREATE TABLE patch_eras (
     started_at   TEXT NOT NULL
 );
 
-CREATE TABLE patches (
-    patch_id     TEXT PRIMARY KEY,      -- exact game build / version string
-    released_at  TEXT NOT NULL,
-    era_id       INTEGER REFERENCES patch_eras(era_id),
-    label        TEXT
-);
 ```
 
 Refresh heroes/items on a schedule (weekly is plenty) and after any patch. `patches` can be seeded manually at first; the match metadata includes a game version you can map to it.
@@ -58,7 +52,9 @@ CREATE TABLE matches (
     game_mode       TEXT,
     winning_team    INTEGER NOT NULL,   -- 0 = Amber, 1 = Sapphire
     patch_id        TEXT REFERENCES patches(patch_id),
-    average_badge   INTEGER,            -- lobby average rank if provided
+    era_id          INTEGER REFERENCES patch_eras(era_id)
+    average_badge_team0   INTEGER,      -- team 0 average rank if provided
+    average_badge_team1   INTEGER,      -- team 1 average rank if provided
     raw_json        TEXT NOT NULL,      -- full metadata response, archived
     ingested_at     TEXT NOT NULL
 );
@@ -68,9 +64,7 @@ CREATE TABLE match_players (
     account_id      INTEGER NOT NULL,
     hero_id         INTEGER NOT NULL REFERENCES heroes(hero_id),
     team            INTEGER NOT NULL,
-    lane            TEXT,               -- if metadata provides assigned lane
-    party_id        INTEGER,            -- for later friend/duo analysis
-    badge           INTEGER,            -- player rank at match time
+    lane            INTEGER,               -- if metadata provides assigned lane
     kills           INTEGER,
     deaths          INTEGER,
     assists         INTEGER,
@@ -82,6 +76,14 @@ CREATE TABLE match_players (
     healing         INTEGER,
     won             INTEGER NOT NULL,   -- denormalized: team == winning_team
     PRIMARY KEY (match_id, account_id)
+);
+
+CREATE TABLE account_rank_history ( -- Populated from mmr-history for tracked accounts only;
+-- per-player ranks for other lobby members don't exist (see api-findings.md)
+    account_id   INTEGER NOT NULL,
+    match_id     INTEGER NOT NULL,
+    badge        INTEGER,
+    PRIMARY KEY (account_id, match_id)
 );
 
 CREATE INDEX idx_mp_account ON match_players(account_id);
@@ -113,7 +115,8 @@ CREATE TABLE baseline_hero_matchups (
     hero_id         INTEGER NOT NULL,
     enemy_hero_id   INTEGER NOT NULL,
     era_id          INTEGER,            -- NULL = all-time baseline
-    rank_bracket    TEXT,               -- finest bracket the API offers
+    badge_min INTEGER,               -- finest bracket the API offers
+    badge_max INTEGER,
     wins            INTEGER NOT NULL,
     matches         INTEGER NOT NULL,   -- sample size: keep it, never store only the %
     fetched_at      TEXT NOT NULL,
@@ -143,6 +146,8 @@ CREATE TABLE baseline_snapshots (
 Two rules here. First: **store wins and matches, never just a win rate.** You need the raw counts to compute confidence intervals and to do Bayesian shrinkage of your personal stats toward the global prior. A percentage alone throws that information away.
 
 Second, and it's the same idea wearing different clothes: **fetch baselines at the finest rank bracket the API offers, and build coarser scopes by summing counts.** An "all ranks" baseline is `SUM(wins) / SUM(matches)` across brackets; an "Archon through Oracle" baseline is the same sum over a subset. This only works because rule one preserved the counts, and it means the baseline tables support the exact same flexible scoping (single bracket, custom range, everything) as your personal data without any extra fetching.
+
+Redrawing era boundaries triggers a re-bin: a single UPDATE recomputing era_id from start_time, no re-ingestion
 
 ## Ingestion state
 

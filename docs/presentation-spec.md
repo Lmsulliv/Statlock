@@ -85,6 +85,7 @@ Small page backing the patch-notes detection discussed below:
 
 - List of eras with start dates and labels; edit and redraw boundaries (matches keep exact `patch_id`s, so re-binning is always safe).
 - Pending era candidates with a link to the source patch notes post, change-line count, and Confirm / Dismiss buttons.
+- Confirming a candidate also closes the previous era at the new start date and triggers a baseline fetch for the new era's date range, so the new era has global numbers from day one.
 
 ## Patch-notes-assisted era detection
 
@@ -153,6 +154,7 @@ Note the response carries everything the UI needs pre-computed, including the ve
 3. **Sample sizes are always visible**, on personal rows and on the global baselines alike.
 4. **Scope is always printed** next to any number it produced.
 5. **Empty states explain themselves.** A new user sees "3 matches ingested, 47 queued, come back in an hour," not a blank table.
+6. Baseline-backed fields are always era-scoped server-side via explicit date ranges (see ingestion spec, Loop 3); "all time" is a deliberately wide explicit range, never an omitted parameter.
 
 ## Verify-before-building list
 
