@@ -10,6 +10,7 @@ EXPECTED_TABLES = {
     "matches", "match_players", "account_rank_history", "match_item_purchases",
     "baseline_hero_matchups", "baseline_hero_item_stats", "baseline_snapshots",
     "tracked_accounts", "sync_state", "fetch_queue", "raw_api_responses",
+    "era_candidates", "worker_meta",
 }
 EXPECTED_VIEWS   = {"v_my_matchups", "v_my_item_stats"}
 EXPECTED_INDEXES = {"idx_mp_account", "idx_mp_hero"}
@@ -34,9 +35,9 @@ def test_all_indexes_created(db):
     assert EXPECTED_INDEXES <= names_of_type(db, "index")
 
 
-def test_user_version_is_1(db):
+def test_user_version_is_2(db):
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 1
+    assert version == 2
 
 
 def test_migrate_is_idempotent(tmp_path):
@@ -44,7 +45,38 @@ def test_migrate_is_idempotent(tmp_path):
     migrate(conn)
     migrate(conn)  # second call must not raise
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 1
+    assert version == 2
+
+
+def test_upgrade_from_v1_preserves_data(tmp_path):
+    """A database stopped at v1 (pre-worker schema) upgrades in place."""
+    from tracker.migrate import _STEPS
+
+    conn = connect(tmp_path / "v1.db")
+    conn.executescript(_STEPS[0].read_text(encoding="utf-8"))
+    conn.execute("PRAGMA user_version = 1")
+    conn.execute(
+        "INSERT INTO tracked_accounts(account_id, display_name, added_at) "
+        "VALUES (891231519, 'me', '2026-06-01T00:00:00Z')"
+    )
+    conn.commit()
+
+    migrate(conn)
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM tracked_accounts").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM era_candidates").fetchone()[0] == 0
+
+
+def test_era_candidates_post_url_unique(db):
+    db.execute(
+        "INSERT INTO era_candidates(post_url, posted_at) VALUES ('http://x', '2026-06-01')"
+    )
+    db.execute(
+        "INSERT OR IGNORE INTO era_candidates(post_url, posted_at) VALUES ('http://x', '2026-06-01')"
+    )
+    db.commit()
+    assert db.execute("SELECT COUNT(*) FROM era_candidates").fetchone()[0] == 1
 
 
 def test_foreign_keys_enforced(db):

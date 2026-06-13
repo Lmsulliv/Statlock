@@ -1,11 +1,12 @@
-"""Database migration: apply schema.sql and advance user_version.
+"""Database migration: apply pending schema steps and advance user_version.
 
 Usage:
     python -m tracker.migrate <db_path>
 
 `PRAGMA user_version` is SQLite's built-in integer slot for schema
-versioning. At version 0 (fresh database) we apply the full schema and
-set it to 1. Re-running is a no-op — safe to call on every startup.
+versioning. Migrations are an ordered list of SQL files; a database at
+version N gets every step after the Nth applied, in order. Re-running is
+a no-op — safe to call on every startup.
 """
 import sqlite3
 import sys
@@ -13,22 +14,27 @@ from pathlib import Path
 
 from tracker.db import connect
 
-_SCHEMA = Path(__file__).parent.parent / "db" / "schema.sql"
-_TARGET_VERSION = 1
+_DB_DIR = Path(__file__).parent.parent / "db"
+
+# Step k upgrades a database from user_version k to k+1.
+_STEPS = [
+    _DB_DIR / "schema.sql",                          # 0 -> 1: full initial schema
+    _DB_DIR / "migrations" / "002_ingest_worker.sql",  # 1 -> 2: era_candidates, worker_meta
+]
 
 
 def migrate(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if version >= _TARGET_VERSION:
+    if version >= len(_STEPS):
         print(f"Already at schema version {version}, nothing to do.")
         return
 
-    sql = _SCHEMA.read_text(encoding="utf-8")
-    conn.executescript(sql)
-    # executescript commits automatically; set user_version in a separate call.
-    conn.execute(f"PRAGMA user_version = {_TARGET_VERSION}")
-    conn.commit()
-    print(f"Migrated to schema version {_TARGET_VERSION}.")
+    for step, sql_file in enumerate(_STEPS[version:], start=version + 1):
+        conn.executescript(sql_file.read_text(encoding="utf-8"))
+        # executescript commits automatically; set user_version separately.
+        conn.execute(f"PRAGMA user_version = {step}")
+        conn.commit()
+        print(f"Migrated to schema version {step} ({sql_file.name}).")
 
 
 def main() -> None:

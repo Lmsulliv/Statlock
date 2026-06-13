@@ -1,0 +1,122 @@
+[
+ {
+  "id": 1,
+  "name": "Infernus",
+  "class_name": "hero_inferno",
+  "images": {
+   "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_card.png"
+  },
+  "disabled": false,
+  "player_selectable": true
+ },
+ {
+  "id": 7,
+  "name": "Wraith",
+  "class_name": "hero_wraith",
+  "images": {
+   "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/wraith_card.png"
+  },
+  "disabled": false,
+  "player_selectable": true
+ },
+ {
+  "id": 10,
+  "name": "Paradox",
+  "class_name": "hero_chrono",
+  "images": {
+   "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/chrono_card.png"
+  },
+  "disabled": false,
+  "player_selectable": true
+ },
+ {
+  "id": 12,
+  "name": "Kelvin",
+  "class_name": "hero_kelvin",
+  "images": {
+   "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/kelvin_card.png"
+  },
+  "disabled": false,
+  "player_selectable": true
+ },
+ {
+  "id": 17,
+  "name": "Grey Talon",
+  "class_name": "hero_orion",
+  "images": {
+   "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/archer_card.png"
+  },
+  "disabled": false,
+  "player_selectable": true
+ },
+ {
+  "id": 19,
+  "name": "Shiv",
+  "class_name": "hero_shiv",
+  "images": {
+   "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/shiv_card.png"
+  },
+  "disabled": false,
+  "player_selectable": true
+ },
+ {
+  "id": 20,
+  "name": "Ivy",
+  "class_name": "hero_tengu",
+  "images": {
+   "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/tengu_card.png"
+  },
+  "disabled": false,
+  "player_selectable": true
+ },
+ {
+  "id": 31,
+  "name": "Lash",
+  "class_name": "hero_lash",
+  "images": {
+   "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/lash_card.png"
+  },
+  "disabled": false,
+  "player_selectable": true
+ },
+ {
+  "id": 35,
+  "name": "Viscous",
+  "class_name": "hero_viscous",
+  "images": {
+   "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/viscous_card.png"
+  },
+  "disabled": false,
+  "player_selectable": true
+ },
+ {
+  "id": 66,
+  "name": "Victor",
+  "class_name": "hero_frank",
+  "images": {
+   "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/frank_card.png"
+  },
+  "disabled": false,
+  "player_selectable": true
+ },
+ {
+  "id": 69,
+  "name": "The Doorman",
+  "class_name": "hero_doorman",
+  "images": {
+   "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/doorman_card.png"
+  },
+  "disabled": false,
+  "player_selectable": true
+ },
+ {
+  "id": 81,
+  "name": "Celeste",
+  "class_name": "hero_unicorn",
+  "images": {
+   "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/unicorn_card.png"
+  },
+  "disabled": false,
+  "player_selectable": true
+ }
+]

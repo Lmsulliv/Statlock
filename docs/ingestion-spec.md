@@ -47,16 +47,23 @@ forever:
     response = GET match-metadata(row.match_id)
 
     case response:
-        200 -> parse (see Parsing notes), write matches / match_players /
-            match_item_purchases in ONE transaction, mark status='fetched'
-        404 or "not yet available" ->
-               attempts += 1
-               if attempts >= 5: status='unavailable'
-               else: status='failed', next_retry_at = backoff(attempts)
-        429 -> do NOT increment attempts (this is OUR fault, not the match's)
-               sleep for Retry-After header if present, else 5 minutes
-        5xx or timeout ->
-               attempts += 1, status='failed', next_retry_at = backoff(attempts)
+    200 -> parse (see Parsing notes), write in ONE transaction,
+           mark status='fetched'
+           reset transient_strikes to 0
+    404 or "not yet available" ->        # the match's fault
+           attempts += 1
+           if attempts >= 5: status='unavailable'
+           else: status='failed', next_retry_at = backoff(attempts)
+    429 ->                               # our fault: global, not per-match
+           leave the row untouched entirely
+           sleep for Retry-After header if present, else 5 minutes
+    5xx or timeout ->                    # the world's fault
+           do NOT increment attempts
+           status='failed', next_retry_at = now() + 5 minutes
+           transient_strikes += 1
+           if transient_strikes >= 5:
+               pause the drain loop for 15 minutes   # circuit breaker
+               reset transient_strikes
 ```
 
 ### Rate limiting

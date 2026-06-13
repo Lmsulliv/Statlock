@@ -1,0 +1,110 @@
+[
+ {
+  "bucket": 1,
+  "item_id": 7409189,
+  "wins": 252891,
+  "losses": 259661,
+  "matches": 512552,
+  "players": 165247,
+  "avg_buy_time_s": 364.4925490486819
+ },
+ {
+  "bucket": 7,
+  "item_id": 7409189,
+  "wins": 103726,
+  "losses": 101633,
+  "matches": 205359,
+  "players": 80101,
+  "avg_buy_time_s": 1019.9220584439933
+ },
+ {
+  "bucket": 1,
+  "item_id": 26002154,
+  "wins": 586,
+  "losses": 814,
+  "matches": 1400,
+  "players": 992,
+  "avg_buy_time_s": 601.4507142857143
+ },
+ {
+  "bucket": 7,
+  "item_id": 26002154,
+  "wins": 47,
+  "losses": 82,
+  "matches": 129,
+  "players": 99,
+  "avg_buy_time_s": 951.1705426356589
+ },
+ {
+  "bucket": 1,
+  "item_id": 84321454,
+  "wins": 86257,
+  "losses": 94523,
+  "matches": 180780,
+  "players": 71060,
+  "avg_buy_time_s": 798.5980418187853
+ },
+ {
+  "bucket": 7,
+  "item_id": 84321454,
+  "wins": 231974,
+  "losses": 248945,
+  "matches": 480919,
+  "players": 146717,
+  "avg_buy_time_s": 552.3549724589795
+ },
+ {
+  "bucket": 1,
+  "item_id": 98582110,
+  "wins": 255,
+  "losses": 312,
+  "matches": 567,
+  "players": 429,
+  "avg_buy_time_s": 890.9382716049382
+ },
+ {
+  "bucket": 7,
+  "item_id": 98582110,
+  "wins": 135,
+  "losses": 154,
+  "matches": 289,
+  "players": 195,
+  "avg_buy_time_s": 1032.508650519031
+ },
+ {
+  "bucket": 1,
+  "item_id": 112198670,
+  "wins": 6873,
+  "losses": 7516,
+  "matches": 14389,
+  "players": 9401,
+  "avg_buy_time_s": 1014.5358954757106
+ },
+ {
+  "bucket": 7,
+  "item_id": 112198670,
+  "wins": 12044,
+  "losses": 13325,
+  "matches": 25369,
+  "players": 13081,
+  "avg_buy_time_s": 755.4283574441247
+ },
+ {
+  "bucket": 1,
+  "item_id": 334300056,
+  "wins": 3029,
+  "losses": 2979,
+  "matches": 6008,
+  "players": 3464,
+  "avg_buy_time_s": 1665.9770306258322
+ },
+ {
+  "bucket": 7,
+  "item_id": 334300056,
+  "wins": 10850,
+  "losses": 10880,
+  "matches": 21730,
+  "players": 10559,
+  "avg_buy_time_s": 1465.9086976530143
+ }
+]

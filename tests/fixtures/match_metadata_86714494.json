@@ -1,0 +1,773 @@
+{
+ "match_info": {
+  "match_id": 86714494,
+  "start_time": 1780542701,
+  "duration_s": 3121,
+  "game_mode": 1,
+  "match_mode": 1,
+  "winning_team": 0,
+  "match_outcome": 0,
+  "average_badge_team0": 53,
+  "average_badge_team1": 53,
+  "players": [
+   {
+    "account_id": 1003255087,
+    "player_slot": 4,
+    "team": 0,
+    "hero_id": 35,
+    "assigned_lane": 1,
+    "kills": 6,
+    "deaths": 4,
+    "assists": 18,
+    "net_worth": 73645,
+    "last_hits": 296,
+    "denies": 6,
+    "level": 36,
+    "stats": [
+     {
+      "time_stamp_s": 180,
+      "player_damage": 452,
+      "player_healing": 121,
+      "boss_damage": 0,
+      "self_healing": 121,
+      "player_damage_taken": 483,
+      "net_worth": 1655
+     },
+     {
+      "time_stamp_s": 3121,
+      "player_damage": 74523,
+      "player_healing": 13284,
+      "boss_damage": 5114,
+      "self_healing": 9536,
+      "player_damage_taken": 48334,
+      "net_worth": 73644
+     }
+    ],
+    "items": [
+     {
+      "game_time_s": 29,
+      "item_id": 3247040238,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 80,
+      "item_id": 3247040238,
+      "upgrade_id": 1485157594,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 196609
+     }
+    ]
+   },
+   {
+    "account_id": 1088017546,
+    "player_slot": 5,
+    "team": 0,
+    "hero_id": 66,
+    "assigned_lane": 6,
+    "kills": 16,
+    "deaths": 5,
+    "assists": 13,
+    "net_worth": 70889,
+    "last_hits": 289,
+    "denies": 5,
+    "level": 36,
+    "stats": [
+     {
+      "time_stamp_s": 180,
+      "player_damage": 688,
+      "player_healing": 123,
+      "boss_damage": 0,
+      "self_healing": 123,
+      "player_damage_taken": 896,
+      "net_worth": 1688
+     },
+     {
+      "time_stamp_s": 3121,
+      "player_damage": 80566,
+      "player_healing": 98871,
+      "boss_damage": 29750,
+      "self_healing": 98871,
+      "player_damage_taken": 99414,
+      "net_worth": 70889
+     }
+    ],
+    "items": [
+     {
+      "game_time_s": 11,
+      "item_id": 2043074967,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 81,
+      "item_id": 2043074967,
+      "upgrade_id": 1235016951,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 196609
+     }
+    ]
+   },
+   {
+    "account_id": 891231519,
+    "player_slot": 7,
+    "team": 1,
+    "hero_id": 7,
+    "assigned_lane": 6,
+    "kills": 4,
+    "deaths": 11,
+    "assists": 8,
+    "net_worth": 60152,
+    "last_hits": 330,
+    "denies": 1,
+    "level": 36,
+    "stats": [
+     {
+      "time_stamp_s": 180,
+      "player_damage": 1126,
+      "player_healing": 172,
+      "boss_damage": 0,
+      "self_healing": 172,
+      "player_damage_taken": 619,
+      "net_worth": 1949
+     },
+     {
+      "time_stamp_s": 3121,
+      "player_damage": 96068,
+      "player_healing": 27778,
+      "boss_damage": 9010,
+      "self_healing": 27778,
+      "player_damage_taken": 67391,
+      "net_worth": 60152
+     }
+    ],
+    "items": [
+     {
+      "game_time_s": 6,
+      "item_id": 1999680326,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 62,
+      "item_id": 1009965641,
+      "upgrade_id": 1,
+      "sold_time_s": 2668,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 80,
+      "item_id": 1999680326,
+      "upgrade_id": 334138523,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 196609
+     },
+     {
+      "game_time_s": 106,
+      "item_id": 1842576017,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 153,
+      "item_id": 3077079169,
+      "upgrade_id": 1,
+      "sold_time_s": 270,
+      "flags": 1,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 199,
+      "item_id": 4147641675,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 270,
+      "item_id": 2064029594,
+      "upgrade_id": 1,
+      "sold_time_s": 2766,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 304,
+      "item_id": 1999680326,
+      "upgrade_id": 75043054,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 458753
+     }
+    ]
+   },
+   {
+    "account_id": 890069947,
+    "player_slot": 1,
+    "team": 0,
+    "hero_id": 17,
+    "assigned_lane": 1,
+    "kills": 14,
+    "deaths": 0,
+    "assists": 22,
+    "net_worth": 77240,
+    "last_hits": 231,
+    "denies": 1,
+    "level": 36,
+    "stats": [
+     {
+      "time_stamp_s": 180,
+      "player_damage": 469,
+      "player_healing": 0,
+      "boss_damage": 0,
+      "self_healing": 0,
+      "player_damage_taken": 303,
+      "net_worth": 1632
+     },
+     {
+      "time_stamp_s": 3121,
+      "player_damage": 95258,
+      "player_healing": 1578,
+      "boss_damage": 941,
+      "self_healing": 1578,
+      "player_damage_taken": 10044,
+      "net_worth": 77240
+     }
+    ],
+    "items": [
+     {
+      "game_time_s": 11,
+      "item_id": 548943648,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 172,
+      "item_id": 3074274290,
+      "upgrade_id": 1,
+      "sold_time_s": 2927,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 230,
+      "item_id": 512733154,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 296,
+      "item_id": 968099481,
+      "upgrade_id": 1,
+      "sold_time_s": 507,
+      "flags": 1,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 363,
+      "item_id": 1998374645,
+      "upgrade_id": 1,
+      "sold_time_s": 1333,
+      "flags": 1,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 382,
+      "item_id": 3242902780,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 382,
+      "item_id": 3242902780,
+      "upgrade_id": 952621171,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 196609
+     },
+     {
+      "game_time_s": 382,
+      "item_id": 3242902780,
+      "upgrade_id": 1219485548,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 458753
+     }
+    ]
+   },
+   {
+    "account_id": 238668046,
+    "player_slot": 8,
+    "team": 1,
+    "hero_id": 20,
+    "assigned_lane": 6,
+    "kills": 1,
+    "deaths": 8,
+    "assists": 15,
+    "net_worth": 55090,
+    "last_hits": 231,
+    "denies": 15,
+    "level": 36,
+    "stats": [
+     {
+      "time_stamp_s": 180,
+      "player_damage": 213,
+      "player_healing": 141,
+      "boss_damage": 0,
+      "self_healing": 138,
+      "player_damage_taken": 664,
+      "net_worth": 1986
+     },
+     {
+      "time_stamp_s": 3121,
+      "player_damage": 40903,
+      "player_healing": 58329,
+      "boss_damage": 5167,
+      "self_healing": 41305,
+      "player_damage_taken": 79660,
+      "net_worth": 55090
+     }
+    ],
+    "items": [
+     {
+      "game_time_s": 24,
+      "item_id": 3642273386,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 61,
+      "item_id": 2462046703,
+      "upgrade_id": 1,
+      "sold_time_s": 624,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     }
+    ]
+   },
+   {
+    "account_id": 1307530159,
+    "player_slot": 11,
+    "team": 1,
+    "hero_id": 1,
+    "assigned_lane": 4,
+    "kills": 6,
+    "deaths": 9,
+    "assists": 9,
+    "net_worth": 54278,
+    "last_hits": 282,
+    "denies": 0,
+    "level": 36,
+    "stats": [
+     {
+      "time_stamp_s": 180,
+      "player_damage": 497,
+      "player_healing": 0,
+      "boss_damage": 196,
+      "self_healing": 0,
+      "player_damage_taken": 582,
+      "net_worth": 1945
+     },
+     {
+      "time_stamp_s": 3121,
+      "player_damage": 49897,
+      "player_healing": 17269,
+      "boss_damage": 11320,
+      "self_healing": 17269,
+      "player_damage_taken": 82633,
+      "net_worth": 54278
+     }
+    ],
+    "items": [
+     {
+      "game_time_s": 15,
+      "item_id": 1593133799,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 71,
+      "item_id": 1593133799,
+      "upgrade_id": 1682129540,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 196609
+     }
+    ]
+   },
+   {
+    "account_id": 238974635,
+    "player_slot": 2,
+    "team": 0,
+    "hero_id": 12,
+    "assigned_lane": 4,
+    "kills": 3,
+    "deaths": 8,
+    "assists": 25,
+    "net_worth": 61702,
+    "last_hits": 224,
+    "denies": 2,
+    "level": 36,
+    "stats": [
+     {
+      "time_stamp_s": 180,
+      "player_damage": 477,
+      "player_healing": 103,
+      "boss_damage": 0,
+      "self_healing": 103,
+      "player_damage_taken": 400,
+      "net_worth": 1861
+     },
+     {
+      "time_stamp_s": 3121,
+      "player_damage": 57723,
+      "player_healing": 57859,
+      "boss_damage": 11411,
+      "self_healing": 34797,
+      "player_damage_taken": 74490,
+      "net_worth": 61702
+     }
+    ],
+    "items": [
+     {
+      "game_time_s": 20,
+      "item_id": 18921423,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 60,
+      "item_id": 3776945997,
+      "upgrade_id": 1,
+      "sold_time_s": 1464,
+      "flags": 1,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     }
+    ]
+   },
+   {
+    "account_id": 311845134,
+    "player_slot": 3,
+    "team": 0,
+    "hero_id": 69,
+    "assigned_lane": 4,
+    "kills": 3,
+    "deaths": 3,
+    "assists": 20,
+    "net_worth": 63259,
+    "last_hits": 260,
+    "denies": 5,
+    "level": 36,
+    "stats": [
+     {
+      "time_stamp_s": 180,
+      "player_damage": 378,
+      "player_healing": 0,
+      "boss_damage": 0,
+      "self_healing": 0,
+      "player_damage_taken": 218,
+      "net_worth": 1737
+     },
+     {
+      "time_stamp_s": 3121,
+      "player_damage": 41132,
+      "player_healing": 8934,
+      "boss_damage": 5391,
+      "self_healing": 7081,
+      "player_damage_taken": 53515,
+      "net_worth": 63259
+     }
+    ],
+    "items": [
+     {
+      "game_time_s": 41,
+      "item_id": 103496908,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 61,
+      "item_id": 2462046703,
+      "upgrade_id": 1,
+      "sold_time_s": 1198,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     }
+    ]
+   },
+   {
+    "account_id": 1034884002,
+    "player_slot": 6,
+    "team": 0,
+    "hero_id": 81,
+    "assigned_lane": 6,
+    "kills": 3,
+    "deaths": 10,
+    "assists": 13,
+    "net_worth": 55557,
+    "last_hits": 202,
+    "denies": 1,
+    "level": 36,
+    "stats": [
+     {
+      "time_stamp_s": 180,
+      "player_damage": 595,
+      "player_healing": 5,
+      "boss_damage": 0,
+      "self_healing": 5,
+      "player_damage_taken": 443,
+      "net_worth": 1757
+     },
+     {
+      "time_stamp_s": 3121,
+      "player_damage": 49212,
+      "player_healing": 8463,
+      "boss_damage": 14334,
+      "self_healing": 8463,
+      "player_damage_taken": 44034,
+      "net_worth": 55557
+     }
+    ],
+    "items": [
+     {
+      "game_time_s": 11,
+      "item_id": 3443575800,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 62,
+      "item_id": 3077079169,
+      "upgrade_id": 1,
+      "sold_time_s": 1503,
+      "flags": 1,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     }
+    ]
+   },
+   {
+    "account_id": 355350369,
+    "player_slot": 10,
+    "team": 1,
+    "hero_id": 10,
+    "assigned_lane": 1,
+    "kills": 6,
+    "deaths": 3,
+    "assists": 12,
+    "net_worth": 54866,
+    "last_hits": 165,
+    "denies": 3,
+    "level": 36,
+    "stats": [
+     {
+      "time_stamp_s": 180,
+      "player_damage": 430,
+      "player_healing": 0,
+      "boss_damage": 0,
+      "self_healing": 0,
+      "player_damage_taken": 625,
+      "net_worth": 1742
+     },
+     {
+      "time_stamp_s": 3121,
+      "player_damage": 51716,
+      "player_healing": 854,
+      "boss_damage": 2997,
+      "self_healing": 854,
+      "player_damage_taken": 48610,
+      "net_worth": 54864
+     }
+    ],
+    "items": [
+     {
+      "game_time_s": 20,
+      "item_id": 58655583,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 66,
+      "item_id": 1009965641,
+      "upgrade_id": 1,
+      "sold_time_s": 1067,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     }
+    ]
+   },
+   {
+    "account_id": 346883337,
+    "player_slot": 12,
+    "team": 1,
+    "hero_id": 19,
+    "assigned_lane": 4,
+    "kills": 12,
+    "deaths": 11,
+    "assists": 12,
+    "net_worth": 51719,
+    "last_hits": 157,
+    "denies": 12,
+    "level": 36,
+    "stats": [
+     {
+      "time_stamp_s": 180,
+      "player_damage": 121,
+      "player_healing": 0,
+      "boss_damage": 0,
+      "self_healing": 0,
+      "player_damage_taken": 273,
+      "net_worth": 2028
+     },
+     {
+      "time_stamp_s": 3121,
+      "player_damage": 49295,
+      "player_healing": 18002,
+      "boss_damage": 1092,
+      "self_healing": 18002,
+      "player_damage_taken": 71789,
+      "net_worth": 51719
+     }
+    ],
+    "items": [
+     {
+      "game_time_s": 12,
+      "item_id": 2460791803,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 54,
+      "item_id": 2829638276,
+      "upgrade_id": 1,
+      "sold_time_s": 1280,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     }
+    ]
+   },
+   {
+    "account_id": 334611613,
+    "player_slot": 9,
+    "team": 1,
+    "hero_id": 31,
+    "assigned_lane": 1,
+    "kills": 1,
+    "deaths": 3,
+    "assists": 16,
+    "net_worth": 54070,
+    "last_hits": 250,
+    "denies": 2,
+    "level": 36,
+    "stats": [
+     {
+      "time_stamp_s": 180,
+      "player_damage": 356,
+      "player_healing": 0,
+      "boss_damage": 0,
+      "self_healing": 0,
+      "player_damage_taken": 296,
+      "net_worth": 1736
+     },
+     {
+      "time_stamp_s": 3121,
+      "player_damage": 41952,
+      "player_healing": 10293,
+      "boss_damage": 1072,
+      "self_healing": 10293,
+      "player_damage_taken": 48331,
+      "net_worth": 54070
+     }
+    ],
+    "items": [
+     {
+      "game_time_s": 23,
+      "item_id": 3561817145,
+      "upgrade_id": 0,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 65537
+     },
+     {
+      "game_time_s": 77,
+      "item_id": 3561817145,
+      "upgrade_id": 1929334256,
+      "sold_time_s": 0,
+      "flags": 0,
+      "imbued_ability_id": 0,
+      "upgrade_info": 196609
+     }
+    ]
+   }
+  ]
+ },
+ "hero_build_ids": {},
+ "banned_hero_ids": []
+}

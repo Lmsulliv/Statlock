@@ -23,3 +23,11 @@ def db(tmp_path) -> sqlite3.Connection:
     conn = connect(tmp_path / "test.db")
     migrate(conn)
     return conn
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """Hard rule 3: no test may hit the live API. Any urlopen call fails loudly."""
+    def _blocked(*args, **kwargs):
+        raise AssertionError("Network access attempted in a test (urlopen blocked)")
+    monkeypatch.setattr("urllib.request.urlopen", _blocked)

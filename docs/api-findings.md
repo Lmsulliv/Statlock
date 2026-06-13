@@ -241,6 +241,16 @@ Endpoint specifics:
   net_worth_by_*` — **no `avg_badge` bucket** (a literal
   `bucket=avg_badge` call returns 400, `out/03c_item_stats_badge_bucket.json`),
   so per-bracket item baselines also cost one request per bracket.
+  - **`bucket=hero` works and gives per-hero-per-item rows in ONE call**
+    (verified 2026-06-13, `out/07_item_stats_bucket_hero.json`): 5,892 rows,
+    ~1.4 MB, the **`bucket` field holds the hero_id** (38 distinct heroes,
+    values 1–81, all ≤ 83; ~155 items each). Row keys are unchanged from
+    `no_bucket` (`item_id, wins, losses, matches, players, avg_buy_time_s`,
+    relative variants) — there is no separate `hero_id` key, you read it
+    from `bucket`. This means `baseline_hero_item_stats` can be filled with
+    **one request per era** (mapping `bucket → hero_id`,
+    `avg_buy_time_s → avg_purchase_s`), not one per hero per era. Still no
+    badge bucketing, so per-bracket item baselines would remain N requests.
 - **`/v1/analytics/hero-stats`** — supports `bucket=avg_badge`: one call
   returns per-hero-per-badge rows (2,470 rows, ~1.1 MB) with
   `wins/losses/matches` and totals, plus `matches_per_bucket`. Useful for
