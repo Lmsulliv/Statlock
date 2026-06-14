@@ -68,11 +68,29 @@ Found while verifying; spec docs are unchanged, amendments proposed here.
    (`badge_min`, `badge_max`) or store the single badge level as INTEGER;
    pick a bracket scheme (e.g. 11 tiers) that keeps a baseline snapshot to
    ~11 requests per endpoint.
+   *Verified 2026-06-13 (gate spike 08, `out/08_*`):* 12 gapless decade
+   brackets `[0,9],[10,19],…,[100,109],[110,116]` re-sum to ~96.0% of the
+   single `[0,116]` call on BOTH `hero-counter-stats` and
+   `item-stats?bucket=hero` (counter 31.26M/32.55M, item 263.1M/273.9M). The
+   `[0,9]` bracket is empty and the decades leave no gaps, so the missing ~4%
+   is matches with an unknown (NULL) average badge. Bracketed baselines are
+   therefore RATED-only by design; the unrated tail is excluded (no all-ranks
+   dual row). `item-stats?bucket=hero` honors `min/max_average_badge` (the
+   bracketed sum does not overshoot the full-range sum).
 
 7. **Analytics default time window is the last 30 days, not all-time.**
    `min_unix_timestamp` defaults to "30 days ago" per the OpenAPI spec
    (`out/03_openapi.json`). Omitting filters does NOT give an all-time
    baseline; pass an explicit `min_unix_timestamp` (e.g. 0) for that.
+
+8. **Analytics filter `game_mode` is a STRING variant, not the numeric
+   match-metadata value.** The `/v1/analytics/*` endpoints expect
+   `game_mode=normal` (also `street_brawl`, …); passing the numeric
+   `game_mode=1` that match metadata uses returns HTTP 400
+   ("unknown variant `1`"). Verified 2026-06-13 (gate spike 08). The
+   match-metadata `game_mode` is still the integer axis (1 = Normal,
+   4 = Street Brawl — see below). `ingest/maintenance.py` baseline URLs now
+   send `game_mode=normal`.
 
 ---
 
@@ -152,6 +170,19 @@ So: `won = (player_team == match_result)`. Note history rows already carry
 enough (hero, K/D/A, result) for the Overview's "last 10 matches" without
 metadata.
 
+**`game_mode` values: `1` = Normal, `4` = Street Brawl** (verified 2026-06-13
+from account 891231519's history). The `brawl_score_team0/1` and
+`brawl_avg_round_time_s` fields are populated *only* on `game_mode=4` rows and
+null on `game_mode=1` rows, which is what identifies Brawl: match 86704689 has
+`game_mode=4` with `brawl_score_team0=3, brawl_score_team1=1,
+brawl_avg_round_time_s=185`, while matches 86707774 and 86714494 have
+`game_mode=1` and null brawl fields. `match_mode` (separate axis, e.g. ranked
+vs unranked) was `1` on every observed row, so its value mapping is not yet
+verified. **Implication for analytics:** matchup/lane analysis is meaningful
+only for the standard mode, so personal queries default to `game_mode=1` and
+must never lump Brawl in with Normal. Other `game_mode` values (sandbox, bots,
+etc.) are not yet observed — treat anything other than 1/4 as unverified.
+
 ---
 
 ## Match metadata: field population
@@ -211,7 +242,9 @@ in `out/03_openapi.json`):
   (`out/03c_counter_default.json`, `..._7d.json`, `..._7d_eternus.json`).
 - `min/max_average_badge` (0–116) — see badge encoding below.
 - `min/max_match_id` — alternative era boundary (IDs are monotonic).
-- `min/max_duration_s`, `min_matches`, `account_id(s)`, `game_mode`.
+- `min/max_duration_s`, `min_matches`, `account_id(s)`, `game_mode`
+  (STRING variant here — `normal`/`street_brawl`/…, not the numeric
+  match-metadata value; see contradiction 8).
 - **No patch/version filter exists.** Eras must be expressed as timestamp
   or match-id ranges. Default window is the last 30 days (contradiction 7).
 

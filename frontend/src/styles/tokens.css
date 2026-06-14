@@ -1,0 +1,28 @@
+/* Design tokens. Kept tiny and semantic: verdict colors carry meaning
+   (significance), so they live here once and are referenced everywhere. */
+:root {
+  --bg: #0f1115;
+  --surface: #171a21;
+  --surface-2: #1f242d;
+  --border: #2a3039;
+
+  --text: #e6e9ef;
+  --text-muted: #9aa4b2;
+
+  /* Verdict colors == significance, never magnitude. */
+  --pos: #3fb950; /* strength */
+  --pos-dim: #245c2d;
+  --pos-wash: rgba(63, 185, 80, 0.12);
+  --neg: #f85149; /* weakness */
+  --neg-dim: #6f2622;
+  --neg-wash: rgba(248, 81, 73, 0.12);
+  --neutral: #6b7480; /* not enough data */
+
+  /* Baseline marker: deliberately not a verdict color, so it reads as a
+     reference line rather than a good/bad signal. */
+  --baseline: #d8a32a;
+
+  --radius: 6px;
+  --gap: 12px;
+  --font: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+}

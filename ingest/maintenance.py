@@ -24,8 +24,12 @@ log = logging.getLogger(__name__)
 
 REQUEUE_WINDOW_S = 24 * 3600
 ALL_TIME_ERA_ID = 0           # sentinel: NULL breaks SQLite composite-PK dedup
-FULL_BADGE_MIN = 0
-FULL_BADGE_MAX = 116
+
+# Gapless decade brackets tiling 0..116 (12). Each baseline call fetches one
+# bracket; the query layer (api/queries.py) re-sums the brackets a scope
+# contains. Must stay aligned with api.scope.snap_badge_range, which snaps a
+# requested range to these same decade edges so containment never splits one.
+DECADE_BRACKETS = [(0, 9)] + [(t * 10, t * 10 + 9) for t in range(1, 11)] + [(110, 116)]
 
 
 def revive_unavailable(conn, *, now=utcnow) -> int:
@@ -57,26 +61,39 @@ def _era_spans(conn, now_unix: int) -> list[tuple[int, int, int]]:
     return spans
 
 
-def _counter_url(min_unix: int, max_unix: int) -> str:
+def _counter_url(min_unix: int, max_unix: int, badge_min: int, badge_max: int) -> str:
+    # game_mode=normal: the analytics endpoints take the STRING variant
+    # (normal/street_brawl/...), NOT the numeric 1 that match metadata uses --
+    # game_mode=1 returns HTTP 400 "unknown variant `1`" (api-findings
+    # contradiction 8). Normal keeps baselines comparable to personal stats;
+    # Street Brawl must never be lumped in.
     return (
         f"{BASE_URL}/v1/analytics/hero-counter-stats"
         f"?min_unix_timestamp={min_unix}&max_unix_timestamp={max_unix}"
-        f"&min_average_badge={FULL_BADGE_MIN}&max_average_badge={FULL_BADGE_MAX}"
+        f"&min_average_badge={badge_min}&max_average_badge={badge_max}"
+        f"&game_mode=normal"
     )
 
 
-def _item_stats_url(min_unix: int, max_unix: int) -> str:
+def _item_stats_url(min_unix: int, max_unix: int, badge_min: int, badge_max: int) -> str:
     # bucket=hero returns per-hero-per-item rows in one call; the `bucket`
-    # field carries the hero_id (api-findings, verified 2026-06-13).
+    # field carries the hero_id (api-findings, verified 2026-06-13). bucket=hero
+    # honors min/max_average_badge (gate spike 08), so we bracket it too.
+    # game_mode=normal (string variant) for the same reason as _counter_url.
     return (
         f"{BASE_URL}/v1/analytics/item-stats"
         f"?bucket=hero&min_unix_timestamp={min_unix}&max_unix_timestamp={max_unix}"
+        f"&min_average_badge={badge_min}&max_average_badge={badge_max}"
+        f"&game_mode=normal"
     )
 
 
 def refresh_baselines(conn, client, *, now=utcnow) -> int:
-    """Fetch matchup baselines for every era span into a fresh snapshot.
-    Old snapshots are kept for time-travel debugging. Returns snapshot_id."""
+    """Fetch matchup + item baselines for every era span into a fresh snapshot,
+    one call per (era span, decade bracket) per endpoint. Baselines are
+    Normal-only (game_mode=normal) so they line up with personal stats, which
+    also default to Normal; Street Brawl is never mixed in. Old snapshots are
+    kept for time-travel debugging. Returns snapshot_id."""
     fetched_at = now().isoformat()
     now_unix = iso_to_unix(fetched_at)
     cursor = conn.execute(
@@ -85,48 +102,55 @@ def refresh_baselines(conn, client, *, now=utcnow) -> int:
     )
     snapshot_id = cursor.lastrowid
 
+    # The decade brackets tile 0..116, so the full-range baseline (a scope that
+    # contains every bracket) covers RATED matches only: matches with an unknown
+    # (NULL) average badge -- a ~4% early-access tail with no rank to compare --
+    # fall outside every bracket and are excluded by design. No all-ranks row.
     for era_id, min_unix, max_unix in _era_spans(conn, now_unix):
-        # Matchup baselines: hero-counter-stats, one call per era span.
-        url = _counter_url(min_unix, max_unix)
-        status, _headers, body = client.get(url)
-        archive_response(conn, url, status, body, fetched_at)
-        if status == 200:
-            matchup_rows = [
-                (snapshot_id, r["hero_id"], r["enemy_hero_id"], era_id,
-                 FULL_BADGE_MIN, FULL_BADGE_MAX, r["wins"], r["matches_played"], fetched_at)
-                for r in json.loads(body)
-            ]
-            conn.executemany(
-                "INSERT INTO baseline_hero_matchups"
-                " (snapshot_id, hero_id, enemy_hero_id, era_id, badge_min, badge_max,"
-                "  wins, matches, fetched_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                matchup_rows,
-            )
-        else:
-            log.warning("baselines: hero-counter-stats HTTP %s for era %s", status, era_id)
+        for badge_min, badge_max in DECADE_BRACKETS:
+            # Matchup baselines: hero-counter-stats, one call per bracket.
+            url = _counter_url(min_unix, max_unix, badge_min, badge_max)
+            status, _headers, body = client.get(url)
+            archive_response(conn, url, status, body, fetched_at)
+            if status == 200:
+                matchup_rows = [
+                    (snapshot_id, r["hero_id"], r["enemy_hero_id"], era_id,
+                     badge_min, badge_max, r["wins"], r["matches_played"], fetched_at)
+                    for r in json.loads(body)
+                ]
+                conn.executemany(
+                    "INSERT INTO baseline_hero_matchups"
+                    " (snapshot_id, hero_id, enemy_hero_id, era_id, badge_min, badge_max,"
+                    "  wins, matches, fetched_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    matchup_rows,
+                )
+            else:
+                log.warning("baselines: hero-counter-stats HTTP %s for era %s badge %d-%d",
+                            status, era_id, badge_min, badge_max)
 
-        # Item baselines: item-stats?bucket=hero, also one call per era span;
-        # the `bucket` field is the hero_id, `wins+losses` reconcile to matches.
-        item_url = _item_stats_url(min_unix, max_unix)
-        item_status, _h, item_body = client.get(item_url)
-        archive_response(conn, item_url, item_status, item_body, fetched_at)
-        if item_status == 200:
-            item_rows = [
-                (snapshot_id, r["bucket"], r["item_id"], era_id,
-                 FULL_BADGE_MIN, FULL_BADGE_MAX, r["wins"], r["matches"],
-                 r.get("avg_buy_time_s"), fetched_at)
-                for r in json.loads(item_body)
-            ]
-            conn.executemany(
-                "INSERT INTO baseline_hero_item_stats"
-                " (snapshot_id, hero_id, item_id, era_id, badge_min, badge_max,"
-                "  wins, matches, avg_purchase_s, fetched_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                item_rows,
-            )
-        else:
-            log.warning("baselines: item-stats HTTP %s for era %s", item_status, era_id)
+            # Item baselines: item-stats?bucket=hero, also one call per bracket;
+            # the `bucket` field is the hero_id, `wins+losses` reconcile to matches.
+            item_url = _item_stats_url(min_unix, max_unix, badge_min, badge_max)
+            item_status, _h, item_body = client.get(item_url)
+            archive_response(conn, item_url, item_status, item_body, fetched_at)
+            if item_status == 200:
+                item_rows = [
+                    (snapshot_id, r["bucket"], r["item_id"], era_id,
+                     badge_min, badge_max, r["wins"], r["matches"],
+                     r.get("avg_buy_time_s"), fetched_at)
+                    for r in json.loads(item_body)
+                ]
+                conn.executemany(
+                    "INSERT INTO baseline_hero_item_stats"
+                    " (snapshot_id, hero_id, item_id, era_id, badge_min, badge_max,"
+                    "  wins, matches, avg_purchase_s, fetched_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    item_rows,
+                )
+            else:
+                log.warning("baselines: item-stats HTTP %s for era %s badge %d-%d",
+                            item_status, era_id, badge_min, badge_max)
     conn.commit()
     log.info("baselines: snapshot %d written", snapshot_id)
     return snapshot_id

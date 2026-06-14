@@ -1,0 +1,424 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12.5px;
+}
+
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 20px 60px;
+}
+
+/* ── Header / nav ─────────────────────────────────────────────────────────── */
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: 28px;
+  padding: 20px 0 14px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.app-title {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.app-nav {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.nav-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 5px 10px;
+  border-radius: var(--radius);
+  font-weight: 500;
+}
+
+.nav-link:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.nav-link.active {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.app-main {
+  padding-top: 22px;
+}
+
+/* ── Scope bar ────────────────────────────────────────────────────────────── */
+
+.scope-bar {
+  margin-top: 16px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.scope-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  align-items: flex-end;
+}
+
+.scope-control {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scope-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.era-toggles {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  min-height: 28px;
+}
+
+.chip {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  color: var(--text);
+}
+
+.chip.active {
+  background: var(--text);
+  color: var(--bg);
+  border-color: var(--text);
+  font-weight: 600;
+}
+
+.range-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.range-row input[type='range'] {
+  width: 200px;
+}
+
+.num-input,
+.select-input {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
+.num-input {
+  width: 70px;
+}
+
+.scope-active {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* ── Screen headings ──────────────────────────────────────────────────────── */
+
+.screen-title {
+  font-size: 20px;
+  margin: 0 0 6px;
+}
+
+.screen-sub {
+  margin: 0 0 20px;
+  color: var(--text-muted);
+  max-width: 70ch;
+}
+
+/* ── Data table ───────────────────────────────────────────────────────────── */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-table th,
+.data-table td {
+  text-align: left;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.data-table thead th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.data-table tbody tr:hover {
+  background: var(--surface);
+}
+
+.col-hero {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.col-interval {
+  width: 300px;
+}
+
+.col-delta {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* ── Sample size ──────────────────────────────────────────────────────────── */
+
+.sample {
+  display: inline-flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.sample-main {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.sample-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ── Verdict badge ────────────────────────────────────────────────────────── */
+
+.badge {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.badge.tone-neutral {
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
+.badge.tone-pos {
+  color: var(--pos);
+  border-color: var(--pos-dim);
+  background: var(--pos-wash);
+}
+
+.badge.tone-neg {
+  color: var(--neg);
+  border-color: var(--neg-dim);
+  background: var(--neg-wash);
+}
+
+/* ── Interval bar (the honesty centerpiece) ───────────────────────────────── */
+
+.interval {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 230px;
+}
+
+.interval-bar {
+  position: relative;
+  height: 22px;
+}
+
+/* tone-* sets the whisker + point color from the server's verdict only */
+.interval-bar.tone-neutral {
+  --mark: var(--neutral);
+}
+.interval-bar.tone-pos {
+  --mark: var(--pos);
+}
+.interval-bar.tone-neg {
+  --mark: var(--neg);
+}
+
+.interval-track {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 2px;
+  transform: translateY(-50%);
+  background: var(--surface-2);
+  border-radius: 2px;
+}
+
+.interval-baseline {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 0;
+  border-left: 2px dashed var(--baseline);
+  transform: translateX(-50%);
+}
+
+.interval-whisker {
+  position: absolute;
+  top: 50%;
+  height: 10px;
+  transform: translateY(-50%);
+}
+
+.interval-whisker::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 3px;
+  transform: translateY(-50%);
+  background: var(--mark);
+  border-radius: 2px;
+}
+
+.cap {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 10px;
+  background: var(--mark);
+}
+
+.cap-low {
+  left: 0;
+}
+
+.cap-high {
+  right: 0;
+}
+
+.interval-point {
+  position: absolute;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--mark);
+  border: 2px solid var(--bg);
+}
+
+.interval-labels {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.interval-rate {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.interval-baseline-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.interval-baseline-key::before {
+  content: '';
+  width: 10px;
+  border-top: 2px dashed var(--baseline);
+}
+
+/* ── Empty / loading / error states ───────────────────────────────────────── */
+
+.empty-state {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 28px 24px;
+  background: var(--surface);
+  max-width: 70ch;
+}
+
+.empty-title {
+  font-weight: 600;
+  font-size: 15px;
+  margin-bottom: 8px;
+}
+
+.empty-body {
+  color: var(--text-muted);
+}
+
+.empty-body p {
+  margin: 8px 0;
+}
+
+.state-msg {
+  padding: 28px 0;
+  color: var(--text-muted);
+}
+
+.state-error {
+  color: var(--neg);
+}

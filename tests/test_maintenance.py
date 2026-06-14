@@ -1,7 +1,12 @@
 """Unit tests for ingest.maintenance: revive, baselines, assets, summary."""
 from datetime import datetime, timezone
 
-from ingest.maintenance import refresh_baselines, revive_unavailable, run_maintenance
+from ingest.maintenance import (
+    DECADE_BRACKETS,
+    refresh_baselines,
+    revive_unavailable,
+    run_maintenance,
+)
 
 from tests.fakes import FakeClient, ManualNow, fixture_text, load_fixture, ok
 
@@ -45,7 +50,7 @@ def test_revive_only_touches_rows_older_than_24h(db):
 
 # ── Baseline refresh ─────────────────────────────────────────────────────────
 
-def test_refresh_baselines_one_call_per_era_plus_all_time(db):
+def test_refresh_baselines_one_call_per_bracket_per_era_plus_all_time(db):
     era_jan, era_jun = seed_eras(db)
     now = ManualNow(NOW)
     client = FakeClient()
@@ -54,13 +59,18 @@ def test_refresh_baselines_one_call_per_era_plus_all_time(db):
 
     refresh_baselines(db, client, now=now)
 
+    n_brackets = len(DECADE_BRACKETS)  # 12 gapless decade brackets
+    n_spans = 3  # two eras + one explicit all-time span
     calls = client.calls_matching("hero-counter-stats")
-    assert len(calls) == 3  # two eras + one explicit all-time span
-    # NEVER omit the date params: the endpoint defaults to a trailing
-    # 30-day window (api-findings contradiction 7).
+    assert len(calls) == n_spans * n_brackets
+    # NEVER omit the date params: the endpoint defaults to a trailing 30-day
+    # window (api-findings contradiction 7). Every call also carries the decade
+    # badge filter and the STRING game_mode variant (contradiction 8).
     for url in calls:
         assert "min_unix_timestamp=" in url
         assert "max_unix_timestamp=" in url
+        assert "min_average_badge=" in url and "max_average_badge=" in url
+        assert "game_mode=normal" in url
     now_unix = int(NOW.timestamp())
     assert any(
         f"min_unix_timestamp={unix('2026-01-01T00:00:00+00:00')}" in u
@@ -77,17 +87,19 @@ def test_refresh_baselines_one_call_per_era_plus_all_time(db):
 
     n_fixture_rows = len(load_fixture("counter_stats.json"))
     rows = db.execute("SELECT * FROM baseline_hero_matchups").fetchall()
-    assert len(rows) == 3 * n_fixture_rows
+    assert len(rows) == n_spans * n_brackets * n_fixture_rows
     assert {r["era_id"] for r in rows} == {era_jan, era_jun, 0}  # 0 = all-time sentinel
+    # One row group per decade bracket; no all-ranks (0,116) row is written
+    # (full-range baseline is rated-only, re-summed from the brackets).
+    assert {(r["badge_min"], r["badge_max"]) for r in rows} == set(DECADE_BRACKETS)
     snapshots = db.execute("SELECT * FROM baseline_snapshots").fetchall()
     assert len(snapshots) == 1
     assert all(r["snapshot_id"] == snapshots[0]["snapshot_id"] for r in rows)
-    assert all(r["badge_min"] == 0 and r["badge_max"] == 116 for r in rows)
     # Responses archived before parsing (hard rule 2).
     archived = db.execute(
         "SELECT COUNT(*) FROM raw_api_responses WHERE url LIKE '%hero-counter-stats%'"
     ).fetchone()[0]
-    assert archived == 3
+    assert archived == n_spans * n_brackets
 
 
 def test_refresh_baselines_fills_item_stats_via_bucket_hero(db):
@@ -99,20 +111,25 @@ def test_refresh_baselines_fills_item_stats_via_bucket_hero(db):
 
     refresh_baselines(db, client, now=now)
 
-    # bucket=hero is one call per era span (2 eras + all-time).
+    n_brackets = len(DECADE_BRACKETS)
+    n_spans = 3  # 2 eras + all-time
+    # bucket=hero is one call per (era span, decade bracket).
     item_calls = client.calls_matching("item-stats")
-    assert len(item_calls) == 3
+    assert len(item_calls) == n_spans * n_brackets
     for url in item_calls:
         assert "bucket=hero" in url
         assert "min_unix_timestamp=" in url and "max_unix_timestamp=" in url
+        assert "min_average_badge=" in url and "max_average_badge=" in url
+        assert "game_mode=normal" in url
 
     rows = db.execute("SELECT * FROM baseline_hero_item_stats").fetchall()
     n_fixture = len(load_fixture("item_stats_bucket_hero.json"))
-    assert len(rows) == 3 * n_fixture
+    assert len(rows) == n_spans * n_brackets * n_fixture
     # The bucket field maps to hero_id; avg_buy_time_s -> avg_purchase_s.
     fixture_heroes = {r["bucket"] for r in load_fixture("item_stats_bucket_hero.json")}
     assert {r["hero_id"] for r in rows} == fixture_heroes
     assert all(r["avg_purchase_s"] is not None for r in rows)
+    assert {(r["badge_min"], r["badge_max"]) for r in rows} == set(DECADE_BRACKETS)
 
 
 def test_old_snapshots_are_kept_for_time_travel(db):
