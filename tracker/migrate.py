@@ -20,6 +20,7 @@ _DB_DIR = Path(__file__).parent.parent / "db"
 _STEPS = [
     _DB_DIR / "schema.sql",                          # 0 -> 1: full initial schema
     _DB_DIR / "migrations" / "002_ingest_worker.sql",  # 1 -> 2: era_candidates, worker_meta
+    _DB_DIR / "migrations" / "003_ranks_and_same_lane.sql",  # 2 -> 3: ranks, same_lane
 ]
 
 

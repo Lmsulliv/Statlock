@@ -18,7 +18,7 @@ from datetime import timedelta
 from ingest.client import BASE_URL, archive_response
 from ingest.eras import detect_era_candidates
 from ingest.util import iso_to_unix, utcnow
-from tracker.reference import load_heroes, load_items
+from tracker.reference import load_heroes, load_items, load_ranks
 
 log = logging.getLogger(__name__)
 
@@ -61,18 +61,25 @@ def _era_spans(conn, now_unix: int) -> list[tuple[int, int, int]]:
     return spans
 
 
-def _counter_url(min_unix: int, max_unix: int, badge_min: int, badge_max: int) -> str:
+def _counter_url(min_unix: int, max_unix: int, badge_min: int, badge_max: int,
+                 same_lane: bool = False) -> str:
     # game_mode=normal: the analytics endpoints take the STRING variant
     # (normal/street_brawl/...), NOT the numeric 1 that match metadata uses --
     # game_mode=1 returns HTTP 400 "unknown variant `1`" (api-findings
     # contradiction 8). Normal keeps baselines comparable to personal stats;
     # Street Brawl must never be lumped in.
-    return (
+    #
+    # same_lane_filter=true restricts to lane-opponent pairs, giving the
+    # laning-phase baseline the in-lane view compares against.
+    url = (
         f"{BASE_URL}/v1/analytics/hero-counter-stats"
         f"?min_unix_timestamp={min_unix}&max_unix_timestamp={max_unix}"
         f"&min_average_badge={badge_min}&max_average_badge={badge_max}"
         f"&game_mode=normal"
     )
+    if same_lane:
+        url += "&same_lane_filter=true"
+    return url
 
 
 def _item_stats_url(min_unix: int, max_unix: int, badge_min: int, badge_max: int) -> str:
@@ -108,26 +115,32 @@ def refresh_baselines(conn, client, *, now=utcnow) -> int:
     # fall outside every bracket and are excluded by design. No all-ranks row.
     for era_id, min_unix, max_unix in _era_spans(conn, now_unix):
         for badge_min, badge_max in DECADE_BRACKETS:
-            # Matchup baselines: hero-counter-stats, one call per bracket.
-            url = _counter_url(min_unix, max_unix, badge_min, badge_max)
-            status, _headers, body = client.get(url)
-            archive_response(conn, url, status, body, fetched_at)
-            if status == 200:
-                matchup_rows = [
-                    (snapshot_id, r["hero_id"], r["enemy_hero_id"], era_id,
-                     badge_min, badge_max, r["wins"], r["matches_played"], fetched_at)
-                    for r in json.loads(body)
-                ]
-                conn.executemany(
-                    "INSERT INTO baseline_hero_matchups"
-                    " (snapshot_id, hero_id, enemy_hero_id, era_id, badge_min, badge_max,"
-                    "  wins, matches, fetched_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    matchup_rows,
-                )
-            else:
-                log.warning("baselines: hero-counter-stats HTTP %s for era %s badge %d-%d",
-                            status, era_id, badge_min, badge_max)
+            # Matchup baselines: hero-counter-stats, one call per bracket, fetched
+            # twice -- overall (same_lane=0) and lane-opponents only (same_lane=1)
+            # -- so the in-lane view has a matching same-lane baseline.
+            for same_lane in (0, 1):
+                url = _counter_url(min_unix, max_unix, badge_min, badge_max,
+                                   same_lane=bool(same_lane))
+                status, _headers, body = client.get(url)
+                archive_response(conn, url, status, body, fetched_at)
+                if status == 200:
+                    matchup_rows = [
+                        (snapshot_id, r["hero_id"], r["enemy_hero_id"], era_id,
+                         badge_min, badge_max, same_lane, r["wins"],
+                         r["matches_played"], fetched_at)
+                        for r in json.loads(body)
+                    ]
+                    conn.executemany(
+                        "INSERT INTO baseline_hero_matchups"
+                        " (snapshot_id, hero_id, enemy_hero_id, era_id, badge_min, badge_max,"
+                        "  same_lane, wins, matches, fetched_at)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        matchup_rows,
+                    )
+                else:
+                    log.warning("baselines: hero-counter-stats HTTP %s for era %s "
+                                "badge %d-%d same_lane=%d",
+                                status, era_id, badge_min, badge_max, same_lane)
 
             # Item baselines: item-stats?bucket=hero, also one call per bracket;
             # the `bucket` field is the hero_id, `wins+losses` reconcile to matches.
@@ -159,7 +172,9 @@ def refresh_baselines(conn, client, *, now=utcnow) -> int:
 def refresh_assets(conn, client, *, now=utcnow) -> None:
     """Reload heroes and items from the assets API (archive raw first)."""
     fetched_at = now().isoformat()
-    for path, loader in (("/v1/assets/heroes", load_heroes), ("/v1/assets/items", load_items)):
+    for path, loader in (("/v1/assets/heroes", load_heroes),
+                         ("/v1/assets/items", load_items),
+                         ("/v1/assets/ranks", load_ranks)):
         url = f"{BASE_URL}{path}"
         status, _headers, body = client.get(url)
         archive_response(conn, url, status, body, fetched_at)

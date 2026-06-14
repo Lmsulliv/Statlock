@@ -1,68 +1,84 @@
-import { useEras } from '../api/queries'
-import type { Era } from '../api/types'
+import { useEras, usePlayedHeroes, useRanks } from '../api/queries'
+import type { Era, PlayedHero, Rank } from '../api/types'
+import { RankRange } from '../components/RankRange'
 import { scopeLabel } from './scopeLabel'
-import { FULL_BADGE_MAX, FULL_BADGE_MIN, useScope } from './useScope'
+import { useScope } from './useScope'
 
 export function ScopeBar() {
   const { scope, update } = useScope()
   const eras = useEras()
+  const heroesQuery = usePlayedHeroes(scope)
+  const ranksQuery = useRanks()
   const eraList: Era[] = eras.data?.eras ?? []
-
-  const toggleEra = (id: number) => {
-    const set = new Set(scope.eraIds)
-    if (set.has(id)) set.delete(id)
-    else set.add(id)
-    update({ eraIds: [...set].sort((a, b) => a - b) })
-  }
+  const heroList: PlayedHero[] = heroesQuery.data ?? []
+  const rankList: Rank[] = ranksQuery.data ?? []
 
   return (
     <div className="scope-bar">
       <div className="scope-controls">
         <div className="scope-control">
-          <span className="scope-label">Era</span>
-          <div className="era-toggles">
-            {eraList.length === 0 ? (
-              <span className="muted">All eras</span>
-            ) : (
-              eraList.map((e) => (
-                <button
-                  key={e.era_id}
-                  type="button"
-                  className={scope.eraIds.includes(e.era_id) ? 'chip active' : 'chip'}
-                  onClick={() => toggleEra(e.era_id)}
-                >
-                  {e.label}
-                </button>
-              ))
-            )}
-          </div>
+          <span className="scope-label">My hero</span>
+          <select
+            className="select-input"
+            value={scope.heroId ?? ''}
+            onChange={(e) =>
+              update({ heroId: e.target.value === '' ? null : Number(e.target.value) })
+            }
+          >
+            <option value="">All my heroes</option>
+            {heroList.map((h) => (
+              <option key={h.hero_id} value={h.hero_id}>
+                {h.name}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="scope-control">
-          <span className="scope-label">
-            Rank range (badge {scope.badgeMin}–{scope.badgeMax})
-          </span>
-          <div className="range-row">
-            <input
-              type="range"
-              min={FULL_BADGE_MIN}
-              max={FULL_BADGE_MAX}
-              value={scope.badgeMin}
-              aria-label="Minimum badge"
-              onChange={(e) =>
-                update({ badgeMin: Math.min(Number(e.target.value), scope.badgeMax) })
-              }
-            />
-            <input
-              type="range"
-              min={FULL_BADGE_MIN}
-              max={FULL_BADGE_MAX}
-              value={scope.badgeMax}
-              aria-label="Maximum badge"
-              onChange={(e) =>
-                update({ badgeMax: Math.max(Number(e.target.value), scope.badgeMin) })
-              }
-            />
+          <span className="scope-label">Era</span>
+          <select
+            className="select-input"
+            value={scope.eraIds[0] ?? ''}
+            onChange={(e) =>
+              update({ eraIds: e.target.value === '' ? [] : [Number(e.target.value)] })
+            }
+          >
+            <option value="">All eras</option>
+            {eraList.map((era) => (
+              <option key={era.era_id} value={era.era_id}>
+                {era.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="scope-control">
+          <span className="scope-label">Rank range</span>
+          <RankRange
+            ranks={rankList}
+            badgeMin={scope.badgeMin}
+            badgeMax={scope.badgeMax}
+            onChange={(badgeMin, badgeMax) => update({ badgeMin, badgeMax })}
+          />
+        </div>
+
+        <div className="scope-control">
+          <span className="scope-label">Lane</span>
+          <div className="toggle" role="group" aria-label="Lane view">
+            <button
+              type="button"
+              className={scope.inLane ? 'toggle-opt' : 'toggle-opt active'}
+              onClick={() => update({ inLane: false })}
+            >
+              Overall
+            </button>
+            <button
+              type="button"
+              className={scope.inLane ? 'toggle-opt active' : 'toggle-opt'}
+              onClick={() => update({ inLane: true })}
+            >
+              In-lane
+            </button>
           </div>
         </div>
 
@@ -91,7 +107,11 @@ export function ScopeBar() {
       </div>
 
       <div className="scope-active" title="The exact scope these numbers describe">
-        {scopeLabel(scope, eraList)}
+        {scopeLabel(scope, eraList, heroList, rankList)}
+      </div>
+      <div className="scope-note">
+        In-lane keeps only the enemies in your lane pairing and compares against
+        the same-lane baseline; overall counts all five opponents.
       </div>
     </div>
   )

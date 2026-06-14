@@ -1,4 +1,5 @@
 import type { Verdict } from '../api/types'
+import { VERDICT_TONE } from './verdict'
 
 interface Props {
   winrate: number | null
@@ -21,8 +22,7 @@ const fmt = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100)}%
 // unconfirmed row stays neutral gray no matter how lopsided the point looks. We
 // read `verdict` straight from the API and never recompute it.
 export function IntervalBar({ winrate, ciLow, ciHigh, globalRate, verdict }: Props) {
-  const tone =
-    verdict === 'strength' ? 'pos' : verdict === 'weakness' ? 'neg' : 'neutral'
+  const tone = VERDICT_TONE[verdict]
 
   const title =
     `Win rate ${fmt(winrate)} · 95% CI ${fmt(ciLow)}–${fmt(ciHigh)}` +

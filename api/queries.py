@@ -68,6 +68,11 @@ def personal_matchups(conn: sqlite3.Connection, scope: Scope,
     hero_sql, hero_params = ("", [])
     if my_hero_id is not None:
         hero_sql, hero_params = " AND me.hero_id = ?", [my_hero_id]
+    # In-lane: keep only enemies in the SAME lane pair as me. Lane slots pair as
+    # {1,2}/{3,4}/{5,6}; (lane+1)/2 is the integer group id (1,1,2,2,3,3), so this
+    # captures both laners I faced, not a single 1v1. Personal side only -- the
+    # global comparison switches to the same-lane baseline in baseline_matchups.
+    lane_sql = (" AND (me.lane + 1) / 2 = (opp.lane + 1) / 2") if scope.in_lane else ""
 
     sql = (
         "SELECT me.hero_id AS my_hero, opp.hero_id AS enemy_hero,"
@@ -77,7 +82,7 @@ def personal_matchups(conn: sqlite3.Connection, scope: Scope,
         "   ON opp.match_id = me.match_id AND opp.team != me.team"
         " JOIN matches m ON m.match_id = me.match_id"
         " WHERE me.account_id = ? AND m.game_mode = ?"
-        + era_sql + badge_sql + hero_sql +
+        + era_sql + badge_sql + hero_sql + lane_sql +
         " GROUP BY me.hero_id, opp.hero_id"
     )
     params = [scope.account_id, scope.game_mode] + era_params + badge_params + hero_params
@@ -113,15 +118,19 @@ def baseline_matchups(conn: sqlite3.Connection, scope: Scope,
     Keyed by (hero_id, enemy_hero_id)."""
     era_ids = _baseline_era_ids(scope)
     era_ph = ",".join("?" for _ in era_ids)
+    # In-lane compares against the same-lane (laning-phase) baseline; otherwise
+    # the overall one. The two never mix (same_lane is part of the PK).
+    same_lane = 1 if scope.in_lane else 0
     sql = (
         "SELECT hero_id, enemy_hero_id, SUM(wins) AS wins, SUM(matches) AS matches"
         " FROM baseline_hero_matchups"
         " WHERE snapshot_id = ?"
         f"   AND era_id IN ({era_ph})"
         "   AND badge_min >= ? AND badge_max <= ?"
+        "   AND same_lane = ?"
         " GROUP BY hero_id, enemy_hero_id"
     )
-    params = [snapshot_id, *era_ids, scope.badge_min, scope.badge_max]
+    params = [snapshot_id, *era_ids, scope.badge_min, scope.badge_max, same_lane]
     out: dict[tuple[int, int], dict] = {}
     for r in conn.execute(sql, params).fetchall():
         out[(r["hero_id"], r["enemy_hero_id"])] = {"wins": r["wins"], "matches": r["matches"]}
@@ -161,9 +170,22 @@ def hero_names(conn: sqlite3.Connection) -> dict[int, str]:
             conn.execute("SELECT hero_id, name FROM heroes").fetchall()}
 
 
+def hero_images(conn: sqlite3.Connection) -> dict[int, str | None]:
+    """hero_id -> icon URL (heroes.image_url, from assets images.icon_hero_card).
+    May be None for heroes whose asset row has no image."""
+    return {r["hero_id"]: r["image_url"] for r in
+            conn.execute("SELECT hero_id, image_url FROM heroes").fetchall()}
+
+
 def item_names(conn: sqlite3.Connection) -> dict[int, str]:
     return {r["item_id"]: r["name"] for r in
             conn.execute("SELECT item_id, name FROM items").fetchall()}
+
+
+def list_ranks(conn: sqlite3.Connection) -> list[dict]:
+    """Rank tiers ordered low to high (name + color; art derived in service)."""
+    return [dict(r) for r in
+            conn.execute("SELECT tier, name, color FROM ranks ORDER BY tier").fetchall()]
 
 
 # ── Overview / sync / eras ───────────────────────────────────────────────────

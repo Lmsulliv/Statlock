@@ -21,6 +21,7 @@ def full_client() -> FakeClient:
     client.add("item-stats", ok(fixture_text("item_stats_bucket_hero.json")))
     client.add("/v1/assets/heroes", ok(fixture_text("assets_heroes_match.json")))
     client.add("/v1/assets/items", ok(fixture_text("assets_items_match.json")))
+    client.add("/v1/assets/ranks", ok(fixture_text("assets_ranks.json")))
     client.add("GetNewsForApp", ok(fixture_text("steam_news.json")))
     return client
 

@@ -10,7 +10,13 @@ from api import queries, service
 from api.app import app
 from api.scope import make_scope
 from ingest.maintenance import DECADE_BRACKETS
-from stats import VERDICT_NOT_ENOUGH_DATA, VERDICT_STRENGTH, VERDICT_WEAKNESS
+from stats import (
+    VERDICT_CLEAR_STRENGTH,
+    VERDICT_CLEAR_WEAKNESS,
+    VERDICT_LEANING_STRENGTH,
+    VERDICT_LEANING_WEAKNESS,
+    VERDICT_NOT_ENOUGH_DATA,
+)
 from stats import __main__ as cli
 from tests.conftest import (
     E_BRACKET,
@@ -83,11 +89,11 @@ def test_improvement_watch_list_discipline(api_db):
     imp = service.improvement(api_db, make_scope(min_games=3))
 
     for entry in imp["confirmed_weaknesses"]:
-        assert entry["verdict"] == VERDICT_WEAKNESS
+        assert entry["verdict"] == VERDICT_CLEAR_WEAKNESS
     for entry in imp["confirmed_strengths"]:
-        assert entry["verdict"] == VERDICT_STRENGTH
+        assert entry["verdict"] == VERDICT_CLEAR_STRENGTH
     for entry in imp["watch_list"]:
-        assert entry["verdict"] == VERDICT_NOT_ENOUGH_DATA
+        assert entry["verdict"] in (VERDICT_LEANING_WEAKNESS, VERDICT_LEANING_STRENGTH)
 
     confirmed_enemies = {e.get("enemy_hero_id")
                          for e in imp["confirmed_weaknesses"] + imp["confirmed_strengths"]}

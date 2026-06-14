@@ -21,7 +21,17 @@ import pytest
 from hypothesis import assume, given
 from hypothesis import strategies as st
 
-from stats import shrunk_rate, verdict, wilson_interval
+from stats import (
+    VERDICT_CLEAR_STRENGTH,
+    VERDICT_CLEAR_WEAKNESS,
+    VERDICT_FLOOR,
+    VERDICT_LEANING_STRENGTH,
+    VERDICT_LEANING_WEAKNESS,
+    VERDICT_NOT_ENOUGH_DATA,
+    shrunk_rate,
+    verdict,
+    wilson_interval,
+)
 
 
 # ── Shared strategies ─────────────────────────────────────────────────────────
@@ -173,54 +183,66 @@ def test_property_shrunk_rate_between_raw_and_global(wins_n, g):
     assert min(personal, g) < adjusted < max(personal, g)
 
 
-# ── verdict ──────────────────────────────────────────────────────────────────
+# ── verdict (5-tier, confidence-aware) ────────────────────────────────────────
 
-def test_verdict_two_games_never_earns_a_verdict():
-    # Presentation-spec acceptance scenario 1: a matchup with 2 games never
-    # displays a verdict, regardless of record.
-    assert verdict(2, 2, 0.5) == "not_enough_data"
-    assert verdict(0, 2, 0.5) == "not_enough_data"
+def test_verdict_below_floor_never_earns_a_verdict():
+    # Acceptance scenario 1: below the sample-size floor, even a perfect record
+    # stays "not enough data".
+    assert verdict(2, 2, 0.5) == VERDICT_NOT_ENOUGH_DATA
+    assert verdict(0, 2, 0.5) == VERDICT_NOT_ENOUGH_DATA
+    assert verdict(4, 4, 0.5) == VERDICT_NOT_ENOUGH_DATA  # 4 < floor (5)
 
 
 def test_verdict_n_zero_is_not_enough_data():
-    assert verdict(0, 0, 0.5) == "not_enough_data"
+    assert verdict(0, 0, 0.5) == VERDICT_NOT_ENOUGH_DATA
 
 
-def test_verdict_strength_when_interval_excludes_global_below():
-    assert verdict(90, 100, 0.5) == "strength"
+def test_verdict_clear_strength_when_95_excludes_below():
+    assert verdict(90, 100, 0.5) == VERDICT_CLEAR_STRENGTH
 
 
-def test_verdict_weakness_when_interval_excludes_global_above():
-    assert verdict(10, 100, 0.5) == "weakness"
+def test_verdict_clear_weakness_when_95_excludes_above():
+    assert verdict(10, 100, 0.5) == VERDICT_CLEAR_WEAKNESS
 
 
-def test_verdict_lopsided_but_tiny_sample_is_not_enough_data():
-    assert verdict(1, 1, 0.5) == "not_enough_data"
+def test_verdict_leaning_weakness_small_sample_above_floor():
+    # 1W/5 vs 0.5: the 95% band still includes 0.5 (not clear), but the 80% band
+    # excludes it and the shrunk rate (0.4) agrees on the direction -> leaning.
+    assert verdict(1, 5, 0.5) == VERDICT_LEANING_WEAKNESS
+
+
+def test_verdict_leaning_strength_small_sample_above_floor():
+    assert verdict(4, 5, 0.5) == VERDICT_LEANING_STRENGTH
+
+
+def test_verdict_exactly_at_global_is_not_enough_data():
+    # No direction at all: sits right on the global rate.
+    assert verdict(5, 10, 0.5) == VERDICT_NOT_ENOUGH_DATA
 
 
 # ── verdict: property tests ───────────────────────────────────────────────────
 
 @given(wins_and_n(min_n=0), any_rate)
-def test_property_verdict_consistent_with_wilson_exclusion(wins_n, g):
-    """Verdict is exactly the Wilson-exclusion rule — no looser, no stricter."""
+def test_property_clear_verdict_matches_95_exclusion(wins_n, g):
+    """A "clear" verdict is exactly the 95% Wilson-exclusion rule; any other
+    verdict above the floor means the 95% band includes the global rate."""
     wins, n = wins_n
-    low, high = wilson_interval(wins, n)
+    low, high = wilson_interval(wins, n)  # default z = 1.96 (95%)
     v = verdict(wins, n, g)
-    if v == "strength":
+    if v == VERDICT_CLEAR_STRENGTH:
         assert low > g
-    elif v == "weakness":
+    elif v == VERDICT_CLEAR_WEAKNESS:
         assert high < g
-    else:
-        assert v == "not_enough_data"
+    elif n >= VERDICT_FLOOR:
         assert low <= g <= high
 
 
 @given(wins_and_n(), any_rate)
 def test_property_verdict_direction_agrees_with_raw_rate(wins_n, g):
-    """Strength always means personal win rate is above global; weakness below."""
+    """Any strength tier means personal rate is above global; weakness below."""
     wins, n = wins_n
     v = verdict(wins, n, g)
-    if v == "strength":
+    if v in (VERDICT_CLEAR_STRENGTH, VERDICT_LEANING_STRENGTH):
         assert wins / n > g
-    elif v == "weakness":
+    elif v in (VERDICT_CLEAR_WEAKNESS, VERDICT_LEANING_WEAKNESS):
         assert wins / n < g

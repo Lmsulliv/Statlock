@@ -24,6 +24,7 @@ export function scopeParams(scope: Scope): Record<string, string> {
   if (scope.accountId !== null) params.account_id = String(scope.accountId)
   if (scope.eraIds.length > 0) params.era_ids = scope.eraIds.join(',')
   if (scope.heroId !== null) params.hero_id = String(scope.heroId)
+  if (scope.inLane) params.in_lane = 'true'
   return params
 }
 

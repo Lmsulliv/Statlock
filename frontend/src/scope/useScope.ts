@@ -12,7 +12,8 @@ export interface Scope {
   badgeMax: number
   minGames: number
   gameMode: string // "1" Normal, "4" Street Brawl
-  heroId: number | null // optional matchup/item hero filter
+  heroId: number | null // optional "my hero" perspective filter
+  inLane: boolean // false = overall game, true = your lane pairing only
 }
 
 export const FULL_BADGE_MIN = 0
@@ -28,6 +29,7 @@ const DEFAULTS: Scope = {
   minGames: DEFAULT_MIN_GAMES,
   gameMode: GAME_MODE_NORMAL,
   heroId: null,
+  inLane: false,
 }
 
 function num(value: string | null): number | null {
@@ -50,6 +52,7 @@ export function scopeFromParams(params: URLSearchParams): Scope {
     minGames: num(params.get('min_games')) ?? DEFAULTS.minGames,
     gameMode: params.get('game_mode') ?? DEFAULTS.gameMode,
     heroId: num(params.get('hero_id')),
+    inLane: params.get('in_lane') === 'true',
   }
 }
 
@@ -70,6 +73,7 @@ export function useScope() {
       if (next.minGames !== DEFAULTS.minGames) sp.set('min_games', String(next.minGames))
       if (next.gameMode !== DEFAULTS.gameMode) sp.set('game_mode', next.gameMode)
       if (next.heroId !== null) sp.set('hero_id', String(next.heroId))
+      if (next.inLane) sp.set('in_lane', 'true')
       setParams(sp, { replace: true })
     },
     [scope, setParams],

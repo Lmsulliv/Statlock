@@ -21,6 +21,8 @@ export function App() {
 
   return (
     <div className="app">
+      {/* Soft light-green frame; purely decorative, never intercepts clicks. */}
+      <div className="vignette" aria-hidden="true" />
       <header className="app-header">
         <div className="app-title">Deadlock Stat Tracker</div>
         <nav className="app-nav">

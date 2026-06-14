@@ -43,9 +43,11 @@ def get_scope(
     badge_max: int = FULL_BADGE_MAX,
     min_games: int = DEFAULT_MIN_GAMES,
     game_mode: str = GAME_MODE_NORMAL,
+    in_lane: bool = False,
 ) -> Scope:
     """Build the shared Scope from the standard query-string params."""
-    return make_scope(account_id, era_ids, badge_min, badge_max, min_games, game_mode)
+    return make_scope(account_id, era_ids, badge_min, badge_max, min_games,
+                      game_mode, in_lane)
 
 
 @app.get("/api/matchups")
@@ -58,6 +60,17 @@ def get_matchups(hero_id: int | None = None, scope: Scope = Depends(get_scope),
 def get_items(hero_id: int, scope: Scope = Depends(get_scope),
               conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
     return service.items(conn, scope, hero_id)
+
+
+@app.get("/api/heroes")
+def get_heroes(scope: Scope = Depends(get_scope),
+               conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+    return service.played_heroes(conn, scope)
+
+
+@app.get("/api/ranks")
+def get_ranks(conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+    return service.ranks(conn)
 
 
 @app.get("/api/improvement")

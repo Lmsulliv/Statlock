@@ -1,15 +1,13 @@
 import type { Verdict } from '../api/types'
+import { VERDICT_TONE, verdictHint, verdictLabel } from './verdict'
 
-const LABELS: Record<Verdict, string> = {
-  strength: 'Strength',
-  weakness: 'Weakness',
-  not_enough_data: 'Not enough data',
-}
-
-// A verdict earns color only when the interval excludes the baseline; otherwise
-// it reads neutral, by design (presentation rule 2).
-export function VerdictBadge({ verdict }: { verdict: Verdict }) {
-  const tone =
-    verdict === 'strength' ? 'pos' : verdict === 'weakness' ? 'neg' : 'neutral'
-  return <span className={`badge tone-${tone}`}>{LABELS[verdict]}</span>
+// A verdict earns color only by its confidence tier (clear = vivid, leaning =
+// muted, none = gray); magnitude never drives color (presentation rule 2). The
+// neutral tier's wording depends on the sample (see verdictLabel).
+export function VerdictBadge({ verdict, games }: { verdict: Verdict; games: number }) {
+  return (
+    <span className={`badge tone-${VERDICT_TONE[verdict]}`} title={verdictHint(verdict, games)}>
+      {verdictLabel(verdict, games)}
+    </span>
+  )
 }

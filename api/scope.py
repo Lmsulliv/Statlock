@@ -29,6 +29,7 @@ class Scope:
     badge_max: int = FULL_BADGE_MAX
     min_games: int = DEFAULT_MIN_GAMES
     game_mode: str = GAME_MODE_NORMAL
+    in_lane: bool = False                   # True -> restrict to your lane pair
 
     @property
     def is_full_badge_range(self) -> bool:
@@ -66,6 +67,7 @@ def make_scope(
     badge_max: int = FULL_BADGE_MAX,
     min_games: int = DEFAULT_MIN_GAMES,
     game_mode: str = GAME_MODE_NORMAL,
+    in_lane: bool = False,
 ) -> Scope:
     """Build a Scope from raw request/CLI values (era_ids as a comma string).
     The badge range is snapped to decade edges (the only entry point that snaps;
@@ -78,4 +80,5 @@ def make_scope(
         badge_max=badge_max,
         min_games=min_games,
         game_mode=game_mode,
+        in_lane=in_lane,
     )

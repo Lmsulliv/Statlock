@@ -6,9 +6,23 @@ Formulas follow docs/data-model.md, "Statistics layer".
 """
 import math
 
-VERDICT_STRENGTH = "strength"
-VERDICT_WEAKNESS = "weakness"
+# Confidence-aware verdict vocabulary (five tiers). A row is only "clear" when
+# the 95% Wilson interval excludes the global rate; "leaning" is a softer signal
+# (a looser 80% band excludes it AND the shrinkage estimate agrees on the
+# direction); everything else, including anything below the sample-size floor,
+# is "not_enough_data".
+VERDICT_CLEAR_STRENGTH = "clear_strength"
+VERDICT_LEANING_STRENGTH = "leaning_strength"
 VERDICT_NOT_ENOUGH_DATA = "not_enough_data"
+VERDICT_LEANING_WEAKNESS = "leaning_weakness"
+VERDICT_CLEAR_WEAKNESS = "clear_weakness"
+
+# Below this many games a matchup never earns a verdict, however lopsided the
+# record (presentation-spec honesty contract; acceptance scenario 1).
+VERDICT_FLOOR = 5
+
+Z_CLEAR = 1.96    # 95% band -> a "clear" call
+Z_LEAN = 1.2816   # 80% band -> a "leaning" call
 
 
 def wilson_interval(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -44,16 +58,30 @@ def shrunk_rate(wins: int, n: int, global_rate: float, k: float = 10.0) -> float
     return (wins + k * global_rate) / (n + k)
 
 
-def verdict(wins: int, n: int, global_rate: float, z: float = 1.96) -> str:
-    """Strength/weakness call for a personal rate against the global rate.
+def verdict(wins: int, n: int, global_rate: float) -> str:
+    """Confidence-aware call for a personal rate against the global rate.
 
-    A row earns "strength" or "weakness" only when the Wilson interval
-    excludes the global rate; everything else is "not_enough_data", no matter
-    how lopsided the raw percentage looks (presentation-spec honesty contract).
+    Tiers, strongest evidence first:
+    - Below VERDICT_FLOOR games -> always not_enough_data (too little to say).
+    - "clear" when the 95% Wilson interval excludes the global rate.
+    - "leaning" when only a looser 80% band excludes it AND the shrinkage
+      estimate (which pulls thin samples toward the global prior) agrees on the
+      direction -- so a sample that shrinks back to the baseline stays muted.
+    - otherwise not_enough_data.
     """
-    low, high = wilson_interval(wins, n, z)
+    if n < VERDICT_FLOOR:
+        return VERDICT_NOT_ENOUGH_DATA
+
+    low, high = wilson_interval(wins, n, Z_CLEAR)
     if low > global_rate:
-        return VERDICT_STRENGTH
+        return VERDICT_CLEAR_STRENGTH
     if high < global_rate:
-        return VERDICT_WEAKNESS
+        return VERDICT_CLEAR_WEAKNESS
+
+    lean_low, lean_high = wilson_interval(wins, n, Z_LEAN)
+    adjusted = shrunk_rate(wins, n, global_rate)
+    if lean_low > global_rate and adjusted > global_rate:
+        return VERDICT_LEANING_STRENGTH
+    if lean_high < global_rate and adjusted < global_rate:
+        return VERDICT_LEANING_WEAKNESS
     return VERDICT_NOT_ENOUGH_DATA

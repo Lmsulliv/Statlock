@@ -2,7 +2,14 @@
 // exact field names the backend emits; the frontend renders them and never
 // recomputes a statistic. If a field changes server-side, change it here too.
 
-export type Verdict = 'strength' | 'weakness' | 'not_enough_data'
+// Five confidence tiers (see stats/__init__.py). "clear" = the 95% interval
+// excludes the baseline; "leaning" = a softer 80%-band signal; otherwise none.
+export type Verdict =
+  | 'clear_strength'
+  | 'leaning_strength'
+  | 'not_enough_data'
+  | 'leaning_weakness'
+  | 'clear_weakness'
 
 /** The shared statistics block on every matchup/item row (_stat_fields). */
 export interface StatFields {
@@ -12,15 +19,30 @@ export interface StatFields {
   global_matches: number // baseline sample size for this scope
   global_rate: number | null // baseline win rate, null when no baseline
   adjusted_rate: number | null // shrinkage estimate toward the baseline
-  delta: number | null // adjusted_rate - global_rate
+  delta: number | null // adjusted_rate - global_rate (shrinkage-adjusted)
+  raw_delta: number | null // winrate - global_rate (plain personal vs global)
   verdict: Verdict
 }
 
 export interface MatchupRow extends StatFields {
   enemy_hero_id: number
   enemy_hero_name: string
+  enemy_hero_image_url: string | null
   games: number
   wins: number
+}
+
+export interface PlayedHero {
+  hero_id: number
+  name: string
+  image_url: string | null
+}
+
+export interface Rank {
+  tier: number // 0 Obscurus .. 11 Eternus
+  name: string
+  color: string | null
+  badge_url: string // derived server-side from the tier
 }
 
 export interface ItemRow extends StatFields {

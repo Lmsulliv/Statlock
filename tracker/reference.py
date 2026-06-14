@@ -66,6 +66,29 @@ def load_items(conn: sqlite3.Connection, items_json: list[dict], fetched_at: str
     conn.commit()
 
 
+def load_ranks(conn: sqlite3.Connection, ranks_json: list[dict], fetched_at: str) -> None:
+    """Upsert rank tiers from the /v1/assets/ranks response into the ranks table.
+
+    Stores the semantic bits (tier, name, accent color). The badge art URL is a
+    pure function of the tier and is derived in the read layer, not stored here.
+    Idempotent upsert: re-running with the same data is a no-op.
+    """
+    rows = [
+        (rank["tier"], rank["name"], rank.get("color"), fetched_at)
+        for rank in ranks_json
+    ]
+    conn.executemany(
+        """INSERT INTO ranks(tier, name, color, fetched_at)
+           VALUES(?, ?, ?, ?)
+           ON CONFLICT(tier) DO UPDATE SET
+               name       = excluded.name,
+               color      = excluded.color,
+               fetched_at = excluded.fetched_at""",
+        rows,
+    )
+    conn.commit()
+
+
 def seed_patch_eras(conn: sqlite3.Connection, eras_json: list[dict]) -> None:
     """Insert patch eras from a seed list if they do not already exist.
 

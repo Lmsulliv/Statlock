@@ -1,9 +1,12 @@
+import { useMemo, useState } from 'react'
 import { useMatchups, useSyncStatus } from '../api/queries'
 import type { MatchupRow } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
+import { HeroIcon } from '../components/HeroIcon'
 import { IntervalBar } from '../components/IntervalBar'
 import { QueryBoundary } from '../components/QueryBoundary'
 import { SampleSize } from '../components/SampleSize'
+import { VERDICT_ORDER } from '../components/verdict'
 import { VerdictBadge } from '../components/VerdictBadge'
 import { useScope } from '../scope/useScope'
 
@@ -11,44 +14,167 @@ const fmtPct = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100
 const fmtDelta = (x: number | null) =>
   x === null ? '—' : `${x > 0 ? '+' : ''}${Math.round(x * 100)} pts`
 
+type SortKey = 'name' | 'games' | 'winrate' | 'global' | 'raw_delta' | 'delta' | 'verdict'
+
+interface Column {
+  key: SortKey
+  label: string
+  title?: string
+}
+
+// Order matches the table; every column is sortable. Titles explain the
+// columns that need interpreting (rule: don't make the reader guess).
+const COLUMNS: Column[] = [
+  { key: 'name', label: 'Enemy hero' },
+  { key: 'games', label: 'Record' },
+  { key: 'winrate', label: 'Win rate & 95% CI' },
+  {
+    key: 'global',
+    label: 'Global baseline',
+    title: 'The baseline win rate across all tracked games at this scope.',
+  },
+  {
+    key: 'raw_delta',
+    label: 'Global Δ',
+    title: 'Your win rate minus the global baseline (plain difference).',
+  },
+  {
+    key: 'delta',
+    label: 'Adj. Δ',
+    title:
+      'Shrinkage-adjusted rate minus global — thin samples are pulled toward the baseline first.',
+  },
+  {
+    key: 'verdict',
+    label: 'Verdict',
+    title:
+      'Weighs sample size and confidence, not raw win rate — a thin sample reads as inconclusive, not a strong call.',
+  },
+]
+
+function sortValue(r: MatchupRow, key: SortKey): number | string | null {
+  switch (key) {
+    case 'name':
+      return r.enemy_hero_name.toLowerCase()
+    case 'games':
+      return r.games
+    case 'winrate':
+      return r.winrate
+    case 'global':
+      return r.global_rate
+    case 'raw_delta':
+      return r.raw_delta
+    case 'delta':
+      return r.delta
+    case 'verdict':
+      return VERDICT_ORDER[r.verdict]
+  }
+}
+
 export function Matchups() {
   const { scope } = useScope()
   const matchups = useMatchups(scope)
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({
+    key: 'name',
+    dir: 'asc',
+  })
+
+  const onHeader = (key: SortKey) =>
+    setSort((s) =>
+      s.key === key
+        ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: key === 'name' ? 'asc' : 'desc' },
+    )
 
   return (
     <section>
       <h1 className="screen-title">Matchups</h1>
       <p className="screen-sub">
-        One row per enemy hero. Win rate shows as a 95% confidence interval — a
-        bar with whiskers — never a bare percentage. The gold dashed line is the
-        global baseline; color marks a confirmed verdict, not a big number.
+        One row per enemy hero, sorted A→Z by default — click any header to
+        re-sort. Win rate shows as a 95% confidence interval (a bar with
+        whiskers), never a bare percentage; the gold dashed line marks the global
+        baseline when available, and color marks a confirmed verdict, not a big
+        number.
       </p>
       <QueryBoundary query={matchups}>
         {(rows) =>
-          rows.length === 0 ? <MatchupsEmpty /> : <MatchupsTable rows={rows} />
+          rows.length === 0 ? (
+            <MatchupsEmpty />
+          ) : (
+            <MatchupsTable rows={rows} sort={sort} onHeader={onHeader} />
+          )
         }
       </QueryBoundary>
     </section>
   )
 }
 
-function MatchupsTable({ rows }: { rows: MatchupRow[] }) {
+function MatchupsTable({
+  rows,
+  sort,
+  onHeader,
+}: {
+  rows: MatchupRow[]
+  sort: { key: SortKey; dir: 'asc' | 'desc' }
+  onHeader: (key: SortKey) => void
+}) {
+  const sorted = useMemo(() => {
+    const out = [...rows]
+    out.sort((a, b) => {
+      const va = sortValue(a, sort.key)
+      const vb = sortValue(b, sort.key)
+      // Nulls (no baseline / no rate) always sink to the bottom, both directions.
+      if (va === null && vb === null) return 0
+      if (va === null) return 1
+      if (vb === null) return -1
+      const cmp =
+        typeof va === 'string' && typeof vb === 'string'
+          ? va.localeCompare(vb)
+          : va < vb
+            ? -1
+            : va > vb
+              ? 1
+              : 0
+      return sort.dir === 'asc' ? cmp : -cmp
+    })
+    return out
+  }, [rows, sort])
+
   return (
     <table className="data-table">
       <thead>
         <tr>
-          <th>Enemy hero</th>
-          <th>Record</th>
-          <th className="col-interval">Win rate &amp; 95% CI</th>
-          <th>Global baseline</th>
-          <th>Adj. delta</th>
-          <th>Verdict</th>
+          {COLUMNS.map((c) => {
+            const active = sort.key === c.key
+            return (
+              <th
+                key={c.key}
+                title={c.title}
+                aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                className={
+                  (c.key === 'name' ? 'col-hero ' : '') +
+                  (c.key === 'winrate' ? 'col-interval ' : '') +
+                  'th-sortable' +
+                  (active ? ' active' : '')
+                }
+                onClick={() => onHeader(c.key)}
+              >
+                {c.label}
+                <span className="sort-caret">{active ? (sort.dir === 'asc' ? '▲' : '▼') : ''}</span>
+              </th>
+            )
+          })}
         </tr>
       </thead>
       <tbody>
-        {rows.map((r) => (
+        {sorted.map((r) => (
           <tr key={r.enemy_hero_id}>
-            <td className="col-hero">{r.enemy_hero_name}</td>
+            <td className="col-hero">
+              <span className="enemy-cell">
+                <HeroIcon name={r.enemy_hero_name} url={r.enemy_hero_image_url} />
+                {r.enemy_hero_name}
+              </span>
+            </td>
             <td>
               <SampleSize games={r.games} wins={r.wins} />
             </td>
@@ -65,9 +191,10 @@ function MatchupsTable({ rows }: { rows: MatchupRow[] }) {
               <div>{fmtPct(r.global_rate)}</div>
               <div className="muted">{r.global_matches.toLocaleString()} games</div>
             </td>
+            <td className="col-delta">{fmtDelta(r.raw_delta)}</td>
             <td className="col-delta">{fmtDelta(r.delta)}</td>
             <td>
-              <VerdictBadge verdict={r.verdict} />
+              <VerdictBadge verdict={r.verdict} games={r.games} />
             </td>
           </tr>
         ))}
@@ -77,8 +204,7 @@ function MatchupsTable({ rows }: { rows: MatchupRow[] }) {
 }
 
 // When there are no rows, say why — using the live sync counts rather than a
-// blank table (presentation rule 5). The two causes look different: nothing
-// ingested yet vs. data present but filtered out by the current scope.
+// blank table (presentation rule 5).
 function MatchupsEmpty() {
   const sync = useSyncStatus()
   return (
@@ -100,7 +226,8 @@ function MatchupsEmpty() {
             ) : (
               <p>
                 Matches are ingested, but none meet the current scope. Try
-                lowering <strong>Min games</strong> or widening the rank range.
+                lowering <strong>Min games</strong>, widening the rank range, or
+                switching the lane view to Overall.
               </p>
             )}
           </>

@@ -31,6 +31,25 @@ code {
   padding: 0 20px 60px;
 }
 
+/* Decorative page frame. Fixed to the viewport, tints the edges, never blocks
+   clicks; content sits above it. Re-theme via --vignette-color in tokens.css. */
+.vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 55%,
+    rgba(var(--vignette-color), var(--vignette-strength)) 100%
+  );
+}
+
+.app > *:not(.vignette) {
+  position: relative;
+  z-index: 1;
+}
+
 /* ── Header / nav ─────────────────────────────────────────────────────────── */
 
 .app-header {
@@ -168,6 +187,12 @@ code {
   font-weight: 500;
 }
 
+.scope-note {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
 /* ── Screen headings ──────────────────────────────────────────────────────── */
 
 .screen-title {
@@ -213,6 +238,39 @@ code {
   white-space: nowrap;
 }
 
+/* Enemy hero cell: icon slot + name, vertically centered. */
+.enemy-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hero-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  overflow: hidden;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.hero-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.hero-icon-fallback {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
 .col-interval {
   width: 300px;
 }
@@ -225,6 +283,149 @@ code {
 .muted {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+/* Sortable column headers */
+.th-sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.th-sortable:hover,
+.th-sortable.active {
+  color: var(--text);
+}
+
+.sort-caret {
+  display: inline-block;
+  width: 10px;
+  margin-left: 5px;
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+/* Segmented toggle (Overall / In-lane) */
+.toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.toggle-opt {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: none;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.toggle-opt + .toggle-opt {
+  border-left: 1px solid var(--border);
+}
+
+.toggle-opt:hover {
+  color: var(--text);
+}
+
+.toggle-opt.active {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+/* Rank-range dropdown */
+.rankrange {
+  position: relative;
+}
+
+.rankrange-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.rankrange-current {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rankrange-caret {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.rank-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.rank-badge img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.rank-badge-lg {
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.rank-badge-lg img {
+  width: 40px;
+  height: 40px;
+}
+
+.rankrange-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.rankrange-popover {
+  position: absolute;
+  z-index: 41;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.rankrange-readout {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.rankrange-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rankrange-slider input[type='range'] {
+  width: 100%;
 }
 
 /* ── Sample size ──────────────────────────────────────────────────────────── */
@@ -274,6 +475,18 @@ code {
   background: var(--neg-wash);
 }
 
+.badge.tone-pos-weak {
+  color: var(--pos-weak);
+  border-color: var(--pos-weak);
+  background: var(--pos-weak-wash);
+}
+
+.badge.tone-neg-weak {
+  color: var(--neg-weak);
+  border-color: var(--neg-weak);
+  background: var(--neg-weak-wash);
+}
+
 /* ── Interval bar (the honesty centerpiece) ───────────────────────────────── */
 
 .interval {
@@ -295,8 +508,14 @@ code {
 .interval-bar.tone-pos {
   --mark: var(--pos);
 }
+.interval-bar.tone-pos-weak {
+  --mark: var(--pos-weak);
+}
 .interval-bar.tone-neg {
   --mark: var(--neg);
+}
+.interval-bar.tone-neg-weak {
+  --mark: var(--neg-weak);
 }
 
 .interval-track {

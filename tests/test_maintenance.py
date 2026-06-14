@@ -62,7 +62,11 @@ def test_refresh_baselines_one_call_per_bracket_per_era_plus_all_time(db):
     n_brackets = len(DECADE_BRACKETS)  # 12 gapless decade brackets
     n_spans = 3  # two eras + one explicit all-time span
     calls = client.calls_matching("hero-counter-stats")
-    assert len(calls) == n_spans * n_brackets
+    # Matchups are fetched twice per bracket: overall + same-lane.
+    assert len(calls) == 2 * n_spans * n_brackets
+    same_lane_calls = [u for u in calls if "same_lane_filter=true" in u]
+    assert len(same_lane_calls) == n_spans * n_brackets          # exactly half
+    assert len(calls) - len(same_lane_calls) == n_spans * n_brackets
     # NEVER omit the date params: the endpoint defaults to a trailing 30-day
     # window (api-findings contradiction 7). Every call also carries the decade
     # badge filter and the STRING game_mode variant (contradiction 8).
@@ -87,7 +91,9 @@ def test_refresh_baselines_one_call_per_bracket_per_era_plus_all_time(db):
 
     n_fixture_rows = len(load_fixture("counter_stats.json"))
     rows = db.execute("SELECT * FROM baseline_hero_matchups").fetchall()
-    assert len(rows) == n_spans * n_brackets * n_fixture_rows
+    # Overall + same-lane rows for every (span, bracket, fixture row).
+    assert len(rows) == 2 * n_spans * n_brackets * n_fixture_rows
+    assert {r["same_lane"] for r in rows} == {0, 1}
     assert {r["era_id"] for r in rows} == {era_jan, era_jun, 0}  # 0 = all-time sentinel
     # One row group per decade bracket; no all-ranks (0,116) row is written
     # (full-range baseline is rated-only, re-summed from the brackets).
@@ -95,11 +101,11 @@ def test_refresh_baselines_one_call_per_bracket_per_era_plus_all_time(db):
     snapshots = db.execute("SELECT * FROM baseline_snapshots").fetchall()
     assert len(snapshots) == 1
     assert all(r["snapshot_id"] == snapshots[0]["snapshot_id"] for r in rows)
-    # Responses archived before parsing (hard rule 2).
+    # Responses archived before parsing (hard rule 2) -- both variants.
     archived = db.execute(
         "SELECT COUNT(*) FROM raw_api_responses WHERE url LIKE '%hero-counter-stats%'"
     ).fetchone()[0]
-    assert archived == n_spans * n_brackets
+    assert archived == 2 * n_spans * n_brackets
 
 
 def test_refresh_baselines_fills_item_stats_via_bucket_hero(db):
@@ -154,6 +160,7 @@ def full_client() -> FakeClient:
     client.add("item-stats", ok(fixture_text("item_stats_bucket_hero.json")))
     client.add("/v1/assets/heroes", ok(fixture_text("assets_heroes_match.json")))
     client.add("/v1/assets/items", ok(fixture_text("assets_items_match.json")))
+    client.add("/v1/assets/ranks", ok(fixture_text("assets_ranks.json")))
     client.add("GetNewsForApp", ok(fixture_text("steam_news.json")))
     return client
 
@@ -168,6 +175,7 @@ def test_run_maintenance_does_all_jobs_and_stamps_meta(db):
     assert summary["revived"] == 1
     assert db.execute("SELECT COUNT(*) FROM heroes").fetchone()[0] > 0
     assert db.execute("SELECT COUNT(*) FROM items").fetchone()[0] > 0
+    assert db.execute("SELECT COUNT(*) FROM ranks").fetchone()[0] > 0
     assert db.execute("SELECT COUNT(*) FROM era_candidates").fetchone()[0] == 2
     assert db.execute("SELECT COUNT(*) FROM baseline_snapshots").fetchone()[0] == 1
     stamp = db.execute(

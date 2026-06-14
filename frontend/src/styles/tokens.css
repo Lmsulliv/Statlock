@@ -9,18 +9,29 @@
   --text: #e6e9ef;
   --text-muted: #9aa4b2;
 
-  /* Verdict colors == significance, never magnitude. */
-  --pos: #3fb950; /* strength */
+  /* Verdict colors == significance, never magnitude. "clear" tiers are vivid,
+     "leaning" tiers muted, "not enough data" neutral. */
+  --pos: #3fb950; /* clear strength */
   --pos-dim: #245c2d;
   --pos-wash: rgba(63, 185, 80, 0.12);
-  --neg: #f85149; /* weakness */
+  --pos-weak: #5f9e6a; /* leaning strength (muted) */
+  --pos-weak-wash: rgba(63, 185, 80, 0.06);
+  --neg: #f85149; /* clear weakness */
   --neg-dim: #6f2622;
   --neg-wash: rgba(248, 81, 73, 0.12);
+  --neg-weak: #c08682; /* leaning weakness (muted) */
+  --neg-weak-wash: rgba(248, 81, 73, 0.06);
   --neutral: #6b7480; /* not enough data */
 
   /* Baseline marker: deliberately not a verdict color, so it reads as a
      reference line rather than a good/bad signal. */
   --baseline: #d8a32a;
+
+  /* Page vignette. Stored as an RGB triplet + strength so the whole tint can be
+     re-themed later by overriding a single variable (e.g. a user setting).
+     Default: a soft light green. */
+  --vignette-color: 120, 200, 130;
+  --vignette-strength: 0.18;
 
   --radius: 6px;
   --gap: 12px;

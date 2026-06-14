@@ -24,15 +24,23 @@ from api.scope import (
     Scope,
     make_scope,
 )
-from stats import VERDICT_NOT_ENOUGH_DATA, VERDICT_STRENGTH, VERDICT_WEAKNESS
+from stats import (
+    VERDICT_CLEAR_STRENGTH,
+    VERDICT_CLEAR_WEAKNESS,
+    VERDICT_LEANING_STRENGTH,
+    VERDICT_LEANING_WEAKNESS,
+    VERDICT_NOT_ENOUGH_DATA,
+)
 from tracker.db import connect
 from tracker.migrate import migrate
 
 # ASCII only: a stats CLI shouldn't blow up on a cp1252 Windows console.
 _VERDICT_LABEL = {
-    VERDICT_STRENGTH: "STRENGTH",
-    VERDICT_WEAKNESS: "WEAKNESS",
+    VERDICT_CLEAR_STRENGTH: "STRENGTH",
+    VERDICT_LEANING_STRENGTH: "strength?",
     VERDICT_NOT_ENOUGH_DATA: "-",
+    VERDICT_LEANING_WEAKNESS: "weakness?",
+    VERDICT_CLEAR_WEAKNESS: "WEAKNESS",
 }
 
 _MODE_LABEL = {"1": "Normal", "4": "Street Brawl"}

@@ -1,0 +1,6 @@
+[
+  {"tier": 0, "name": "Obscurus", "color": "#333333", "images": {"large": "https://x/ranks/rank0/badge_lg.png"}},
+  {"tier": 1, "name": "Initiate", "color": "#6A3E1E", "images": {"large": "https://x/ranks/rank1/badge_lg.png"}},
+  {"tier": 6, "name": "Emissary", "color": "#EE4F57", "images": {"large": "https://x/ranks/rank6/badge_lg.png"}},
+  {"tier": 11, "name": "Eternus", "color": "#5CE9A9", "images": {"large": "https://x/ranks/rank11/badge_lg.png"}}
+]

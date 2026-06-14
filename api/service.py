@@ -11,9 +11,11 @@ import dataclasses
 import sqlite3
 
 from stats import (
+    VERDICT_CLEAR_STRENGTH,
+    VERDICT_CLEAR_WEAKNESS,
+    VERDICT_LEANING_STRENGTH,
+    VERDICT_LEANING_WEAKNESS,
     VERDICT_NOT_ENOUGH_DATA,
-    VERDICT_STRENGTH,
-    VERDICT_WEAKNESS,
     shrunk_rate,
     verdict,
     wilson_interval,
@@ -21,11 +23,6 @@ from stats import (
 
 from api import queries
 from api.scope import Scope
-
-# A row is "interesting but unconfirmed" if its raw rate sits this far from the
-# global rate yet its interval still includes the global rate. Tunable; starts
-# loose per the spec ("flag generously").
-WATCH_DELTA_THRESHOLD = 0.10
 
 _RATE_DP = 4   # decimal places for rates (keeps JSON clean and deterministic)
 _TIME_DP = 1   # decimal places for purchase-timing seconds
@@ -50,8 +47,9 @@ def _stat_fields(wins: int, games: int, global_wins: int, global_matches: int) -
     """The shared statistics block: winrate + Wilson interval + shrinkage +
     verdict. Used identically by matchup and item rows."""
     low, high = wilson_interval(wins, games)
+    winrate = wins / games if games else None
     fields = {
-        "winrate": _round(wins / games) if games else None,
+        "winrate": _round(winrate),
         "ci_low": _round(low),
         "ci_high": _round(high),
         "global_matches": global_matches,
@@ -62,27 +60,24 @@ def _stat_fields(wins: int, games: int, global_wins: int, global_matches: int) -
         fields.update({
             "global_rate": _round(global_rate),
             "adjusted_rate": _round(adjusted),
+            # delta is the shrinkage-adjusted gap (spec's "Adjusted delta");
+            # raw_delta is the plain personal-minus-global the user also wanted.
             "delta": _round(adjusted - global_rate),
+            "raw_delta": _round(winrate - global_rate) if winrate is not None else None,
             "verdict": verdict(wins, games, global_rate),
         })
     else:
         # No baseline for this scope -> nothing to compare against.
         fields.update({
             "global_rate": None, "adjusted_rate": None, "delta": None,
-            "verdict": VERDICT_NOT_ENOUGH_DATA,
+            "raw_delta": None, "verdict": VERDICT_NOT_ENOUGH_DATA,
         })
     return fields
 
 
 def _significant(row: dict) -> bool:
-    return row["verdict"] in (VERDICT_STRENGTH, VERDICT_WEAKNESS)
-
-
-def _matchup_sort_key(row: dict):
-    # Significant rows first, by |delta| desc (spec default); then the rest by
-    # sample size desc; enemy id as a stable final tiebreak (scenario 4).
-    delta = abs(row["delta"]) if row["delta"] is not None else 0.0
-    return (0 if _significant(row) else 1, -delta, -row["games"], row["enemy_hero_id"])
+    """A confirmed call (used by the items sort and the improvement digest)."""
+    return row["verdict"] in (VERDICT_CLEAR_STRENGTH, VERDICT_CLEAR_WEAKNESS)
 
 
 # ── Matchups ─────────────────────────────────────────────────────────────────
@@ -104,6 +99,7 @@ def matchups(conn: sqlite3.Connection, scope: Scope,
     snapshot = queries.latest_snapshot_id(conn)
     baseline = queries.baseline_matchups(conn, scope, snapshot) if snapshot else {}
     names = queries.hero_names(conn)
+    images = queries.hero_images(conn)
 
     agg: dict[int, dict] = {}
     for row in personal:
@@ -123,13 +119,15 @@ def matchups(conn: sqlite3.Connection, scope: Scope,
         row = {
             "enemy_hero_id": enemy,
             "enemy_hero_name": names.get(enemy, str(enemy)),
+            "enemy_hero_image_url": images.get(enemy),
             "games": b["games"],
             "wins": b["wins"],
         }
         row.update(_stat_fields(b["wins"], b["games"], b["gw"], b["gm"]))
         rows.append(row)
 
-    rows.sort(key=_matchup_sort_key)
+    # Default order is alphabetical by enemy hero; the UI re-sorts on click.
+    rows.sort(key=lambda r: r["enemy_hero_name"].lower())
     return rows
 
 
@@ -212,21 +210,62 @@ def improvement(conn: sqlite3.Connection, scope: Scope) -> dict:
 
     weaknesses, strengths, watch = [], [], []
     for e in entries:
-        if e["verdict"] == VERDICT_WEAKNESS:
+        v = e["verdict"]
+        if v == VERDICT_CLEAR_WEAKNESS:
             weaknesses.append(e)
-        elif e["verdict"] == VERDICT_STRENGTH:
+        elif v == VERDICT_CLEAR_STRENGTH:
             strengths.append(e)
-        else:
-            raw = _raw_delta(e)
-            if raw is not None and abs(raw) >= WATCH_DELTA_THRESHOLD:
-                watch.append(e)
+        elif v in (VERDICT_LEANING_WEAKNESS, VERDICT_LEANING_STRENGTH):
+            watch.append(e)        # a softer signal: real but not yet confirmed
 
     weaknesses.sort(key=lambda e: e["delta"])               # most negative first
     strengths.sort(key=lambda e: -e["delta"])               # most positive first
-    watch.sort(key=lambda e: -abs(_raw_delta(e)))           # biggest raw gap first
+    watch.sort(key=lambda e: -abs(_raw_delta(e) or 0.0))    # biggest raw gap first
     return {"confirmed_weaknesses": weaknesses,
             "confirmed_strengths": strengths,
             "watch_list": watch}
+
+
+# ── Heroes the account plays (the "my hero" picker) ──────────────────────────
+
+def played_heroes(conn: sqlite3.Connection, scope: Scope) -> list[dict]:
+    """Heroes the scoped account has played, each with name + icon URL, sorted
+    by name. Powers the matchups hero-perspective selector."""
+    resolved = _resolved(conn, scope)
+    if resolved is None:
+        return []
+    names = queries.hero_names(conn)
+    images = queries.hero_images(conn)
+    heroes = [
+        {"hero_id": hid, "name": names.get(hid, str(hid)), "image_url": images.get(hid)}
+        for hid in _played_hero_ids(conn, resolved)
+    ]
+    heroes.sort(key=lambda h: h["name"])
+    return heroes
+
+
+# ── Rank tiers (for the rank-range selector) ─────────────────────────────────
+
+_RANK_ART_BASE = "https://assets-bucket.deadlock-api.com/assets-api-res/images/ranks"
+
+
+def _rank_badge_url(tier: int) -> str:
+    """Derive the tier badge-art URL from the assets CDN layout. The URL is a
+    pure function of the tier, so we derive it rather than storing it."""
+    return f"{_RANK_ART_BASE}/rank{tier}/badge_lg.png"
+
+
+def ranks(conn: sqlite3.Connection) -> list[dict]:
+    """Rank tiers (name + color from the DB) plus a derived badge-art URL."""
+    return [
+        {
+            "tier": r["tier"],
+            "name": r["name"],
+            "color": r["color"],
+            "badge_url": _rank_badge_url(r["tier"]),
+        }
+        for r in queries.list_ranks(conn)
+    ]
 
 
 # ── Overview / sync / eras ───────────────────────────────────────────────────
