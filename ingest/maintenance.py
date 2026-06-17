@@ -197,6 +197,23 @@ def refresh_baselines(conn, client, *, now=utcnow) -> int:
     return snapshot_id
 
 
+def _parse_baseline_rows(body: str, url: str) -> list:
+    """Parse an analytics response body into a list of rows, tolerating a 200
+    that carries no usable JSON. HTTP 200 only says the request succeeded, not
+    that the body is a JSON array: the analytics endpoints sometimes answer 200
+    with an empty or truncated body, and json.loads("") raises JSONDecodeError.
+    Treat any empty/blank/unparseable body as 'no rows' (warn + skip) so one bad
+    bracket can't abort the whole nightly refresh."""
+    if not body or not body.strip():
+        log.warning("baselines: empty 200 body from %s; skipping bracket", url)
+        return []
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        log.warning("baselines: malformed 200 body from %s (%s); skipping bracket", url, exc)
+        return []
+
+
 def _fetch_era_baselines(conn, client, snapshot_id: int, span: EraSpan,
                          fetched_at: str) -> None:
     """Fetch matchup + item baselines for one era span into the snapshot, one
@@ -217,7 +234,7 @@ def _fetch_era_baselines(conn, client, snapshot_id: int, span: EraSpan,
                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [(snapshot_id, r["hero_id"], r["enemy_hero_id"], span.era_id,
                       badge_min, badge_max, same_lane, r["wins"], r["matches_played"], fetched_at)
-                     for r in json.loads(body)],
+                     for r in _parse_baseline_rows(body, url)],
                 )
             else:
                 log.warning("baselines: hero-counter-stats HTTP %s for era %s badge %d-%d "
@@ -235,7 +252,7 @@ def _fetch_era_baselines(conn, client, snapshot_id: int, span: EraSpan,
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [(snapshot_id, r["bucket"], r["item_id"], span.era_id, badge_min, badge_max,
                   r["wins"], r["matches"], r.get("avg_buy_time_s"), fetched_at)
-                 for r in json.loads(item_body)],
+                 for r in _parse_baseline_rows(item_body, item_url)],
             )
         else:
             log.warning("baselines: item-stats HTTP %s for era %s badge %d-%d",

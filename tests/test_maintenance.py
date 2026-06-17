@@ -1,4 +1,5 @@
 """Unit tests for ingest.maintenance: revive, baselines, assets, summary."""
+import logging
 from datetime import datetime, timezone
 
 from ingest.maintenance import (
@@ -141,6 +142,87 @@ def test_refresh_baselines_item_via_bucket_hero(db):
     fixture_heroes = {r["bucket"] for r in load_fixture("item_stats_bucket_hero.json")}
     assert {r["hero_id"] for r in rows} == fixture_heroes
     assert all(r["avg_purchase_s"] is not None for r in rows)
+
+
+# ── A 200 is not a promise of a JSON body ────────────────────────────────────
+#
+# The analytics endpoints occasionally answer 200 with an empty or truncated
+# body; json.loads("") raises JSONDecodeError. A single bad bracket must warn
+# and skip, never abort the whole nightly refresh. The counter route is given
+# two responses: the FIRST call gets the bad body, every later call repeats the
+# good fixture (FakeClient repeats its last response). So exactly one counter
+# call's worth of rows is missing and every following bracket/era still lands.
+
+N_SPANS = 3   # two seeded eras + the explicit all-time span; first run, all due
+
+
+def test_empty_200_counter_body_warns_and_skips_one_call(db, caplog):
+    seed_eras(db)
+    now = ManualNow(NOW)
+    client = FakeClient()
+    client.add("hero-counter-stats", (200, {}, ""), ok(fixture_text("counter_stats.json")))
+    client.add("item-stats", ok(fixture_text("item_stats_bucket_hero.json")))
+
+    with caplog.at_level(logging.WARNING):
+        refresh_baselines(db, client, now=now)   # must not raise
+
+    n_fixture = len(load_fixture("counter_stats.json"))
+    total = db.execute("SELECT COUNT(*) FROM baseline_hero_matchups").fetchone()[0]
+    # Every counter call but the one empty body inserted its fixture rows.
+    assert total == (2 * N_BRACKETS * N_SPANS - 1) * n_fixture
+    # A later, wholly-good bracket still landed (remaining work proceeds).
+    assert db.execute(
+        "SELECT COUNT(*) FROM baseline_hero_matchups WHERE badge_min = 10"
+    ).fetchone()[0] > 0
+    assert "empty 200 body" in caplog.text and "hero-counter-stats" in caplog.text
+
+
+def test_empty_200_item_body_warns_and_skips_one_call(db, caplog):
+    seed_eras(db)
+    now = ManualNow(NOW)
+    client = FakeClient()
+    client.add("hero-counter-stats", ok(fixture_text("counter_stats.json")))
+    client.add("item-stats", (200, {}, ""), ok(fixture_text("item_stats_bucket_hero.json")))
+
+    with caplog.at_level(logging.WARNING):
+        refresh_baselines(db, client, now=now)   # must not raise
+
+    n_item = len(load_fixture("item_stats_bucket_hero.json"))
+    item_total = db.execute("SELECT COUNT(*) FROM baseline_hero_item_stats").fetchone()[0]
+    assert item_total == (N_BRACKETS * N_SPANS - 1) * n_item
+    # Counter baselines are untouched by an item-stats hiccup.
+    n_counter = len(load_fixture("counter_stats.json"))
+    assert db.execute("SELECT COUNT(*) FROM baseline_hero_matchups").fetchone()[0] == \
+        2 * N_BRACKETS * N_SPANS * n_counter
+    assert "empty 200 body" in caplog.text and "item-stats" in caplog.text
+
+
+def test_malformed_200_body_warns_and_skips_one_call(db, caplog):
+    seed_eras(db)
+    now = ManualNow(NOW)
+    client = FakeClient()
+    client.add("hero-counter-stats", (200, {}, "not json"), ok(fixture_text("counter_stats.json")))
+    client.add("item-stats", ok(fixture_text("item_stats_bucket_hero.json")))
+
+    with caplog.at_level(logging.WARNING):
+        refresh_baselines(db, client, now=now)   # must not raise
+
+    n_fixture = len(load_fixture("counter_stats.json"))
+    total = db.execute("SELECT COUNT(*) FROM baseline_hero_matchups").fetchone()[0]
+    assert total == (2 * N_BRACKETS * N_SPANS - 1) * n_fixture
+    assert "malformed 200 body" in caplog.text and "hero-counter-stats" in caplog.text
+
+
+def test_valid_200_body_still_inserts_rows(db):
+    """Regression: the parse helper must not change the happy path."""
+    seed_eras(db)
+    now = ManualNow(NOW)
+
+    refresh_baselines(db, _baseline_client(), now=now)
+
+    n_fixture = len(load_fixture("counter_stats.json"))
+    assert db.execute("SELECT COUNT(*) FROM baseline_hero_matchups").fetchone()[0] == \
+        2 * N_BRACKETS * N_SPANS * n_fixture
 
 
 # ── Staggered refresh + single evolving snapshot ─────────────────────────────
