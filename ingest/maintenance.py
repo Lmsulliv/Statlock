@@ -3,16 +3,18 @@
 - Second chances: yesterday's 'unavailable' may be fetchable today, because
   Valve's unlock throttle releases old match reports in batches. Reviving
   stale unavailables is the whole automation story for old match reports.
-- Refresh global baselines, one request per era plus an explicit all-time
-  span. NEVER omit the date params: the analytics endpoint defaults to a
-  trailing 30-day window, which would silently store recent-meta numbers
-  under an older era's label (api-findings contradiction 7).
+- Refresh global baselines (decade brackets) into a single evolving snapshot,
+  staggered by era mutability (open era nightly, closed eras weekly/monthly).
+  NEVER omit the date params: the analytics endpoint defaults to a trailing
+  30-day window, which would silently store recent-meta numbers under an older
+  era's label (api-findings contradiction 7).
 - Refresh heroes/items from the assets API.
 - Detect new era candidates from Steam News.
 - Log a one-line summary.
 """
 import json
 import logging
+from dataclasses import dataclass
 from datetime import timedelta
 
 from ingest.client import BASE_URL, archive_response
@@ -27,9 +29,23 @@ ALL_TIME_ERA_ID = 0           # sentinel: NULL breaks SQLite composite-PK dedup
 
 # Gapless decade brackets tiling 0..116 (12). Each baseline call fetches one
 # bracket; the query layer (api/queries.py) re-sums the brackets a scope
-# contains. Must stay aligned with api.scope.snap_badge_range, which snaps a
-# requested range to these same decade edges so containment never splits one.
+# contains. Decades are the FINEST CLEAN partition the analytics badge filter
+# supports: narrower brackets drop matches whose fractional team-average badge
+# falls in the gaps between integer edges (gate spike 09 + width sweep 11 ->
+# api-findings finding 6; width-5 already leaks ~4%, width-1 ~15%). Must stay
+# aligned with api.scope.snap_badge_range, which snaps a requested range to these
+# same decade edges so containment never splits one.
 DECADE_BRACKETS = [(0, 9)] + [(t * 10, t * 10 + 9) for t in range(1, 11)] + [(110, 116)]
+
+# Staggered-refresh cadence (cache-by-mutability): the open era changes every
+# night, a recently-closed era barely changes (only late-arriving matches), an
+# old closed era and the all-time sentinel are effectively immutable. Re-fetching
+# every era's brackets nightly is wasteful, so we pull rarely-changing eras
+# rarely. These are the staleness thresholds.
+DAY_S = 24 * 3600
+WEEKLY_S = 7 * DAY_S
+MONTHLY_S = 30 * DAY_S
+RECENTLY_CLOSED_S = 30 * DAY_S    # a closed era younger than this refreshes weekly
 
 
 def revive_unavailable(conn, *, now=utcnow) -> int:
@@ -46,19 +62,50 @@ def revive_unavailable(conn, *, now=utcnow) -> int:
     return cursor.rowcount
 
 
-def _era_spans(conn, now_unix: int) -> list[tuple[int, int, int]]:
-    """(era_id, min_unix, max_unix) per era, each bounded by the next era's
-    start (the open era ends at now), plus the all-time span."""
+@dataclass(frozen=True)
+class EraSpan:
+    """One baseline time window. is_open marks the live era (ends at now, so it
+    refreshes every run); closed_at is the unix time the era ended (the next
+    era's start), None for the open era and the all-time sentinel."""
+    era_id: int
+    min_unix: int
+    max_unix: int
+    is_open: bool
+    closed_at: int | None
+
+
+def _era_spans(conn, now_unix: int) -> list[EraSpan]:
+    """One EraSpan per patch era (each bounded by the next era's start; the last
+    one is open and ends at now), plus the all-time sentinel span."""
     eras = conn.execute(
         "SELECT era_id, started_at FROM patch_eras ORDER BY started_at"
     ).fetchall()
     spans = []
     for i, era in enumerate(eras):
         min_unix = iso_to_unix(era["started_at"])
-        max_unix = iso_to_unix(eras[i + 1]["started_at"]) if i + 1 < len(eras) else now_unix
-        spans.append((era["era_id"], min_unix, max_unix))
-    spans.append((ALL_TIME_ERA_ID, 0, now_unix))
+        is_open = i + 1 == len(eras)
+        if is_open:
+            spans.append(EraSpan(era["era_id"], min_unix, now_unix, True, None))
+        else:
+            closed_at = iso_to_unix(eras[i + 1]["started_at"])
+            spans.append(EraSpan(era["era_id"], min_unix, closed_at, False, closed_at))
+    spans.append(EraSpan(ALL_TIME_ERA_ID, 0, now_unix, False, None))
     return spans
+
+
+def _refresh_due(span: EraSpan, now_unix: int, last_refreshed_at: str | None) -> bool:
+    """Whether a span's baselines are stale enough to re-fetch (see the cadence
+    constants). Never-fetched spans are always due, which is what makes the first
+    per-badge run rebuild every era."""
+    if last_refreshed_at is None:
+        return True
+    if span.is_open:
+        return True
+    age_s = now_unix - iso_to_unix(last_refreshed_at)
+    if span.era_id == ALL_TIME_ERA_ID:
+        return age_s >= MONTHLY_S
+    recently_closed = span.closed_at is not None and now_unix - span.closed_at <= RECENTLY_CLOSED_S
+    return age_s >= (WEEKLY_S if recently_closed else MONTHLY_S)
 
 
 def _counter_url(min_unix: int, max_unix: int, badge_min: int, badge_max: int,
@@ -95,78 +142,104 @@ def _item_stats_url(min_unix: int, max_unix: int, badge_min: int, badge_max: int
     )
 
 
+def _last_refreshed_by_era(conn) -> dict[int, str]:
+    """era_id -> ISO timestamp of its last real fetch (baseline_refresh_state)."""
+    return {r["era_id"]: r["last_refreshed_at"]
+            for r in conn.execute(
+                "SELECT era_id, last_refreshed_at FROM baseline_refresh_state")}
+
+
+def _latest_snapshot_id(conn) -> int | None:
+    row = conn.execute("SELECT MAX(snapshot_id) AS s FROM baseline_snapshots").fetchone()
+    return row["s"] if row else None
+
+
 def refresh_baselines(conn, client, *, now=utcnow) -> int:
-    """Fetch matchup + item baselines for every era span into a fresh snapshot,
-    one call per (era span, decade bracket) per endpoint. Baselines are
-    Normal-only (game_mode=normal) so they line up with personal stats, which
-    also default to Normal; Street Brawl is never mixed in. Old snapshots are
-    kept for time-travel debugging. Returns snapshot_id."""
+    """Refresh global baselines into a SINGLE evolving snapshot, staggered by era
+    mutability. Each run re-fetches only the eras that are due (the open era every
+    run; closed eras weekly/monthly; the all-time sentinel monthly) and replaces
+    just those eras' rows in place, so the latest snapshot stays complete for the
+    read layer (which reads MAX(snapshot_id)). Baselines are decade-bracketed and
+    Normal-only (game_mode=normal) so they line up with personal stats. Returns
+    the snapshot_id."""
     fetched_at = now().isoformat()
     now_unix = iso_to_unix(fetched_at)
-    cursor = conn.execute(
-        "INSERT INTO baseline_snapshots(fetched_at, notes) VALUES (?, ?)",
-        (fetched_at, "nightly matchup baselines"),
-    )
-    snapshot_id = cursor.lastrowid
 
-    # The decade brackets tile 0..116, so the full-range baseline (a scope that
-    # contains every bracket) covers RATED matches only: matches with an unknown
-    # (NULL) average badge -- a ~4% early-access tail with no rank to compare --
-    # fall outside every bracket and are excluded by design. No all-ranks row.
-    for era_id, min_unix, max_unix in _era_spans(conn, now_unix):
-        for badge_min, badge_max in DECADE_BRACKETS:
-            # Matchup baselines: hero-counter-stats, one call per bracket, fetched
-            # twice -- overall (same_lane=0) and lane-opponents only (same_lane=1)
-            # -- so the in-lane view has a matching same-lane baseline.
-            for same_lane in (0, 1):
-                url = _counter_url(min_unix, max_unix, badge_min, badge_max,
-                                   same_lane=bool(same_lane))
-                status, _headers, body = client.get(url)
-                archive_response(conn, url, status, body, fetched_at)
-                if status == 200:
-                    matchup_rows = [
-                        (snapshot_id, r["hero_id"], r["enemy_hero_id"], era_id,
-                         badge_min, badge_max, same_lane, r["wins"],
-                         r["matches_played"], fetched_at)
-                        for r in json.loads(body)
-                    ]
-                    conn.executemany(
-                        "INSERT INTO baseline_hero_matchups"
-                        " (snapshot_id, hero_id, enemy_hero_id, era_id, badge_min, badge_max,"
-                        "  same_lane, wins, matches, fetched_at)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        matchup_rows,
-                    )
-                else:
-                    log.warning("baselines: hero-counter-stats HTTP %s for era %s "
-                                "badge %d-%d same_lane=%d",
-                                status, era_id, badge_min, badge_max, same_lane)
+    # First staggered run (no refresh state yet): start a fresh snapshot, and
+    # because the state is empty every era is due, so this run rebuilds them all.
+    # Later runs evolve that same snapshot, replacing only the due eras.
+    refreshed = _last_refreshed_by_era(conn)
+    snapshot_id = _latest_snapshot_id(conn) if refreshed else None
+    if snapshot_id is None:
+        cursor = conn.execute(
+            "INSERT INTO baseline_snapshots(fetched_at, notes) VALUES (?, ?)",
+            (fetched_at, "staggered baselines"),
+        )
+        snapshot_id = cursor.lastrowid
 
-            # Item baselines: item-stats?bucket=hero, also one call per bracket;
-            # the `bucket` field is the hero_id, `wins+losses` reconcile to matches.
-            item_url = _item_stats_url(min_unix, max_unix, badge_min, badge_max)
-            item_status, _h, item_body = client.get(item_url)
-            archive_response(conn, item_url, item_status, item_body, fetched_at)
-            if item_status == 200:
-                item_rows = [
-                    (snapshot_id, r["bucket"], r["item_id"], era_id,
-                     badge_min, badge_max, r["wins"], r["matches"],
-                     r.get("avg_buy_time_s"), fetched_at)
-                    for r in json.loads(item_body)
-                ]
+    for span in _era_spans(conn, now_unix):
+        if not _refresh_due(span, now_unix, refreshed.get(span.era_id)):
+            log.info("baselines: era %s not due yet, skipping", span.era_id)
+            continue
+        # Replace this era's rows in the evolving snapshot, then re-fetch fresh.
+        conn.execute("DELETE FROM baseline_hero_matchups WHERE snapshot_id = ? AND era_id = ?",
+                     (snapshot_id, span.era_id))
+        conn.execute("DELETE FROM baseline_hero_item_stats WHERE snapshot_id = ? AND era_id = ?",
+                     (snapshot_id, span.era_id))
+        _fetch_era_baselines(conn, client, snapshot_id, span, fetched_at)
+        conn.execute(
+            "INSERT INTO baseline_refresh_state(era_id, last_refreshed_at) VALUES (?, ?)"
+            " ON CONFLICT(era_id) DO UPDATE SET last_refreshed_at = excluded.last_refreshed_at",
+            (span.era_id, fetched_at),
+        )
+        conn.commit()   # commit per era so a mid-run failure keeps finished eras
+        log.info("baselines: era %s refreshed into snapshot %d", span.era_id, snapshot_id)
+    return snapshot_id
+
+
+def _fetch_era_baselines(conn, client, snapshot_id: int, span: EraSpan,
+                         fetched_at: str) -> None:
+    """Fetch matchup + item baselines for one era span into the snapshot, one
+    call per decade bracket per endpoint. Matchups are fetched twice per bracket
+    -- overall (same_lane=0) and lane-opponents only (same_lane=1) -- so the
+    in-lane view has a matching baseline. Empty brackets insert nothing."""
+    for badge_min, badge_max in DECADE_BRACKETS:
+        for same_lane in (0, 1):
+            url = _counter_url(span.min_unix, span.max_unix, badge_min, badge_max,
+                               same_lane=bool(same_lane))
+            status, _headers, body = client.get(url)
+            archive_response(conn, url, status, body, fetched_at)
+            if status == 200:
                 conn.executemany(
-                    "INSERT INTO baseline_hero_item_stats"
-                    " (snapshot_id, hero_id, item_id, era_id, badge_min, badge_max,"
-                    "  wins, matches, avg_purchase_s, fetched_at)"
+                    "INSERT INTO baseline_hero_matchups"
+                    " (snapshot_id, hero_id, enemy_hero_id, era_id, badge_min, badge_max,"
+                    "  same_lane, wins, matches, fetched_at)"
                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    item_rows,
+                    [(snapshot_id, r["hero_id"], r["enemy_hero_id"], span.era_id,
+                      badge_min, badge_max, same_lane, r["wins"], r["matches_played"], fetched_at)
+                     for r in json.loads(body)],
                 )
             else:
-                log.warning("baselines: item-stats HTTP %s for era %s badge %d-%d",
-                            item_status, era_id, badge_min, badge_max)
-    conn.commit()
-    log.info("baselines: snapshot %d written", snapshot_id)
-    return snapshot_id
+                log.warning("baselines: hero-counter-stats HTTP %s for era %s badge %d-%d "
+                            "same_lane=%d", status, span.era_id, badge_min, badge_max, same_lane)
+
+        # Item baselines: item-stats?bucket=hero; the `bucket` field is the hero_id.
+        item_url = _item_stats_url(span.min_unix, span.max_unix, badge_min, badge_max)
+        item_status, _h, item_body = client.get(item_url)
+        archive_response(conn, item_url, item_status, item_body, fetched_at)
+        if item_status == 200:
+            conn.executemany(
+                "INSERT INTO baseline_hero_item_stats"
+                " (snapshot_id, hero_id, item_id, era_id, badge_min, badge_max,"
+                "  wins, matches, avg_purchase_s, fetched_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(snapshot_id, r["bucket"], r["item_id"], span.era_id, badge_min, badge_max,
+                  r["wins"], r["matches"], r.get("avg_buy_time_s"), fetched_at)
+                 for r in json.loads(item_body)],
+            )
+        else:
+            log.warning("baselines: item-stats HTTP %s for era %s badge %d-%d",
+                        item_status, span.era_id, badge_min, badge_max)
 
 
 def refresh_assets(conn, client, *, now=utcnow) -> None:

@@ -9,6 +9,7 @@ EXPECTED_TABLES = {
     "heroes", "items", "ranks", "patch_eras",
     "matches", "match_players", "account_rank_history", "match_item_purchases",
     "baseline_hero_matchups", "baseline_hero_item_stats", "baseline_snapshots",
+    "baseline_refresh_state",
     "tracked_accounts", "sync_state", "fetch_queue", "raw_api_responses",
     "era_candidates", "worker_meta",
 }
@@ -35,9 +36,9 @@ def test_all_indexes_created(db):
     assert EXPECTED_INDEXES <= names_of_type(db, "index")
 
 
-def test_user_version_is_3(db):
+def test_user_version_is_4(db):
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 3
+    assert version == 4
 
 
 def test_migrate_is_idempotent(tmp_path):
@@ -45,7 +46,7 @@ def test_migrate_is_idempotent(tmp_path):
     migrate(conn)
     migrate(conn)  # second call must not raise
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 3
+    assert version == 4
 
 
 def test_upgrade_from_v1_preserves_data(tmp_path):
@@ -63,10 +64,11 @@ def test_upgrade_from_v1_preserves_data(tmp_path):
 
     migrate(conn)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
     assert conn.execute("SELECT COUNT(*) FROM tracked_accounts").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM era_candidates").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM ranks").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM baseline_refresh_state").fetchone()[0] == 0
 
 
 def test_era_candidates_post_url_unique(db):

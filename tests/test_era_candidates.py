@@ -1,10 +1,14 @@
 """Unit tests for ingest.eras: patch-notes-assisted era candidate detection.
 
 Calibration values come from the real recorded Steam News posts
-(docs/api-findings.md): the 05-22 Gameplay Update has 307 change lines,
-the 06-04 Minor Update has 14, and the Apollo hero release has 0.
+(docs/api-findings.md): the 05-22 Gameplay Update has 307 change lines, the
+06-04 Minor Update (an urn rework) has 14, and the Apollo hero release has 0.
+
+Detection now flags generously (presentation-spec): any post with at least one
+change line is era-worthy, so a small Minor Update surfaces like a big one. The
+title prefix is only a floor for hero releases (~0 change lines).
 """
-from ingest.eras import detect_era_candidates, score_post
+from ingest.eras import SCORE_THRESHOLD, detect_era_candidates, score_post
 
 from tests.fakes import FakeClient, ManualNow, fixture_text, load_fixture
 
@@ -18,21 +22,25 @@ def test_gameplay_update_scores_high():
     post = post_by_prefix("Gameplay Update - 05-22-2026")
     change_lines, score = score_post(post["title"], post["contents"])
     assert change_lines == 307
-    assert score >= 100
+    assert score >= SCORE_THRESHOLD
 
 
-def test_minor_update_scores_low():
+def test_small_minor_patch_is_flagged():
+    # The 06-04 "Minor Update" is an urn rework: a small but meaningful patch
+    # that the old title-prefix gate dropped. It must now clear the threshold.
     post = post_by_prefix("Minor Update - 06-04-2026")
     change_lines, score = score_post(post["title"], post["contents"])
     assert change_lines == 14
-    assert score < 100
+    assert score >= SCORE_THRESHOLD
 
 
-def test_hero_release_scores_high_despite_zero_change_lines():
+def test_hero_release_still_flagged_despite_zero_change_lines():
+    # Hero releases carry ~0 change lines but reshape the meta; the non-minor
+    # floor keeps them above the threshold.
     post = post_by_prefix("Apollo")
     change_lines, score = score_post(post["title"], post["contents"])
     assert change_lines == 0
-    assert score >= 100
+    assert score >= SCORE_THRESHOLD
 
 
 def make_client():
@@ -41,30 +49,32 @@ def make_client():
     return client
 
 
-def test_detection_flags_majors_skips_minors_and_foreign_feeds(db):
+def test_detection_flags_valve_posts_skips_foreign_feed(db):
     client = make_client()
     inserted = detect_era_candidates(db, client, now=ManualNow())
 
     rows = db.execute("SELECT * FROM era_candidates ORDER BY post_url").fetchall()
     titles = {r["post_title"] for r in rows}
-    assert inserted == 2
+    # All three Valve Community Announcements are flagged now, including the small
+    # urn-rework Minor Update; only the PC Gamer article (wrong feed) is skipped.
+    assert inserted == 3
     assert any(t.startswith("Gameplay Update - 05-22-2026") for t in titles)
+    assert any(t.startswith("Minor Update - 06-04-2026") for t in titles)
     assert any(t.startswith("Apollo") for t in titles)
-    # The minor update and the PC Gamer article (wrong feed) are not flagged.
-    assert not any("Minor Update" in t for t in titles)
-    assert len(rows) == 2
+    assert not any("PC Gamer" in (t or "") for t in titles)
+    assert len(rows) == 3
     for row in rows:
         assert row["status"] == "pending"
         assert row["posted_at"] is not None
         assert row["change_lines"] is not None
-        assert row["score"] >= 100
+        assert row["score"] >= SCORE_THRESHOLD
 
 
 def test_detection_is_idempotent(db):
     client = make_client()
-    assert detect_era_candidates(db, client, now=ManualNow()) == 2
+    assert detect_era_candidates(db, client, now=ManualNow()) == 3
     assert detect_era_candidates(db, client, now=ManualNow()) == 0
-    assert db.execute("SELECT COUNT(*) FROM era_candidates").fetchone()[0] == 2
+    assert db.execute("SELECT COUNT(*) FROM era_candidates").fetchone()[0] == 3
 
 
 def test_news_response_archived_raw(db):

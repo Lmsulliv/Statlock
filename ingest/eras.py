@@ -5,9 +5,12 @@ era-worthy ones as pending candidates; confirming/dismissing is a human
 step in the era manager UI (Phase 5). Detection is idempotent — UNIQUE
 (post_url) means re-scanning the feed never duplicates a candidate.
 
-Calibration (docs/api-findings.md): the title prefix is a near-perfect
-major/minor classifier on its own, so anything that isn't a "Minor Update"
-scores generously — that catches hero releases (≈0 change lines) too.
+Calibration stance (docs/presentation-spec.md): "flag generously, dismiss
+freely." A heuristic can count change lines but can't know a single urn-rework
+line outweighs forty number tweaks, so we flag any patch with at least one
+change line rather than gating on the title prefix. The title is kept only as a
+floor for hero releases (≈0 change lines but era-worthy); you dismiss the false
+positives with one click.
 """
 import json
 import logging
@@ -23,18 +26,24 @@ STEAM_NEWS_URL = (
     "?appid=1422450&count=30&maxlength=0"
 )
 VALVE_FEED = "steam_community_announcements"
-SCORE_THRESHOLD = 100
+SCORE_THRESHOLD = 1  # flag generously; you dismiss freely (presentation-spec)
 
 # A change line is "[p]- ..." in the BBCode-ish single-line contents.
 _CHANGE_LINE_RE = re.compile(r"\[p\]\s*-\s")
 
 
 def score_post(title: str, contents: str) -> tuple[int, float]:
-    """Return (change_line_count, score). Non-minor posts get a +100 bonus so
-    hero releases (which have ~0 change lines) still clear the threshold."""
+    """Return (change_line_count, score). We flag any patch with at least one
+    change line, so the title prefix is no longer a flagging requirement -- a
+    small "Minor Update" (e.g. an urn rework) surfaces just like a big one.
+
+    Hero-release posts carry ~0 change lines but reshape the meta, so posts that
+    aren't routine "Minor Update"s get a floor that still clears the threshold.
+    (Interim heuristic -- start loose, tighten once a month of candidates is
+    seen.)"""
     change_lines = len(_CHANGE_LINE_RE.findall(contents or ""))
     minor = title.startswith("Minor Update")
-    score = change_lines + (0 if minor else 100)
+    score = change_lines if minor else max(change_lines, SCORE_THRESHOLD)
     return change_lines, score
 
 

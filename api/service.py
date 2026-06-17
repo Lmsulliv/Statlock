@@ -8,6 +8,7 @@ number -- that's the whole point of the stepping-stone CLI.
 Imports stats + tracker only; never FastAPI, so the CLI stays lightweight.
 """
 import dataclasses
+import json
 import sqlite3
 
 from stats import (
@@ -20,7 +21,15 @@ from stats import (
     verdict,
     wilson_interval,
 )
+from stats.sessions import (
+    SESSION_GAP_S,
+    by_loss_streak,
+    by_session_index,
+    group_sessions,
+)
+from stats.recurring import MIN_CO_OCCURRENCE, split_recurring
 
+from api import match_detail as detail
 from api import queries
 from api.scope import Scope
 
@@ -114,8 +123,9 @@ def matchups(conn: sqlite3.Connection, scope: Scope,
 
     rows = []
     for enemy, b in agg.items():
-        if b["games"] < scope.min_games:
-            continue
+        # Every aggregated enemy is returned; min_games is an "enough to judge"
+        # line the UI reads off the verdict, not a row filter. Thin rows still
+        # resolve to not_enough_data via the stats floor.
         row = {
             "enemy_hero_id": enemy,
             "enemy_hero_name": names.get(enemy, str(enemy)),
@@ -143,11 +153,12 @@ def items(conn: sqlite3.Connection, scope: Scope, hero_id: int) -> list[dict]:
     snapshot = queries.latest_snapshot_id(conn)
     baseline = queries.baseline_item_stats(conn, scope, hero_id, snapshot) if snapshot else {}
     names = queries.item_names(conn)
+    images = queries.item_images(conn)
 
     rows = []
     for p in personal:
-        if p["games"] < scope.min_games:
-            continue
+        # min_games no longer drops thin item rows; they appear without a verdict
+        # (see matchups()). The UI renders the not_enough_data state honestly.
         item_id = p["item_id"]
         b = baseline.get(item_id, {})
         gw, gm = b.get("wins", 0), b.get("matches", 0)
@@ -160,6 +171,7 @@ def items(conn: sqlite3.Connection, scope: Scope, hero_id: int) -> list[dict]:
         row = {
             "item_id": item_id,
             "item_name": names.get(item_id, str(item_id)),
+            "item_image_url": images.get(item_id),
             "games": p["games"],
             "wins": p["wins"],
             "avg_purchase_s": _round(personal_buy, _TIME_DP),
@@ -208,6 +220,10 @@ def improvement(conn: sqlite3.Connection, scope: Scope) -> dict:
         entries += [dict(r, kind="item", subject=r["item_name"], hero_id=hero_id)
                     for r in items(conn, resolved, hero_id)]
 
+    # matchups()/items() now return thin rows for the tables; the digest keeps
+    # min_games as its own gate so "lower Min games to see softer signals" holds.
+    entries = [e for e in entries if e["games"] >= resolved.min_games]
+
     weaknesses, strengths, watch = [], [], []
     for e in entries:
         v = e["verdict"]
@@ -224,6 +240,111 @@ def improvement(conn: sqlite3.Connection, scope: Scope) -> dict:
     return {"confirmed_weaknesses": weaknesses,
             "confirmed_strengths": strengths,
             "watch_list": watch}
+
+
+# ── Tilt (session-index and loss-streak performance) ─────────────────────────
+
+def _index_label(bucket: dict) -> str:
+    return f"{bucket['index']}+" if bucket["capped"] else str(bucket["index"])
+
+
+def _streak_label(bucket: dict) -> str:
+    n = bucket["streak"]
+    noun = "loss" if (n == 1 and not bucket["capped"]) else "losses"
+    return f"{n}+ {noun}" if bucket["capped"] else f"{n} {noun}"
+
+
+def tilt(conn: sqlite3.Connection, scope: Scope) -> dict:
+    """Performance by game-number-within-session and by preceding-loss-streak.
+
+    Sessions are inferred from match-time gaps (stats.sessions); each bucket is
+    compared to the account's OWN overall in-scope win rate -- "you vs your usual
+    self" -- so a verdict means a real departure from your baseline, not from the
+    global population. Thin buckets fall under the verdict floor and read as
+    not_enough_data, exactly like every other screen."""
+    empty = {
+        "by_session_index": [], "by_loss_streak": [],
+        "overall": {"games": 0, "wins": 0, "winrate": None},
+        "sessions": 0, "session_gap_hours": SESSION_GAP_S / 3600,
+    }
+    scope = _resolved(conn, scope)
+    if scope is None:
+        return empty
+
+    results = queries.account_results(conn, scope)
+    sessions = group_sessions(results)
+    overall_games = len(results)
+    overall_wins = sum(r["won"] for r in results)
+
+    def _row(bucket: dict, label: str) -> dict:
+        row = {**bucket, "label": label}
+        row.update(_stat_fields(bucket["wins"], bucket["games"],
+                                overall_wins, overall_games))
+        return row
+
+    return {
+        "by_session_index": [_row(b, _index_label(b))
+                             for b in by_session_index(sessions)],
+        "by_loss_streak": [_row(b, _streak_label(b))
+                           for b in by_loss_streak(sessions)],
+        "overall": {
+            "games": overall_games, "wins": overall_wins,
+            "winrate": _round(overall_wins / overall_games) if overall_games else None,
+        },
+        "sessions": len(sessions),
+        "session_gap_hours": SESSION_GAP_S / 3600,
+    }
+
+
+# ── Recurring players (teammates you win with, opponents you beat) ───────────
+
+def recurring_players(conn: sqlite3.Connection, scope: Scope,
+                      hero_id: int | None = None) -> dict:
+    """Other real players who keep sharing the account's matches, split into
+    recurring teammates (your win rate WITH them) and opponents (your win rate
+    AGAINST them). Like tilt, each is judged against the account's OWN win rate
+    over the same match set -- overall, or on `hero_id` when the hero filter is
+    set -- so a verdict means you do better/worse with (or against) that player
+    than your usual self. Co-players below stats.recurring.MIN_CO_OCCURRENCE
+    shared games are dropped; thin survivors fall under the verdict floor and
+    read not_enough_data. Names exist only for tracked accounts; everyone else is
+    surfaced by account_id (display_name None)."""
+    empty = {
+        "teammates": [], "opponents": [],
+        "overall": {"games": 0, "wins": 0, "winrate": None},
+        "min_co_occurrence": MIN_CO_OCCURRENCE, "hero_id": hero_id,
+    }
+    scope = _resolved(conn, scope)
+    if scope is None:
+        return empty
+
+    results = queries.account_results(conn, scope, my_hero_id=hero_id)
+    overall_games = len(results)
+    overall_wins = sum(r["won"] for r in results)
+
+    split = split_recurring(queries.recurring_co_players(conn, scope, my_hero_id=hero_id))
+    names = queries.tracked_account_names(conn)
+
+    def _row(co: dict) -> dict:
+        row = {
+            "account_id": co["account_id"],
+            "display_name": names.get(co["account_id"]),
+            "games": co["games"],
+            "wins": co["wins"],
+        }
+        row.update(_stat_fields(co["wins"], co["games"], overall_wins, overall_games))
+        return row
+
+    return {
+        "teammates": [_row(c) for c in split["teammates"]],
+        "opponents": [_row(c) for c in split["opponents"]],
+        "overall": {
+            "games": overall_games, "wins": overall_wins,
+            "winrate": _round(overall_wins / overall_games) if overall_games else None,
+        },
+        "min_co_occurrence": MIN_CO_OCCURRENCE,
+        "hero_id": hero_id,
+    }
 
 
 # ── Heroes the account plays (the "my hero" picker) ──────────────────────────
@@ -256,7 +377,10 @@ def _rank_badge_url(tier: int) -> str:
 
 
 def ranks(conn: sqlite3.Connection) -> list[dict]:
-    """Rank tiers (name + color from the DB) plus a derived badge-art URL."""
+    """Rank tiers (name + color from the DB) plus a derived badge-art URL. One
+    entry per tier: the analytics badge filter only partitions cleanly at decade
+    (tier) granularity, so the rank selector is tier-granular (api-findings
+    finding 6)."""
     return [
         {
             "tier": r["tier"],
@@ -266,6 +390,15 @@ def ranks(conn: sqlite3.Connection) -> list[dict]:
         }
         for r in queries.list_ranks(conn)
     ]
+
+
+# ── Tracked accounts (the account switcher) ──────────────────────────────────
+
+def accounts(conn: sqlite3.Connection) -> list[dict]:
+    """Tracked accounts for the viewer's account switcher. is_self is coerced to a
+    bool so the JSON reads cleanly (mirrors overview's bool(won))."""
+    return [{**a, "is_self": bool(a["is_self"])}
+            for a in queries.list_tracked_accounts(conn)]
 
 
 # ── Overview / sync / eras ───────────────────────────────────────────────────
@@ -298,9 +431,11 @@ def overview(conn: sqlite3.Connection, scope: Scope) -> dict:
         }
 
     names = queries.hero_names(conn)
+    images = queries.hero_images(conn)
     recent = queries.last_matches(conn, resolved.account_id)
     for m in recent:
         m["hero_name"] = names.get(m["hero_id"], str(m["hero_id"]))
+        m["image_url"] = images.get(m["hero_id"])
         m["won"] = bool(m["won"])
     result = {
         "account_id": resolved.account_id,
@@ -311,6 +446,87 @@ def overview(conn: sqlite3.Connection, scope: Scope) -> dict:
     if not recent:
         result["message"] = "No matches ingested yet — the worker may still be syncing."
     return result
+
+
+def match_detail(conn: sqlite3.Connection, match_id: int,
+                 account_id: int | None = None) -> dict | None:
+    """One match, parsed for display: the 12-player roster, the perspective
+    account's purchases, and the whole-match kill/death feed. None if the match
+    isn't stored (the endpoint turns that into a 404).
+
+    `account_id` is the "you" perspective -- carried from whichever Overview the
+    click came from -- defaulting to the tracked self account. It decides which
+    player is highlighted and whose purchases are shown, but never which match.
+    The roster and feed are parsed from raw_json (the only place player_slot
+    lives); names/images come from the lookup tables, mirroring overview()."""
+    row = queries.match_core(conn, match_id)
+    if row is None:
+        return None
+
+    meta = json.loads(row["raw_json"]) if row["raw_json"] else {}
+    parsed = detail.parse_detail(meta)
+    perspective = account_id if account_id is not None else queries.resolve_self_account_id(conn)
+
+    names = queries.hero_names(conn)
+    images = queries.hero_images(conn)
+
+    players = []
+    for p in parsed["players"]:
+        players.append({
+            **p,
+            "hero_name": names.get(p["hero_id"], str(p["hero_id"])),
+            "image_url": images.get(p["hero_id"]),
+            "is_you": p["account_id"] == perspective,
+        })
+
+    deaths = []
+    for d in parsed["deaths"]:
+        killer_id = d["killer_hero_id"]
+        deaths.append({
+            **d,
+            "killer_hero_name": names.get(killer_id) if killer_id is not None else None,
+            "killer_image_url": images.get(killer_id) if killer_id is not None else None,
+            "victim_hero_name": names.get(d["victim_hero_id"], str(d["victim_hero_id"])),
+            "victim_image_url": images.get(d["victim_hero_id"]),
+            "killer_is_you": d["killer_slot"] is not None
+                             and _slot_account(parsed["players"], d["killer_slot"]) == perspective,
+            "victim_is_you": _slot_account(parsed["players"], d["victim_slot"]) == perspective,
+        })
+
+    item_names = queries.item_names(conn)
+    item_images = queries.item_images(conn)
+    purchases = []
+    if perspective is not None:
+        for b in queries.match_purchases(conn, match_id, perspective):
+            purchases.append({
+                **b,
+                "item_name": item_names.get(b["item_id"], str(b["item_id"])),
+                "item_image_url": item_images.get(b["item_id"]),
+            })
+
+    return {
+        "match_id": row["match_id"],
+        "start_time": row["start_time"],
+        "duration_s": row["duration_s"],
+        "game_mode": row["game_mode"],
+        "winning_team": row["winning_team"],
+        "average_badge_team0": row["average_badge_team0"],
+        "average_badge_team1": row["average_badge_team1"],
+        "account_id": perspective,
+        "players": players,
+        "purchases": purchases,
+        "deaths": deaths,
+    }
+
+
+def _slot_account(players: list[dict], slot: int | None) -> int | None:
+    """The account_id at a given player_slot, for the "is this you?" checks."""
+    if slot is None:
+        return None
+    for p in players:
+        if p["player_slot"] == slot:
+            return p["account_id"]
+    return None
 
 
 def eras(conn: sqlite3.Connection) -> dict:

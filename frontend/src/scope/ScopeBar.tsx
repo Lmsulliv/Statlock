@@ -1,5 +1,6 @@
-import { useEras, usePlayedHeroes, useRanks } from '../api/queries'
-import type { Era, PlayedHero, Rank } from '../api/types'
+import { useAccounts, useEras, usePlayedHeroes, useRanks } from '../api/queries'
+import type { Era, PlayedHero, Rank, TrackedAccount } from '../api/types'
+import { HeroIcon } from '../components/HeroIcon'
 import { RankRange } from '../components/RankRange'
 import { scopeLabel } from './scopeLabel'
 import { useScope } from './useScope'
@@ -9,29 +10,66 @@ export function ScopeBar() {
   const eras = useEras()
   const heroesQuery = usePlayedHeroes(scope)
   const ranksQuery = useRanks()
+  const accountsQuery = useAccounts()
   const eraList: Era[] = eras.data?.eras ?? []
   const heroList: PlayedHero[] = heroesQuery.data ?? []
   const rankList: Rank[] = ranksQuery.data ?? []
+  const accountList: TrackedAccount[] = accountsQuery.data ?? []
+  // Native <option>s can't hold an <img>, so the icon shows the *selected* hero
+  // beside the dropdown rather than one per row.
+  const selectedHero = heroList.find((h) => h.hero_id === scope.heroId)
+  // accountId === null means "the self account" (the server default), so the
+  // dropdown shows the self account selected until another is chosen.
+  const selfAccount = accountList.find((a) => a.is_self)
+  const selectedAccountId = scope.accountId ?? selfAccount?.account_id ?? ''
 
   return (
     <div className="scope-bar">
       <div className="scope-controls">
         <div className="scope-control">
-          <span className="scope-label">My hero</span>
+          <span className="scope-label">Account</span>
           <select
             className="select-input"
-            value={scope.heroId ?? ''}
-            onChange={(e) =>
-              update({ heroId: e.target.value === '' ? null : Number(e.target.value) })
-            }
+            value={selectedAccountId}
+            onChange={(e) => {
+              const id = Number(e.target.value)
+              // Picking the self account resets accountId to null so it stays out
+              // of the URL (the default); any other account is set explicitly.
+              update({
+                accountId: selfAccount && id === selfAccount.account_id ? null : id,
+              })
+            }}
           >
-            <option value="">All my heroes</option>
-            {heroList.map((h) => (
-              <option key={h.hero_id} value={h.hero_id}>
-                {h.name}
+            {accountList.map((a) => (
+              <option key={a.account_id} value={a.account_id}>
+                {a.display_name ?? `Account ${a.account_id}`}
+                {a.is_self ? ' (you)' : ''}
               </option>
             ))}
           </select>
+        </div>
+
+        <div className="scope-control">
+          <span className="scope-label">My hero</span>
+          <div className="hero-select">
+            {selectedHero && (
+              <HeroIcon name={selectedHero.name} url={selectedHero.image_url} />
+            )}
+            <select
+              className="select-input"
+              value={scope.heroId ?? ''}
+              onChange={(e) =>
+                update({ heroId: e.target.value === '' ? null : Number(e.target.value) })
+              }
+            >
+              <option value="">All my heroes</option>
+              {heroList.map((h) => (
+                <option key={h.hero_id} value={h.hero_id}>
+                  {h.name}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className="scope-control">
@@ -107,7 +145,7 @@ export function ScopeBar() {
       </div>
 
       <div className="scope-active" title="The exact scope these numbers describe">
-        {scopeLabel(scope, eraList, heroList, rankList)}
+        {scopeLabel(scope, eraList, heroList, rankList, accountList)}
       </div>
       <div className="scope-note">
         In-lane keeps only the enemies in your lane pairing and compares against

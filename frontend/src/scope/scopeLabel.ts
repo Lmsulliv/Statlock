@@ -1,4 +1,4 @@
-import type { Era, PlayedHero, Rank } from '../api/types'
+import type { Era, PlayedHero, Rank, TrackedAccount } from '../api/types'
 import { FULL_BADGE_MAX, FULL_BADGE_MIN, type Scope } from './useScope'
 
 // The active scope, written out in words. Presentation rule 4: scope is always
@@ -9,10 +9,21 @@ export function scopeLabel(
   eras: Era[],
   heroes: PlayedHero[],
   ranks: Rank[],
+  accounts: TrackedAccount[],
 ): string {
   const parts: string[] = []
 
-  parts.push(scope.accountId === null ? 'Self account' : `Account ${scope.accountId}`)
+  // accountId === null means the self account (the server's default). Otherwise
+  // name the chosen account, falling back to its id until display names exist.
+  const account =
+    scope.accountId === null
+      ? accounts.find((a) => a.is_self)
+      : accounts.find((a) => a.account_id === scope.accountId)
+  if (scope.accountId === null) {
+    parts.push(account?.display_name ?? 'Self account')
+  } else {
+    parts.push(account?.display_name ?? `Account ${scope.accountId}`)
+  }
 
   if (scope.heroId === null) {
     parts.push('all my heroes')

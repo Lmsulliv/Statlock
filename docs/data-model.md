@@ -249,6 +249,28 @@ delta = p_adjusted − p_global
 
 With 3 games your adjusted rate barely moves off the global average; with 40 games your own data dominates. The UI surfaces `delta` ranked by magnitude, filtered to matchups/items where the Wilson interval excludes the global rate, and that filtered list is your "solid direction of improvement" screen.
 
+### Session / tilt analysis
+
+A separate, time-aware slice (the Tilt screen). The API exposes no session id, so a **session** is inferred from the gaps between an account's consecutive matches: a gap of `SESSION_GAP_S` seconds or more starts a new session. `SESSION_GAP_S = 3 hours` is the one knob, defined in `stats/sessions.py` (a pure module, like the rest of `stats/`).
+
+From the time-ordered matches we compute two bucketings, both pure counting:
+
+- **By game-number-within-session.** Position 1 is the first game of a sitting, 2 the second, …; positions at or past a cap (6) fold into a `6+` tail bucket.
+- **By preceding-loss-streak.** For each game, how many consecutive losses came immediately before it *within the same session* (0 = fresh or right after a win). The counter resets on any win **and at every session boundary** — tilt is modelled as something that builds during a sitting and clears after a break. Streaks at or past a cap (3) fold into a `3+` tail bucket.
+
+Each bucket's `(wins, games)` is then run through the *same* Wilson/shrinkage/verdict machinery above, with one difference in the reference rate: the baseline is the account's **own overall in-scope win rate**, not the global population. The question is "do you play worse than your usual self when deep in a session / on a losing streak?", so you are your own baseline. Because each bucket is a subset of that overall rate, the comparison is mildly conservative — it will not overstate tilt. Thin buckets fall under the verdict floor (5 games) and read as *not enough data*, exactly like every other screen.
+
+### Recurring players
+
+Because `match_players` stores all 12 players of every match, the other real players you keep meeting are already in the database — no party id, no re-fetching. The Recurring players screen surfaces them. The query is the **self-join twin of the hero matchup**: join `match_players` to itself on the same `match_id`, but key on the *other* player's `account_id` (not their hero) and split by `other.team = me.team` — same team means a **teammate**, opposite means an **opponent**. Per shared player we count `games = COUNT(*)` and `wins = SUM(me.won)` (`me.won` is identical across a match, so this is the shared games *you* won — with that teammate, or against that opponent).
+
+Two thresholds, deliberately different numbers:
+
+- **Co-occurrence gate.** A player must share at least `MIN_CO_OCCURRENCE = 3` of your matches to be listed at all. It lives in `stats/recurring.py` (a pure module like `stats/sessions.py`), which also splits the rows into teammates/opponents and sorts each most-shared first.
+- **Verdict floor.** The usual 5-game floor still governs whether a listed player earns a verdict. Since the gate (3) is below the floor (5), a player you've shared 3–4 games with *appears* but reads *not enough data* — the honesty contract working, not a row hidden.
+
+Each survivor's `(wins, games)` runs through the same Wilson/shrinkage/verdict machinery, baselined — like tilt — against the account's **own win rate over the same match set**: its overall in-scope rate, or, when the "my hero" filter is active, its rate *on that hero* (the co-occurrence counts are hero-filtered to match, so baseline and subject stay comparable). Names exist only for tracked accounts; every other player is surfaced by `account_id`, with display names left to a later source.
+
 ## What's deliberately not here yet
 
 Death timestamps and positions, soul curves over time, ability builds, and per-lane stats. All of them slot in as new tables keyed on `(match_id, account_id)` without touching anything above, and `raw_json` means some can be backfilled without re-fetching. That's the test the schema needed to pass.

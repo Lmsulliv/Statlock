@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMatchups, useSyncStatus } from '../api/queries'
 import type { MatchupRow } from '../api/types'
+import { BaselineCell, DeltaCell } from '../components/cells'
 import { EmptyState } from '../components/EmptyState'
 import { HeroIcon } from '../components/HeroIcon'
 import { IntervalBar } from '../components/IntervalBar'
@@ -9,10 +10,6 @@ import { SampleSize } from '../components/SampleSize'
 import { VERDICT_ORDER } from '../components/verdict'
 import { VerdictBadge } from '../components/VerdictBadge'
 import { useScope } from '../scope/useScope'
-
-const fmtPct = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100)}%`)
-const fmtDelta = (x: number | null) =>
-  x === null ? '—' : `${x > 0 ? '+' : ''}${Math.round(x * 100)} pts`
 
 type SortKey = 'name' | 'games' | 'winrate' | 'global' | 'raw_delta' | 'delta' | 'verdict'
 
@@ -188,11 +185,14 @@ function MatchupsTable({
               />
             </td>
             <td>
-              <div>{fmtPct(r.global_rate)}</div>
-              <div className="muted">{r.global_matches.toLocaleString()} games</div>
+              <BaselineCell rate={r.global_rate} matches={r.global_matches} />
             </td>
-            <td className="col-delta">{fmtDelta(r.raw_delta)}</td>
-            <td className="col-delta">{fmtDelta(r.delta)}</td>
+            <td className="col-delta">
+              <DeltaCell value={r.raw_delta} games={r.games} />
+            </td>
+            <td className="col-delta">
+              <DeltaCell value={r.delta} games={r.games} />
+            </td>
             <td>
               <VerdictBadge verdict={r.verdict} games={r.games} />
             </td>
@@ -225,9 +225,9 @@ function MatchupsEmpty() {
               </p>
             ) : (
               <p>
-                Matches are ingested, but none meet the current scope. Try
-                lowering <strong>Min games</strong>, widening the rank range, or
-                switching the lane view to Overall.
+                Matches are ingested, but none fall in the current scope. Try
+                widening the rank range, switching the era or game mode, or
+                setting the lane view to Overall.
               </p>
             )}
           </>

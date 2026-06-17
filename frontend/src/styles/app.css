@@ -50,6 +50,16 @@ code {
   z-index: 1;
 }
 
+/* The rank-range popover drops out of the scope bar and over the screen content
+   below it. The rule above gives every .app section its own stacking context at
+   z-index 1, which would trap the popover inside the scope bar's context and let
+   the later <main> paint on top of it (covering the slider and stealing its
+   clicks). Lift the whole scope bar above <main> so its popover can escape.
+   (Same specificity as the rule above, placed after it, so it wins.) */
+.app > .scope-bar {
+  z-index: 20;
+}
+
 /* ── Header / nav ─────────────────────────────────────────────────────────── */
 
 .app-header {
@@ -176,6 +186,13 @@ code {
 
 .num-input {
   width: 70px;
+}
+
+/* My-hero control: the selected hero's icon sits beside the dropdown. */
+.hero-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .scope-active {
@@ -418,14 +435,72 @@ code {
   gap: 14px;
 }
 
-.rankrange-slider {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+/* One track, two thumbs. The base rail and the selected fill sit behind two
+   transparent range inputs; each input ignores pointer events except on its
+   thumb, so both handles stay grabbable even where they overlap. */
+.rankrange-dual {
+  position: relative;
+  height: 28px;
 }
 
-.rankrange-slider input[type='range'] {
+.rankrange-rail,
+.rankrange-fill {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 4px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.rankrange-rail {
+  left: 0;
+  right: 0;
+  background: var(--border);
+}
+
+.rankrange-fill {
+  background: var(--text-muted);
+}
+
+.rankrange-input {
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
+  height: 28px;
+  margin: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: none;
+}
+
+.rankrange-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  pointer-events: auto;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text);
+  border: 2px solid var(--surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+
+.rankrange-input::-moz-range-thumb {
+  pointer-events: auto;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+
+.rankrange-input::-moz-range-track {
+  background: transparent;
 }
 
 /* ── Sample size ──────────────────────────────────────────────────────────── */
@@ -640,4 +715,403 @@ code {
 
 .state-error {
   color: var(--neg);
+}
+
+/* ── Cards (Overview / Improvement / Eras sections) ───────────────────────── */
+
+.overview,
+.improve,
+.eras {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.card {
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.card-title {
+  font-size: 14px;
+  margin: 0 0 12px;
+  font-weight: 600;
+}
+
+/* ── Era-candidate banner (Overview) ──────────────────────────────────────── */
+
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px;
+  border: 1px solid var(--baseline);
+  border-radius: var(--radius);
+  background: rgba(216, 163, 42, 0.1);
+}
+
+.banner-link {
+  color: var(--baseline);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+/* ── MMR chart (hand-rolled SVG, Overview) ────────────────────────────────── */
+
+.mmr-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.mmr-axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.mmr-line {
+  fill: none;
+  stroke: var(--baseline);
+  stroke-width: 2;
+}
+
+.mmr-dot {
+  fill: var(--baseline);
+}
+
+.mmr-axis-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ── Recent-match result + sync badge (Overview) ──────────────────────────── */
+
+/* Game-mode label on a recent match — a neutral tag, not a colored signal. */
+.mode-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.result {
+  font-weight: 600;
+}
+
+/* A literal game outcome, not a statistical verdict — colored for scannability. */
+.result-win {
+  color: var(--pos);
+}
+
+.result-loss {
+  color: var(--neg);
+}
+
+.sync {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sync-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Improvement sentence list ────────────────────────────────────────────── */
+
+/* Each half (Hero / Item) stacks a heading over its three verdict cards. */
+.improve-half {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.improve-heading {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 4px 0 0;
+}
+
+.improve-hint {
+  margin: -6px 0 12px;
+  font-size: 12.5px;
+}
+
+.improve-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.improve-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.5;
+}
+
+/* ── Tilt screen ──────────────────────────────────────────────────────────── */
+
+.tilt-summary {
+  margin: 0 0 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Space the two stacked tables (game-number, loss-streak) apart. */
+.tilt-section + .tilt-section {
+  margin-top: 28px;
+}
+
+.tilt-bucket {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ── Recurring players screen ─────────────────────────────────────────────── */
+
+.recurring-summary {
+  margin: 0 0 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Space the two stacked tables (teammates, opponents) apart. */
+.recurring-section + .recurring-section {
+  margin-top: 28px;
+}
+
+/* Minimal player identity: a name when tracked, else "Account <id>". */
+.player-name {
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Era candidates ───────────────────────────────────────────────────────── */
+
+.candidate-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.candidate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.candidate:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.candidate-main a {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.candidate-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--text-muted);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--text);
+  color: var(--bg);
+  border-color: var(--text);
+}
+
+/* ── Match detail ─────────────────────────────────────────────────────────── */
+
+/* Recent-match rows are buttons into the detail view. */
+.clickable-row {
+  cursor: pointer;
+}
+
+.clickable-row:hover td {
+  background: var(--surface-2);
+}
+
+.clickable-row:focus-visible {
+  outline: 2px solid var(--baseline);
+  outline-offset: -2px;
+}
+
+.back-link {
+  display: inline-block;
+  margin-bottom: 12px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.back-link:hover {
+  color: var(--text);
+}
+
+.match-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.match-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+
+/* Two rosters side by side; collapse to one column when there's no room. */
+.team-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+@media (max-width: 720px) {
+  .team-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+.roster {
+  display: flex;
+  flex-direction: column;
+}
+
+.player-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.player-row:last-child {
+  border-bottom: none;
+}
+
+/* "You" highlight uses the baseline gold accent, deliberately not a verdict
+   color, so it reads as "this is your row" and never as good/bad. */
+.player-row.you {
+  background: var(--surface-2);
+  border-left: 3px solid var(--baseline);
+  margin: 0 -12px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+}
+
+.you-tag {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.player-kda,
+.player-souls {
+  font-variant-numeric: tabular-nums;
+}
+
+.player-lane {
+  min-width: 56px;
+  text-align: right;
+}
+
+.purchase-list,
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.purchase {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.purchase-name {
+  flex: 1;
+}
+
+.purchase-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-row {
+  display: grid;
+  grid-template-columns: 48px 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+}
+
+.timeline-row.timeline-you {
+  background: var(--surface-2);
+}
+
+.timeline-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-actor {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.timeline-arrow {
+  color: var(--text-muted);
 }

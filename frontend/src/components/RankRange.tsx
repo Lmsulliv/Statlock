@@ -23,7 +23,19 @@ export function RankRange({ ranks, badgeMin, badgeMax, onChange }: Props) {
   const isFull = badgeMin <= FULL_BADGE_MIN && badgeMax >= FULL_BADGE_MAX
 
   const byTier = (t: number) => ranks.find((r) => r.tier === t)
-  const setTiers = (lo: number, hi: number) => onChange(tierToBadgeMin(lo), tierToBadgeMax(hi))
+  // The two handles can't cross: each clamps against the other.
+  const setLo = (lo: number) =>
+    onChange(tierToBadgeMin(Math.min(lo, tierMax)), tierToBadgeMax(tierMax))
+  const setHi = (hi: number) =>
+    onChange(tierToBadgeMin(tierMin), tierToBadgeMax(Math.max(hi, tierMin)))
+
+  // Both range inputs sit on ONE track. When the thumbs meet they'd overlap and
+  // only the top one stays grabbable, so we lift whichever handle still has room
+  // to move: at a shared point in the lower half the max thumb (can go up) wins,
+  // in the upper half the min thumb (can go down) wins.
+  const collapsed = tierMin === tierMax
+  const loOnTop = collapsed && tierMin > MAX_TIER / 2
+  const pct = (tier: number) => (tier / MAX_TIER) * 100
 
   return (
     <div className="rankrange">
@@ -49,29 +61,42 @@ export function RankRange({ ranks, badgeMin, badgeMax, onChange }: Props) {
               <span className="muted">→</span>
               <RankBadge rank={byTier(tierMax)} large />
             </div>
-            <label className="rankrange-slider">
-              <span className="scope-label">Lowest tier</span>
+
+            <div className="rankrange-dual">
+              <div className="rankrange-rail" />
+              <div
+                className="rankrange-fill"
+                style={{ left: `${pct(tierMin)}%`, right: `${100 - pct(tierMax)}%` }}
+              />
               <input
                 type="range"
+                className="rankrange-input"
                 min={0}
                 max={MAX_TIER}
                 step={1}
                 value={tierMin}
-                onChange={(e) => setTiers(Math.min(Number(e.target.value), tierMax), tierMax)}
+                style={{ zIndex: loOnTop ? 5 : 3 }}
+                aria-label="Lowest rank"
+                onChange={(e) => setLo(Number(e.target.value))}
               />
-            </label>
-            <label className="rankrange-slider">
-              <span className="scope-label">Highest tier</span>
               <input
                 type="range"
+                className="rankrange-input"
                 min={0}
                 max={MAX_TIER}
                 step={1}
                 value={tierMax}
-                onChange={(e) => setTiers(tierMin, Math.max(Number(e.target.value), tierMin))}
+                style={{ zIndex: loOnTop ? 3 : 4 }}
+                aria-label="Highest rank"
+                onChange={(e) => setHi(Number(e.target.value))}
               />
-            </label>
-            <button type="button" className="chip" onClick={() => setTiers(0, MAX_TIER)}>
+            </div>
+
+            <button
+              type="button"
+              className="chip"
+              onClick={() => onChange(FULL_BADGE_MIN, FULL_BADGE_MAX)}
+            >
               Reset to all ranks
             </button>
           </div>

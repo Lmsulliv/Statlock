@@ -26,6 +26,8 @@ from tests.conftest import (
     E_WEAK,
     E_WATCH,
     ERA2,
+    HERO_ME,
+    ME,
     SNAPSHOT,
 )
 
@@ -137,6 +139,45 @@ def test_game_mode_separation(api_db):
     assert E_WEAK not in brawl        # ...is absent from Brawl
 
 
+# ── Presentation pass: thin rows show in tables, the digest stays gated ───────
+
+def test_thin_rows_now_appear_in_matchups_table(api_db):
+    # min_games is no longer a row filter: the 2-game Haze row appears even at
+    # min_games=5 (it used to be dropped), just without a verdict.
+    rows = service.matchups(api_db, make_scope(min_games=5))
+    haze = next(r for r in rows if r["enemy_hero_id"] == E_TWO)
+    assert haze["games"] == 2
+    assert haze["verdict"] == VERDICT_NOT_ENOUGH_DATA
+
+
+def test_improvement_digest_stays_gated_by_min_games(api_db):
+    # Lash is a confirmed weakness on 30 games. Raising min_games above 30 keeps
+    # the row in the matchups TABLE but drops it from the improvement DIGEST.
+    table_ids = {r["enemy_hero_id"]
+                 for r in service.matchups(api_db, make_scope(min_games=31))}
+    assert E_WEAK in table_ids                       # table shows the thin row
+
+    imp = service.improvement(api_db, make_scope(min_games=31))
+    digest_ids = {e.get("enemy_hero_id") for lst in imp.values() for e in lst}
+    assert E_WEAK not in digest_ids                  # ...but the digest gates it
+
+    # Sanity: at a low gate the same subject IS a confirmed weakness.
+    imp_low = service.improvement(api_db, make_scope(min_games=3))
+    assert E_WEAK in {e.get("enemy_hero_id") for e in imp_low["confirmed_weaknesses"]}
+
+
+def test_item_rows_expose_image_url(api_db):
+    rows = service.items(api_db, make_scope(min_games=1), HERO_ME)
+    assert rows                                       # the hero has item rows
+    assert all("item_image_url" in r for r in rows)
+
+
+def test_recent_matches_expose_hero_image_url(api_db):
+    overview = service.overview(api_db, make_scope())
+    assert overview["last_matches"]
+    assert all("image_url" in m for m in overview["last_matches"])
+
+
 # ── Regression: the API and the CLI produce identical numbers ─────────────────
 
 def test_api_and_cli_produce_identical_numbers(api_db, capsys):
@@ -225,3 +266,50 @@ def test_narrow_decade_scope_returns_only_its_bracket(api_db):
 
     items = queries.baseline_item_stats(api_db, narrow, _RS_HERO, SNAPSHOT)
     assert items[_RS_ITEM]["wins"] == idx + 1 and items[_RS_ITEM]["matches"] == 10
+
+
+# ── Rank tiers from /api/ranks ───────────────────────────────────────────────
+
+def test_api_ranks_returns_per_tier_entries(api_db):
+    """/api/ranks returns one entry per rank tier (the badge filter only
+    partitions cleanly at tier granularity -- api-findings finding 6), each with a
+    derived per-tier badge URL, ordered low to high."""
+    for tier, name in ((0, "Obscurus"), (1, "Initiate"), (8, "Oracle")):
+        api_db.execute(
+            "INSERT INTO ranks(tier, name, color, fetched_at)"
+            " VALUES (?, ?, '#abcdef', '2026-06-15T12:00:00+00:00')",
+            (tier, name),
+        )
+    api_db.commit()
+
+    rows = TestClient(app).get("/api/ranks").json()
+
+    assert [r["tier"] for r in rows] == [0, 1, 8]          # ordered low to high
+    assert all({"tier", "name", "color", "badge_url"} == set(r) for r in rows)
+    oracle = next(r for r in rows if r["tier"] == 8)
+    assert oracle["name"] == "Oracle"
+    assert oracle["badge_url"].endswith("rank8/badge_lg.png")
+
+
+# ── Tracked accounts from /api/accounts ──────────────────────────────────────
+
+def test_api_accounts_lists_tracked_accounts_self_first(api_db):
+    """/api/accounts lists every tracked account for the viewer's switcher, the
+    is_self account first, with is_self as a bool and display_name exposed. The
+    fixture seeds the self account (ME); add a second, named, non-self one."""
+    other = 900_001
+    api_db.execute(
+        "INSERT INTO tracked_accounts(account_id, display_name, is_self, added_at)"
+        " VALUES (?, 'Smurf', 0, '2026-06-15T12:00:00+00:00')",
+        (other,),
+    )
+    api_db.commit()
+
+    rows = TestClient(app).get("/api/accounts").json()
+
+    assert [r["account_id"] for r in rows] == [ME, other]   # is_self first
+    assert all({"account_id", "display_name", "is_self"} == set(r) for r in rows)
+    me_row, other_row = rows
+    assert me_row["is_self"] is True and other_row["is_self"] is False
+    assert me_row["display_name"] is None         # the self account has no name yet
+    assert other_row["display_name"] == "Smurf"

@@ -40,3 +40,16 @@ export async function fetchJson<T>(
   }
   return (await res.json()) as T
 }
+
+// The one write path in the app: the era confirm/dismiss POSTs. No body is
+// needed (the candidate id is in the URL), so this is deliberately minimal.
+export async function postJson<T>(path: string): Promise<T> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  })
+  if (!res.ok) {
+    throw new ApiError(res.status, `Request to ${path} failed (${res.status})`)
+  }
+  return (await res.json()) as T
+}

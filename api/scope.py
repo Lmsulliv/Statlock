@@ -54,9 +54,10 @@ def snap_badge_range(badge_min: int, badge_max: int) -> tuple[int, int]:
     """Snap a requested badge range outward to decade edges so the baseline
     containment predicate (api/queries.py) never splits a decade bracket. The
     brackets are [0,9],[10,19],…,[110,116] (ingest.maintenance.DECADE_BRACKETS);
-    rank filtering is therefore decade-granular. Leaves the (0,116) full-range
-    sentinel intact (116 -> 119 -> clamped to 116), so is_full_badge_range still
-    holds for the whole ladder."""
+    rank filtering is therefore decade-granular -- the finest clean partition the
+    analytics badge filter supports (api-findings finding 6). Leaves the (0,116)
+    full-range sentinel intact (116 -> 119 -> clamped to 116), so
+    is_full_badge_range still holds for the whole ladder."""
     return (badge_min // 10) * 10, min((badge_max // 10) * 10 + 9, FULL_BADGE_MAX)
 
 

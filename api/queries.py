@@ -25,6 +25,15 @@ def resolve_self_account_id(conn: sqlite3.Connection) -> int | None:
     return row["account_id"] if row else None
 
 
+def list_tracked_accounts(conn: sqlite3.Connection) -> list[dict]:
+    """Every tracked account (is_self first, then by id) for the account picker."""
+    rows = conn.execute(
+        "SELECT account_id, display_name, is_self FROM tracked_accounts"
+        " ORDER BY is_self DESC, account_id"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def latest_snapshot_id(conn: sqlite3.Connection) -> int | None:
     row = conn.execute("SELECT MAX(snapshot_id) AS s FROM baseline_snapshots").fetchone()
     return row["s"] if row and row["s"] is not None else None
@@ -109,6 +118,65 @@ def personal_item_stats(conn: sqlite3.Connection, scope: Scope,
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
+def account_results(conn: sqlite3.Connection, scope: Scope,
+                    my_hero_id: int | None = None) -> list[dict]:
+    """Every scoped match for the account as {match_id, start_time, won}, ordered
+    oldest-first. This is the raw time-ordered stream tilt analysis groups into
+    sessions (stats.sessions); the same era/badge/mode predicates as the other
+    personal queries keep it consistent with what the rest of the app counts.
+
+    `my_hero_id` optionally restricts to matches where the account played that
+    hero -- recurring-player analysis uses it so the self-baseline matches the
+    hero-filtered co-occurrence set (the rest of the app's "my hero" filter)."""
+    era_sql, era_params = _era_clause(scope, "m.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "mp.team")
+    hero_sql, hero_params = ("", [])
+    if my_hero_id is not None:
+        hero_sql, hero_params = " AND mp.hero_id = ?", [my_hero_id]
+    sql = (
+        "SELECT mp.match_id, m.start_time, mp.won"
+        " FROM match_players mp"
+        " JOIN matches m ON m.match_id = mp.match_id"
+        " WHERE mp.account_id = ? AND m.game_mode = ?"
+        + era_sql + badge_sql + hero_sql +
+        " ORDER BY m.start_time ASC, mp.match_id ASC"
+    )
+    params = [scope.account_id, scope.game_mode] + era_params + badge_params + hero_params
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def recurring_co_players(conn: sqlite3.Connection, scope: Scope,
+                         my_hero_id: int | None = None) -> list[dict]:
+    """Every other player who shared the account's scoped matches, as
+    {account_id, same_team, games, wins}. The structural twin of
+    personal_matchups: a self-join of match_players on the same match, but keyed
+    on the OTHER player's account_id instead of their hero, and split by whether
+    they were on my team (same_team=1) or against me (0) rather than always
+    opponents. `wins` sums me.won -- the same value for every row of a match --
+    so it counts the shared games I won (with that teammate / against that
+    opponent). No co-occurrence floor here: stats.recurring owns that gate."""
+    era_sql, era_params = _era_clause(scope, "m.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "me.team")
+    hero_sql, hero_params = ("", [])
+    if my_hero_id is not None:
+        hero_sql, hero_params = " AND me.hero_id = ?", [my_hero_id]
+
+    sql = (
+        "SELECT other.account_id AS account_id,"
+        " (other.team = me.team) AS same_team,"
+        " COUNT(*) AS games, SUM(me.won) AS wins"
+        " FROM match_players me"
+        " JOIN match_players other"
+        "   ON other.match_id = me.match_id AND other.account_id != me.account_id"
+        " JOIN matches m ON m.match_id = me.match_id"
+        " WHERE me.account_id = ? AND m.game_mode = ?"
+        + era_sql + badge_sql + hero_sql +
+        " GROUP BY other.account_id, same_team"
+    )
+    params = [scope.account_id, scope.game_mode] + era_params + badge_params + hero_params
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
 # ── Global baselines (re-summed across stored brackets) ──────────────────────
 
 def baseline_matchups(conn: sqlite3.Connection, scope: Scope,
@@ -182,6 +250,21 @@ def item_names(conn: sqlite3.Connection) -> dict[int, str]:
             conn.execute("SELECT item_id, name FROM items").fetchall()}
 
 
+def tracked_account_names(conn: sqlite3.Connection) -> dict[int, str | None]:
+    """account_id -> display_name for the tracked accounts (the only names the DB
+    holds). Co-players are mostly untracked, so callers .get() this and fall back
+    to the bare account id; real names for the rest are a later source."""
+    return {r["account_id"]: r["display_name"] for r in
+            conn.execute("SELECT account_id, display_name FROM tracked_accounts").fetchall()}
+
+
+def item_images(conn: sqlite3.Connection) -> dict[int, str | None]:
+    """item_id -> shop-art URL (items.image_url, from the assets loader).
+    May be None for items whose asset row has no image."""
+    return {r["item_id"]: r["image_url"] for r in
+            conn.execute("SELECT item_id, image_url FROM items").fetchall()}
+
+
 def list_ranks(conn: sqlite3.Connection) -> list[dict]:
     """Rank tiers ordered low to high (name + color; art derived in service)."""
     return [dict(r) for r in
@@ -212,6 +295,31 @@ def last_matches(conn: sqlite3.Connection, account_id: int, limit: int = 10) -> 
         " ORDER BY m.start_time DESC, mp.match_id DESC"
         " LIMIT ?",
         (account_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def match_core(conn: sqlite3.Connection, match_id: int) -> dict | None:
+    """The match-level row for the detail view, raw_json included so the service
+    can parse the roster and death feed out of it. None if no such match."""
+    row = conn.execute(
+        "SELECT match_id, start_time, duration_s, game_mode, winning_team,"
+        " average_badge_team0, average_badge_team1, era_id, raw_json"
+        " FROM matches WHERE match_id = ?",
+        (match_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def match_purchases(conn: sqlite3.Connection, match_id: int,
+                    account_id: int) -> list[dict]:
+    """One account's item purchases in a match, ordered by buy time. Already
+    filtered to real shop items at ingest, so no upgrade/ability rows leak in."""
+    rows = conn.execute(
+        "SELECT item_id, purchase_time_s, sold_time_s"
+        " FROM match_item_purchases WHERE match_id = ? AND account_id = ?"
+        " ORDER BY purchase_time_s",
+        (match_id, account_id),
     ).fetchall()
     return [dict(r) for r in rows]
 

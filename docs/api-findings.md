@@ -77,6 +77,32 @@ Found while verifying; spec docs are unchanged, amendments proposed here.
    therefore RATED-only by design; the unrated tail is excluded (no all-ranks
    dual row). `item-stats?bucket=hero` honors `min/max_average_badge` (the
    bracketed sum does not overshoot the full-range sum).
+   *Verified 2026-06-15 (gate spike 09, `out/09_*`): the badge filter does NOT
+   partition cleanly at single-badge resolution.* Summing 117 per-INTEGER atoms
+   (`min_average_badge == max_average_badge == v`, v=0..116) on hero-counter-stats
+   reproduces only **85.2%** of the 12-decade total (26.63M vs 31.26M; all 130
+   calls returned 200, no errors). i.e. width-1 badge windows DROP ~15% of rated
+   matches that the width-10 decades catch — most plausibly because a match's
+   *team-average* badge is effectively fractional and rarely lands exactly on an
+   integer, so integer-edged brackets leave uncovered gaps between them (avg 9.5
+   is in neither [0,9] nor [10,19]). `min_matches=0` does NOT change this (re-run
+   confirmed 0.852), so it is not a pair-count threshold effect. Width sweep
+   (spike 11, counter, min_matches=0): the leak is monotonic in bracket width --
+   more boundaries, more gap loss:
+
+   | width | brackets | sum / decade | sum / full |
+   |------:|---------:|-------------:|-----------:|
+   |     1 |      117 |        0.852 |      0.818 |
+   |     2 |       59 |        0.899 |      0.863 |
+   |     3 |       39 |        0.941 |      0.903 |
+   |     5 |       24 |        0.959 |      0.921 |
+   |    10 |       12 |        1.000 |      0.960 |
+
+   **Consequence:** no sub-decade width reconciles to within 2% of the decade
+   total; decade brackets remain the finest CLEAN baseline partition the API
+   supports. Per-badge / subrank-granular baseline SCOPES are not feasible via
+   this filter without a few-to-15% systematic undercount. (Subrank RANK display
+   metadata is unaffected; it doesn't depend on the badge filter.)
 
 7. **Analytics default time window is the last 30 days, not all-time.**
    `min_unix_timestamp` defaults to "30 days ago" per the OpenAPI spec
@@ -257,6 +283,20 @@ see `out/03d_hero_stats_badge_bucket.json`. **Finest granularity: a single
 badge value** (tier+subtier) via equal `min_average_badge` and
 `max_average_badge`. Note the filter applies to the *match's team-average*
 badge, not to individual players.
+
+**`/v1/assets/ranks` shape (verified 2026-06-15, spike 10, `out/10_assets_ranks.json`):**
+12 entries, each `{tier, name, color, images}`. The `images` object carries
+the badge art. All 12 tiers have `images.large` / `large_webp`
+(`.../ranks/rank{tier}/badge_lg.png`). **Tiers 1–11** additionally have
+per-subrank art `images.large_subrank{1..6}` (+ `_webp`, + `small_subrank{1..6}`
+variants), following the pure pattern
+`.../ranks/rank{tier}/badge_lg_subrank{subtier}.png`. **Tier 0 (Obscurus) has
+NO subrank art** (only `large`/`small`). Subrank URLs follow a pure
+tier+subtier pattern if ever needed (subrank 6's badge is `badge_lg_subrank6.png`,
+which the asset depicts with stars). **Currently unused:** because the badge
+filter only partitions cleanly at decade/tier granularity (finding 6), the rank
+selector and baselines are tier-granular, so `/api/ranks` derives only the
+per-tier `badge_lg.png` and does not expand subranks.
 
 Endpoint specifics:
 

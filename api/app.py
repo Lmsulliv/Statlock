@@ -9,7 +9,7 @@ import sqlite3
 from fastapi import Depends, FastAPI, HTTPException
 
 from api import service
-from api.config import db_path
+from api.config import db_path, owner_enabled
 from api.scope import (
     DEFAULT_MIN_GAMES,
     FULL_BADGE_MAX,
@@ -34,6 +34,18 @@ def get_conn():
         yield conn
     finally:
         conn.close()
+
+
+def require_owner() -> None:
+    """Interim owner gate for the era-management writes -- NOT authentication.
+
+    Until a real login exists, confirming/dismissing candidates is restricted to
+    the owner via the DEADLOCK_OWNER config flag (api.config.owner_enabled). This
+    runs as a route dependency, so it rejects with 403 before the handler does
+    any work. Hiding the nav in the frontend is convenience; this is the actual
+    enforcement, since anyone can POST to the API directly."""
+    if not owner_enabled():
+        raise HTTPException(status_code=403, detail="Era management is owner-only.")
 
 
 def get_scope(
@@ -73,16 +85,49 @@ def get_ranks(conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
     return service.ranks(conn)
 
 
+@app.get("/api/accounts")
+def get_accounts(conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+    return service.accounts(conn)
+
+
 @app.get("/api/improvement")
 def get_improvement(scope: Scope = Depends(get_scope),
                     conn: sqlite3.Connection = Depends(get_conn)) -> dict:
     return service.improvement(conn, scope)
 
 
+@app.get("/api/tilt")
+def get_tilt(scope: Scope = Depends(get_scope),
+             conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+    """Session-index and loss-streak performance for the scoped account."""
+    return service.tilt(conn, scope)
+
+
+@app.get("/api/recurring-players")
+def get_recurring_players(hero_id: int | None = None,
+                          scope: Scope = Depends(get_scope),
+                          conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+    """Recurring teammates (win rate with) and opponents (win rate against) for
+    the scoped account, judged against its own win rate. `hero_id` re-baselines
+    the whole screen to matches on that hero, like the matchups perspective."""
+    return service.recurring_players(conn, scope, hero_id=hero_id)
+
+
 @app.get("/api/overview")
 def get_overview(scope: Scope = Depends(get_scope),
                  conn: sqlite3.Connection = Depends(get_conn)) -> dict:
     return service.overview(conn, scope)
+
+
+@app.get("/api/matches/{match_id}")
+def get_match_detail(match_id: int, account_id: int | None = None,
+                     conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+    """One match's detail. No Scope: this is single-match data, not an aggregate.
+    `account_id` is the optional "you" perspective (defaults to the self account)."""
+    result = service.match_detail(conn, match_id, account_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    return result
 
 
 @app.get("/api/sync-status")
@@ -95,7 +140,8 @@ def get_eras(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
     return service.eras(conn)
 
 
-@app.post("/api/eras/candidates/{candidate_id}/confirm")
+@app.post("/api/eras/candidates/{candidate_id}/confirm",
+          dependencies=[Depends(require_owner)])
 def post_confirm_candidate(candidate_id: int,
                            conn: sqlite3.Connection = Depends(get_conn)) -> dict:
     result = service.confirm_candidate(conn, candidate_id)
@@ -104,7 +150,8 @@ def post_confirm_candidate(candidate_id: int,
     return result
 
 
-@app.post("/api/eras/candidates/{candidate_id}/dismiss")
+@app.post("/api/eras/candidates/{candidate_id}/dismiss",
+          dependencies=[Depends(require_owner)])
 def post_dismiss_candidate(candidate_id: int,
                            conn: sqlite3.Connection = Depends(get_conn)) -> dict:
     result = service.dismiss_candidate(conn, candidate_id)

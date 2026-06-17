@@ -79,13 +79,33 @@ The screen the whole project exists for. Not a table of everything, but a short 
 
 Each entry renders as a sentence, not a row: "Against Haze (12 games) you win 25% vs. a global 51% [CI 9–53%]. Confirmed weakness." This is the screen to show friends first.
 
-### 5. Era manager (admin)
+### 5. Tilt
+
+A time-aware view of *when* you play well, not *against whom*. Two stacked tables for the scoped account, each built from play sessions inferred from match-time gaps (see data-model.md, "Session / tilt analysis"):
+
+- **By game number in session** — one row per session position (`1`, `2`, …, `6+`).
+- **By loss streak** — one row per count of consecutive losses immediately before the game, within the session (`0 losses`, `1 loss`, `2 losses`, `3+ losses`).
+
+Both tables reuse the matchups columns verbatim — sample size, Wilson interval bar, an "Your overall" baseline column, adjusted delta, verdict — but the baseline each bucket is judged against is **your own overall win rate in scope**, not a global population rate (the screen says so). Thin buckets read *not enough data* under the usual floor. A blurb states the session-gap constant and the session/overall game counts so the numbers are never shown without their scope. Rows render in their natural order (the progression is the signal), so unlike the other tables this one isn't re-sortable.
+
+### 6. Recurring players
+
+The other real players who keep sharing your matches (data-model.md, "Recurring players"). Two stacked tables for the scoped account:
+
+- **Teammates** — your win rate *with* each player who recurs on your team.
+- **Opponents** — your win rate *against* each player who recurs on the enemy team.
+
+Both reuse the matchups columns minus the hero icon — sample size, Wilson interval bar, a "Your overall" baseline column, adjusted delta, verdict — and, like Tilt, the baseline each player is judged against is **your own win rate over the same matches** (overall, or on the selected hero when the "my hero" filter is set), not a global rate. A player is listed only once you've shared at least `MIN_CO_OCCURRENCE = 3` games; thinner co-occurrences are left off, and listed players under the 5-game verdict floor read *not enough data*. Other players are shown minimally — a tracked account's name, otherwise just `Account <id>` (names are a later source). Rows render most-shared first and aren't re-sortable. A blurb prints the baseline and the co-occurrence threshold so the numbers are never shown without their scope.
+
+### 7. Era manager (admin)
 
 Small page backing the patch-notes detection discussed below:
 
 - List of eras with start dates and labels; edit and redraw boundaries (matches keep exact `patch_id`s, so re-binning is always safe).
 - Pending era candidates with a link to the source patch notes post, change-line count, and Confirm / Dismiss buttons.
 - Confirming a candidate also closes the previous era at the new start date and triggers a baseline fetch for the new era's date range, so the new era has global numbers from day one.
+
+> **Interim owner gate (not authentication).** There is no login yet, so this admin page — the app's only write surface — is gated by a deploy-time config flag, *not* real auth. The frontend hides the nav link and `/eras` route unless `VITE_OWNER=true`; the API returns **403** on the confirm/dismiss POSTs unless `DEADLOCK_OWNER` is set. The 403 is the real enforcement (anyone can call the API directly); the hidden nav is convenience. Replace both with a real login before exposing the app publicly.
 
 ## Patch-notes-assisted era detection
 
@@ -122,8 +142,10 @@ GET /api/overview
 GET /api/matchups?hero_id=optional
 GET /api/items?hero_id=required
 GET /api/improvement
+GET /api/recurring-players?hero_id=optional   (teammates + opponents, self-baselined)
 GET /api/eras                  (+ POST confirm/dismiss for candidates)
 GET /api/sync-status
+GET /api/accounts              (scope-free; backs the Account picker — account_id, display_name, is_self)
 ```
 
 Example response row for /api/matchups:
@@ -173,3 +195,4 @@ Carried over from earlier discussion, the things the first hour of implementatio
 4. A bookmarked URL with scope params renders the identical view on another machine.
 5. The improvement screen never shows an unconfirmed delta outside the watch list.
 6. With the database empty, every screen renders a helpful empty state, not an error.
+7. On Recurring players, a co-player you've shared only 2 games with is never listed; one you've shared 3–4 with is listed but shows no verdict (only ≥5 can), and an untracked player appears as `Account <id>`.

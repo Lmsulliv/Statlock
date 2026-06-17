@@ -18,3 +18,20 @@ def db_path() -> Path:
     """
     env = os.environ.get("DEADLOCK_DB")
     return Path(env) if env else DEFAULT_DB
+
+
+# Interim owner gate. There is no real authentication yet; the era-management
+# writes (confirm/dismiss candidates) are the app's only write surface, so until
+# a login exists we keep them private behind a single deploy-time flag. This is
+# authorization-by-config, NOT authentication: there's no identity and no
+# session. Replace with a real login before exposing the app publicly.
+_OWNER_TRUTHY = {"1", "true", "yes"}
+
+
+def owner_enabled() -> bool:
+    """True when the owner flag (DEADLOCK_OWNER) is set to a truthy value.
+
+    Read fresh on every call (like db_path) so tests can monkeypatch the
+    environment per-test and each request re-checks the current value.
+    """
+    return os.environ.get("DEADLOCK_OWNER", "").strip().lower() in _OWNER_TRUTHY
