@@ -61,7 +61,9 @@ CREATE TABLE matches (
 
 CREATE TABLE match_players (
     match_id        INTEGER NOT NULL REFERENCES matches(match_id),
-    account_id      INTEGER NOT NULL,
+    player_slot     INTEGER NOT NULL,   -- 1..12, always present, unique per match
+    account_id      INTEGER NOT NULL,   -- 0 for private profiles (anonymized);
+                                        -- NOT unique within a match
     hero_id         INTEGER NOT NULL REFERENCES heroes(hero_id),
     team            INTEGER NOT NULL,
     lane            INTEGER,               -- if metadata provides assigned lane
@@ -75,7 +77,7 @@ CREATE TABLE match_players (
     obj_damage      INTEGER,
     healing         INTEGER,
     won             INTEGER NOT NULL,   -- denormalized: team == winning_team
-    PRIMARY KEY (match_id, account_id)
+    PRIMARY KEY (match_id, player_slot)
 );
 
 CREATE TABLE account_rank_history ( -- Populated from mmr-history for tracked accounts only;
@@ -91,21 +93,37 @@ CREATE INDEX idx_mp_hero    ON match_players(hero_id);
 
 CREATE TABLE match_item_purchases (
     match_id        INTEGER NOT NULL,
-    account_id      INTEGER NOT NULL,
+    player_slot     INTEGER NOT NULL,
+    account_id      INTEGER NOT NULL,   -- kept for convenience; not part of the key
     item_id         INTEGER NOT NULL REFERENCES items(item_id),
     purchase_time_s INTEGER,            -- seconds into match, NULL if unknown
     sold            INTEGER DEFAULT 0,
-    PRIMARY KEY (match_id, account_id, item_id),
-    FOREIGN KEY (match_id, account_id)
-        REFERENCES match_players(match_id, account_id)
+    PRIMARY KEY (match_id, player_slot, item_id),
+    FOREIGN KEY (match_id, player_slot)
+        REFERENCES match_players(match_id, player_slot)
 );
 ```
 
 Notes:
 
+- **`player_slot`, not `account_id`, is the per-match player key.** Players with
+  private profiles return `account_id = 0`, and a single match can hold up to six
+  of them, so `account_id` is not unique within a match and cannot identify a
+  player. `player_slot` (1–12) is the only field the API guarantees present and
+  unique per match — it is the honest match-local identity, and `death_details`
+  reference killers by `killer_player_slot`, so kill attribution needs it too.
+  Anonymized players (`account_id = 0`) are *excluded* from recurring co-player
+  counts (not real people, and all of a lobby's zeros would collapse into one
+  inflated group) but *kept* in hero matchups (an anonymized opponent still
+  piloted a known hero). `account_id` stays on both tables for convenience.
 - `won` is technically redundant but it appears in nearly every analytical query, so denormalizing it is worth it.
 - `match_players` holds all 12 players, not just you. That single decision is what makes matchup analysis, lane opponent analysis, and party detection possible without re-fetching anything.
 - Column availability depends on what the match metadata endpoint actually returns for each field. Treat the nullable columns as best-effort and lean on `raw_json` for anything missed at first pass.
+- This document is the design intent; the live schema is in `db/schema.sql` +
+  `db/migrations/`, which is authoritative. Pre-existing drift not touched by the
+  player_slot change is left as-is here: `match_item_purchases.sold` is actually
+  `sold_time_s INTEGER` in the schema [AF#6], and the `patches` table / `patch_id`
+  columns referenced below were dropped in favour of `era_id` [AF#3].
 
 ## Global baselines (from the Analytics API)
 
@@ -215,7 +233,7 @@ SELECT
     AVG(ip.purchase_time_s) AS avg_purchase_s
 FROM match_players mp
 JOIN match_item_purchases ip
-    ON ip.match_id = mp.match_id AND ip.account_id = mp.account_id
+    ON ip.match_id = mp.match_id AND ip.player_slot = mp.player_slot
 JOIN matches m ON m.match_id = mp.match_id
 JOIN patches p ON p.patch_id = m.patch_id
 WHERE mp.account_id IN (SELECT account_id FROM tracked_accounts WHERE is_self = 1)

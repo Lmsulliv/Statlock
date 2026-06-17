@@ -34,8 +34,8 @@ def _add_match(conn, match_id: int, start: str, won: bool) -> None:
         (match_id, start, 0 if won else 1, start),
     )
     conn.execute(
-        "INSERT INTO match_players(match_id, account_id, hero_id, team, won)"
-        " VALUES (?, ?, ?, 0, ?)",
+        "INSERT INTO match_players(match_id, player_slot, account_id, hero_id, team, won)"
+        " VALUES (?, 1, ?, ?, 0, ?)",
         (match_id, ME, HERO, 1 if won else 0),
     )
 

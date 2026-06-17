@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from api import service
+from api import queries, service
 from api.app import app
 from api.scope import make_scope
 from stats import VERDICT_NOT_ENOUGH_DATA
@@ -37,14 +37,15 @@ def _match(conn, mid: int, won: bool, hero: int, co: list[tuple[int, int]]) -> N
         " winning_team, raw_json, ingested_at) VALUES (?, ?, 1800, '1', ?, '{}', ?)",
         (mid, start, winning_team, start),
     )
+    # ME is slot 1; co-players take slots 2, 3, ... within the match.
     conn.execute(
-        "INSERT INTO match_players(match_id, account_id, hero_id, team, won)"
-        " VALUES (?, ?, ?, 0, ?)", (mid, ME, hero, int(won)))
-    for account_id, team in co:
+        "INSERT INTO match_players(match_id, player_slot, account_id, hero_id, team, won)"
+        " VALUES (?, 1, ?, ?, 0, ?)", (mid, ME, hero, int(won)))
+    for slot, (account_id, team) in enumerate(co, start=2):
         conn.execute(
-            "INSERT INTO match_players(match_id, account_id, hero_id, team, won)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (mid, account_id, H7, team, int(team == winning_team)))
+            "INSERT INTO match_players(match_id, player_slot, account_id, hero_id, team, won)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (mid, slot, account_id, H7, team, int(team == winning_team)))
 
 
 def _seed(conn) -> None:
@@ -144,6 +145,32 @@ def test_hero_filter_rebaselines_to_that_hero(rec_db):
     assert result["overall"]["games"] == 15        # 17 minus the two hero-8 games
     mate = _by_id(result["teammates"])[MATE]
     assert mate["games"] == 5 and mate["wins"] == 4
+
+
+def test_anonymized_coplayers_excluded_real_ones_kept(db):
+    """recurring_co_players drops anonymized (account_id 0) co-players -- they are
+    not real recurring people and would otherwise collapse a whole lobby's zeros
+    into one inflated bucket -- while still surfacing real co-players."""
+    db.execute("INSERT INTO heroes(hero_id, name, fetched_at) VALUES (7, 'Wraith', 't')")
+    db.execute("INSERT INTO tracked_accounts(account_id, is_self, added_at) VALUES (1, 1, 't')")
+    for i in range(4):
+        mid = 700 + i
+        start = (BASE + timedelta(minutes=mid)).isoformat()
+        db.execute(
+            "INSERT INTO matches(match_id, start_time, duration_s, game_mode,"
+            " winning_team, raw_json, ingested_at) VALUES (?, ?, 1800, '1', 0, '{}', ?)",
+            (mid, start, start))
+        db.execute("INSERT INTO match_players(match_id, player_slot, account_id, hero_id, team, won)"
+                   " VALUES (?, 1, 1, 7, 0, 1)", (mid,))     # me
+        db.execute("INSERT INTO match_players(match_id, player_slot, account_id, hero_id, team, won)"
+                   " VALUES (?, 2, 100, 7, 0, 1)", (mid,))   # real teammate
+        db.execute("INSERT INTO match_players(match_id, player_slot, account_id, hero_id, team, won)"
+                   " VALUES (?, 3, 0, 7, 1, 0)", (mid,))     # anonymized opponent
+    db.commit()
+
+    ids = {r["account_id"] for r in queries.recurring_co_players(db, make_scope(account_id=1))}
+    assert 100 in ids
+    assert 0 not in ids
 
 
 def test_empty_scope_returns_empty_shape(db):

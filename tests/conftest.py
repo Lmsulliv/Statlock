@@ -87,13 +87,14 @@ def _seed(conn: sqlite3.Connection) -> None:
             " raw_json, ingested_at) VALUES (?, ?, 1800, ?, ?, ?, ?, ?, '{}', ?)",
             (match_id, start, mode, winning_team, era, badge, badge, JUNE),
         )
-        conn.execute("INSERT INTO match_players(match_id, account_id, hero_id, team, won)"
-                     " VALUES (?, ?, ?, 0, ?)", (match_id, ME, my_hero, int(winning_team == 0)))
-        conn.execute("INSERT INTO match_players(match_id, account_id, hero_id, team, won)"
-                     " VALUES (?, ?, ?, 1, ?)", (match_id, ENEMY, enemy, int(winning_team == 1)))
+        # player_slot is the per-match key now; ME is slot 1, ENEMY slot 2.
+        conn.execute("INSERT INTO match_players(match_id, player_slot, account_id, hero_id, team, won)"
+                     " VALUES (?, 1, ?, ?, 0, ?)", (match_id, ME, my_hero, int(winning_team == 0)))
+        conn.execute("INSERT INTO match_players(match_id, player_slot, account_id, hero_id, team, won)"
+                     " VALUES (?, 2, ?, ?, 1, ?)", (match_id, ENEMY, enemy, int(winning_team == 1)))
         for item_id, buy_s in items:
-            conn.execute("INSERT INTO match_item_purchases(match_id, account_id, item_id,"
-                         " purchase_time_s, sold_time_s) VALUES (?, ?, ?, ?, 0)",
+            conn.execute("INSERT INTO match_item_purchases(match_id, player_slot, account_id, item_id,"
+                         " purchase_time_s, sold_time_s) VALUES (?, 1, ?, ?, ?, 0)",
                          (match_id, ME, item_id, buy_s))
 
     # Scenario 1: 2 games vs Haze, both wins -> interval too wide for a verdict.

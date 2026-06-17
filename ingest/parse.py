@@ -19,7 +19,7 @@ from ingest.util import unix_to_iso
 class ParsedMatch:
     match_row: dict
     players: list[dict]
-    purchases: list[tuple]  # (match_id, account_id, item_id, purchase_time_s, sold_time_s)
+    purchases: list[tuple]  # (match_id, player_slot, account_id, item_id, purchase_time_s, sold_time_s)
 
 
 def finals_from_stats(stats: list[dict] | None) -> tuple[int | None, int | None, int | None]:
@@ -55,6 +55,7 @@ def parse_metadata(meta: dict, raw_body: str, shop_item_ids: set[int],
         damage, obj_damage, healing = finals_from_stats(p.get("stats"))
         players.append({
             "match_id": match_id,
+            "player_slot": p["player_slot"],
             "account_id": p["account_id"],
             "hero_id": p["hero_id"],
             "team": p["team"],
@@ -70,14 +71,14 @@ def parse_metadata(meta: dict, raw_body: str, shop_item_ids: set[int],
             "healing": healing,
             "won": int(p["team"] == winning_team),
         })
-        # PK is (match_id, account_id, item_id): if an item was sold and
+        # PK is (match_id, player_slot, item_id): if an item was sold and
         # re-bought we keep the first purchase, a known simplification.
         seen: set[int] = set()
         for entry in sorted(p.get("items", []), key=lambda e: e.get("game_time_s", 0)):
             item_id = entry.get("item_id")
             if item_id in shop_item_ids and item_id not in seen:
                 seen.add(item_id)
-                purchases.append((match_id, p["account_id"], item_id,
+                purchases.append((match_id, p["player_slot"], p["account_id"], item_id,
                                   entry.get("game_time_s"), entry.get("sold_time_s", 0)))
 
     return ParsedMatch(match_row, players, purchases)
@@ -106,15 +107,18 @@ def insert_match(conn: sqlite3.Connection, parsed: ParsedMatch) -> None:
         m,
     )
     conn.executemany(
-        "INSERT INTO match_players(match_id, account_id, hero_id, team, lane, kills, deaths,"
-        " assists, net_worth, last_hits, denies, player_damage, obj_damage, healing, won)"
-        " VALUES (:match_id, :account_id, :hero_id, :team, :lane, :kills, :deaths,"
-        " :assists, :net_worth, :last_hits, :denies, :player_damage, :obj_damage, :healing, :won)",
+        "INSERT INTO match_players(match_id, player_slot, account_id, hero_id, team, lane,"
+        " kills, deaths, assists, net_worth, last_hits, denies, player_damage, obj_damage,"
+        " healing, won)"
+        " VALUES (:match_id, :player_slot, :account_id, :hero_id, :team, :lane, :kills,"
+        " :deaths, :assists, :net_worth, :last_hits, :denies, :player_damage, :obj_damage,"
+        " :healing, :won)",
         parsed.players,
     )
     conn.executemany(
-        "INSERT INTO match_item_purchases(match_id, account_id, item_id, purchase_time_s, sold_time_s)"
-        " VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO match_item_purchases(match_id, player_slot, account_id, item_id,"
+        " purchase_time_s, sold_time_s)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
         parsed.purchases,
     )
 

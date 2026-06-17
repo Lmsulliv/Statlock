@@ -52,6 +52,7 @@ def test_twelve_players_with_won_derived(meta, shop_ids):
     winning = meta["match_info"]["winning_team"]
     for p, raw in zip(parsed.players, meta["match_info"]["players"]):
         assert p["account_id"] == raw["account_id"]
+        assert p["player_slot"] == raw["player_slot"]
         assert p["hero_id"] == raw["hero_id"]
         assert p["lane"] == raw["assigned_lane"]
         assert p["won"] == int(raw["team"] == winning)
@@ -92,8 +93,9 @@ def test_finals_from_stats_helper():
 def test_purchases_filtered_to_shop_items(meta, shop_ids):
     parsed = parse(meta, shop_ids)
     assert parsed.purchases, "expected at least one shop purchase"
-    for match_id, account_id, item_id, purchase_time_s, sold_time_s in parsed.purchases:
+    for match_id, player_slot, account_id, item_id, purchase_time_s, sold_time_s in parsed.purchases:
         assert match_id == MATCH_ID
+        assert player_slot is not None  # the per-match key, carried onto every buy
         assert item_id in shop_ids  # ability/level-up entries filtered out
     raw_entries = sum(len(p["items"]) for p in meta["match_info"]["players"])
     assert len(parsed.purchases) < raw_entries
@@ -109,6 +111,46 @@ def test_insert_match_writes_all_rows(db, meta, shop_ids):
     assert db.execute("SELECT COUNT(*) FROM match_players").fetchone()[0] == 12
     n_purchases = db.execute("SELECT COUNT(*) FROM match_item_purchases").fetchone()[0]
     assert n_purchases == len(parsed.purchases)
+
+
+def test_six_anonymized_players_ingest_without_collision(db):
+    """A 12-player match with six account_id = 0 players (private profiles) must
+    insert all 12 rows -- keyed by slot, not account -- and their purchases. Before
+    player_slot this collided on the (match_id, account_id) PK and crashed ingest.
+    """
+    HERO, ITEM, MID = 7, 100, 555
+    db.execute("INSERT INTO heroes(hero_id, name, fetched_at) VALUES (?, 'Wraith', 't')", (HERO,))
+    db.execute("INSERT INTO items(item_id, name, fetched_at) VALUES (?, 'Boots', 't')", (ITEM,))
+    db.commit()
+
+    players = []
+    for slot in range(1, 13):
+        # Slots 1-6 are anonymized (account_id 0); 7-12 are real distinct ids.
+        account_id = 0 if slot <= 6 else 1000 + slot
+        players.append({
+            "player_slot": slot,
+            "account_id": account_id,
+            "hero_id": HERO,
+            "team": 0 if slot <= 6 else 1,
+            "assigned_lane": 1,
+            "items": [{"item_id": ITEM, "game_time_s": 600, "sold_time_s": 0}],
+        })
+    meta = {"match_info": {
+        "match_id": MID, "start_time": 0, "duration_s": 1800, "game_mode": 1,
+        "winning_team": 0, "average_badge_team0": 50, "average_badge_team1": 50,
+        "players": players,
+    }}
+
+    parsed = parse_metadata(meta, json.dumps(meta), {ITEM}, None, "2026-06-16T00:00:00+00:00")
+    with db:
+        insert_match(db, parsed)  # must NOT raise sqlite3.IntegrityError
+
+    assert db.execute("SELECT COUNT(*) FROM match_players WHERE match_id = ?",
+                      (MID,)).fetchone()[0] == 12
+    assert db.execute("SELECT COUNT(*) FROM match_players WHERE match_id = ?"
+                      " AND account_id = 0", (MID,)).fetchone()[0] == 6
+    assert db.execute("SELECT COUNT(*) FROM match_item_purchases WHERE match_id = ?",
+                      (MID,)).fetchone()[0] == 12
 
 
 def test_unix_to_iso():

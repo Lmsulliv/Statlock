@@ -493,11 +493,18 @@ def match_detail(conn: sqlite3.Connection, match_id: int,
             "victim_is_you": _slot_account(parsed["players"], d["victim_slot"]) == perspective,
         })
 
+    # Purchases are keyed on player_slot now, so resolve the perspective account
+    # to its slot in this match's roster (a tracked account is never anonymized,
+    # so this is unambiguous). None means the perspective didn't play this match.
+    perspective_slot = next(
+        (p["player_slot"] for p in parsed["players"] if p["account_id"] == perspective),
+        None,
+    )
     item_names = queries.item_names(conn)
     item_images = queries.item_images(conn)
     purchases = []
-    if perspective is not None:
-        for b in queries.match_purchases(conn, match_id, perspective):
+    if perspective_slot is not None:
+        for b in queries.match_purchases(conn, match_id, perspective_slot):
             purchases.append({
                 **b,
                 "item_name": item_names.get(b["item_id"], str(b["item_id"])),

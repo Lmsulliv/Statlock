@@ -22,6 +22,7 @@ _STEPS = [
     _DB_DIR / "migrations" / "002_ingest_worker.sql",  # 1 -> 2: era_candidates, worker_meta
     _DB_DIR / "migrations" / "003_ranks_and_same_lane.sql",  # 2 -> 3: ranks, same_lane
     _DB_DIR / "migrations" / "004_baseline_refresh_state.sql",  # 3 -> 4: staggered refresh
+    _DB_DIR / "migrations" / "005_player_slot.sql",  # 4 -> 5: player_slot per-match key
 ]
 
 

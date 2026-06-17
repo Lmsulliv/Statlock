@@ -108,7 +108,7 @@ def personal_item_stats(conn: sqlite3.Connection, scope: Scope,
         " AVG(ip.purchase_time_s) AS avg_purchase_s"
         " FROM match_players mp"
         " JOIN match_item_purchases ip"
-        "   ON ip.match_id = mp.match_id AND ip.account_id = mp.account_id"
+        "   ON ip.match_id = mp.match_id AND ip.player_slot = mp.player_slot"
         " JOIN matches m ON m.match_id = mp.match_id"
         " WHERE mp.account_id = ? AND mp.hero_id = ? AND m.game_mode = ?"
         + era_sql + badge_sql +
@@ -161,6 +161,13 @@ def recurring_co_players(conn: sqlite3.Connection, scope: Scope,
     if my_hero_id is not None:
         hero_sql, hero_params = " AND me.hero_id = ?", [my_hero_id]
 
+    # Exclude anonymized players (account_id = 0) on the OTHER side only. Two
+    # reasons: an account_id = 0 co-player is not a real recurring person, and --
+    # because account_id is no longer unique within a match -- all of a lobby's
+    # zeros would otherwise collapse into one GROUP BY other.account_id bucket,
+    # inflating its games/wins. This is deliberately NOT done where hero identity
+    # is what's counted (personal_matchups): an anonymized opponent still played a
+    # known hero and must count toward matchups.
     sql = (
         "SELECT other.account_id AS account_id,"
         " (other.team = me.team) AS same_team,"
@@ -168,6 +175,7 @@ def recurring_co_players(conn: sqlite3.Connection, scope: Scope,
         " FROM match_players me"
         " JOIN match_players other"
         "   ON other.match_id = me.match_id AND other.account_id != me.account_id"
+        "   AND other.account_id != 0"
         " JOIN matches m ON m.match_id = me.match_id"
         " WHERE me.account_id = ? AND m.game_mode = ?"
         + era_sql + badge_sql + hero_sql +
@@ -312,14 +320,17 @@ def match_core(conn: sqlite3.Connection, match_id: int) -> dict | None:
 
 
 def match_purchases(conn: sqlite3.Connection, match_id: int,
-                    account_id: int) -> list[dict]:
-    """One account's item purchases in a match, ordered by buy time. Already
-    filtered to real shop items at ingest, so no upgrade/ability rows leak in."""
+                    player_slot: int) -> list[dict]:
+    """One player's item purchases in a match, ordered by buy time. Keyed on
+    player_slot, not account_id: with anonymized players a match can hold several
+    account_id = 0 rows, so the slot is the only key that isolates one player's
+    buys. Already filtered to real shop items at ingest, so no upgrade/ability
+    rows leak in."""
     rows = conn.execute(
         "SELECT item_id, purchase_time_s, sold_time_s"
-        " FROM match_item_purchases WHERE match_id = ? AND account_id = ?"
+        " FROM match_item_purchases WHERE match_id = ? AND player_slot = ?"
         " ORDER BY purchase_time_s",
-        (match_id, account_id),
+        (match_id, player_slot),
     ).fetchall()
     return [dict(r) for r in rows]
 

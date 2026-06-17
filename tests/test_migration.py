@@ -36,9 +36,9 @@ def test_all_indexes_created(db):
     assert EXPECTED_INDEXES <= names_of_type(db, "index")
 
 
-def test_user_version_is_4(db):
+def test_user_version_is_5(db):
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 4
+    assert version == 5
 
 
 def test_migrate_is_idempotent(tmp_path):
@@ -46,7 +46,7 @@ def test_migrate_is_idempotent(tmp_path):
     migrate(conn)
     migrate(conn)  # second call must not raise
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 4
+    assert version == 5
 
 
 def test_upgrade_from_v1_preserves_data(tmp_path):
@@ -64,11 +64,57 @@ def test_upgrade_from_v1_preserves_data(tmp_path):
 
     migrate(conn)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
     assert conn.execute("SELECT COUNT(*) FROM tracked_accounts").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM era_candidates").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM ranks").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM baseline_refresh_state").fetchone()[0] == 0
+
+
+def test_v5_backfills_player_slot_from_raw_json(tmp_path):
+    """Upgrading a v4 DB must read each match's archived raw_json and stamp every
+    match_players / match_item_purchases row with its player_slot, including the
+    single anonymized (account_id 0) player a stored match may hold."""
+    import json
+    from tracker.migrate import _STEPS
+
+    conn = connect(tmp_path / "v4.db")
+    for sql_file in _STEPS[:4]:                 # build the schema up to v4
+        conn.executescript(sql_file.read_text(encoding="utf-8"))
+    conn.execute("PRAGMA user_version = 4")
+    conn.execute("INSERT INTO heroes(hero_id, name, fetched_at) VALUES (7, 'Wraith', 't')")
+    conn.execute("INSERT INTO items(item_id, name, fetched_at) VALUES (100, 'Boots', 't')")
+
+    # raw_json maps account_id -> player_slot (slots deliberately non-contiguous).
+    raw = {"match_info": {"match_id": 1, "players": [
+        {"player_slot": 4, "account_id": 500},
+        {"player_slot": 7, "account_id": 0},      # one anonymized player
+        {"player_slot": 9, "account_id": 600},
+    ]}}
+    conn.execute(
+        "INSERT INTO matches(match_id, start_time, duration_s, winning_team,"
+        " raw_json, ingested_at) VALUES (1, 't', 1800, 0, ?, 't')",
+        (json.dumps(raw),),
+    )
+    for account_id, team, won in ((500, 0, 1), (0, 1, 0), (600, 1, 0)):
+        conn.execute(
+            "INSERT INTO match_players(match_id, account_id, hero_id, team, won)"
+            " VALUES (1, ?, 7, ?, ?)", (account_id, team, won))
+    conn.execute(
+        "INSERT INTO match_item_purchases(match_id, account_id, item_id,"
+        " purchase_time_s, sold_time_s) VALUES (1, 500, 100, 600, 0)")
+    conn.commit()
+
+    migrate(conn)  # applies 005
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    slots = {r["account_id"]: r["player_slot"] for r in
+             conn.execute("SELECT account_id, player_slot FROM match_players WHERE match_id = 1")}
+    assert slots == {500: 4, 0: 7, 600: 9}
+    # the purchase follows its buyer to slot 4
+    assert conn.execute(
+        "SELECT player_slot FROM match_item_purchases WHERE match_id = 1 AND item_id = 100"
+    ).fetchone()["player_slot"] == 4
 
 
 def test_era_candidates_post_url_unique(db):
@@ -89,8 +135,9 @@ def test_foreign_keys_enforced(db):
     )
     db.commit()
     with pytest.raises(sqlite3.IntegrityError):
+        # Columns: match_id, player_slot, account_id, hero_id, team, lane..healing (10 NULLs), won.
         db.execute(
-            "INSERT INTO match_players VALUES (1,100,9999,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1)"
+            "INSERT INTO match_players VALUES (1,1,100,9999,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1)"
         )
         db.commit()
 

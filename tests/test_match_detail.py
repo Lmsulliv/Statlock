@@ -121,12 +121,13 @@ def _seed(conn) -> None:
         " VALUES (?, ?, 1800, '1', 0, 50, 52, ?, ?)",
         (MATCH_ID, JUNE, json.dumps(_meta()), JUNE),
     )
-    # match_players row for ME satisfies the match_item_purchases FK.
-    conn.execute("INSERT INTO match_players(match_id, account_id, hero_id, team, won)"
-                 " VALUES (?, ?, ?, 0, 1)", (MATCH_ID, ME, H_ME))
+    # match_players row for ME (slot 1 in the payload) satisfies the
+    # match_item_purchases FK, which is keyed on (match_id, player_slot).
+    conn.execute("INSERT INTO match_players(match_id, player_slot, account_id, hero_id, team, won)"
+                 " VALUES (?, 1, ?, ?, 0, 1)", (MATCH_ID, ME, H_ME))
     for item_id, buy, sold in ((IT_A, 600, 0), (IT_B, 200, 1500)):
-        conn.execute("INSERT INTO match_item_purchases(match_id, account_id, item_id,"
-                     " purchase_time_s, sold_time_s) VALUES (?, ?, ?, ?, ?)",
+        conn.execute("INSERT INTO match_item_purchases(match_id, player_slot, account_id,"
+                     " item_id, purchase_time_s, sold_time_s) VALUES (?, 1, ?, ?, ?, ?)",
                      (MATCH_ID, ME, item_id, buy, sold))
     conn.commit()
 
