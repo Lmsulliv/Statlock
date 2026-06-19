@@ -1,0 +1,94 @@
+"""reprocess-archive: rebuild derived tables from the raw_api_responses archive.
+
+No HTTP -- hard rule 2's archive (every status-200 body is stored before parsing)
+is the source of truth here, so backfilling costs zero requests and can't trip the
+rate limit. For every archived match body we idempotently:
+
+  - if the match is already stored: (re)materialize only its kill_events;
+  - if it is NOT stored (e.g. a pre-player_slot 6x0 anonymized match that crashed
+    ingest before the schema could accept it): parse and insert match + players +
+    purchases + kill_events now, and flip its fetch_queue row to 'fetched'.
+
+One match = one transaction (hard rule 4). Re-running is a no-op on row counts:
+recovered matches take the "already stored" branch on the next pass, and
+replace_kill_events delete-then-inserts, so kill_events stays stable.
+"""
+import json
+import logging
+
+from ingest.parse import (
+    derive_kill_events,
+    era_id_for,
+    insert_match,
+    parse_metadata,
+    replace_kill_events,
+)
+from ingest.util import unix_to_iso, utcnow
+
+log = logging.getLogger(__name__)
+
+
+def _latest_match_bodies(conn) -> dict[int, str]:
+    """match_id -> its most recently archived status-200 metadata body. A match
+    re-fetched over time has several archived copies; the highest id (newest) wins.
+    Bodies that don't parse or lack match_info are skipped -- this is where the
+    empty-200 responses land, and they carry nothing to reprocess."""
+    bodies: dict[int, str] = {}
+    rows = conn.execute(
+        "SELECT id, body FROM raw_api_responses"
+        " WHERE status_code = 200 AND url LIKE '%/metadata'"
+        " ORDER BY id"
+    ).fetchall()
+    for row in rows:
+        try:
+            meta = json.loads(row["body"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        info = meta.get("match_info") if isinstance(meta, dict) else None
+        if not info or info.get("match_id") is None:
+            continue
+        bodies[info["match_id"]] = row["body"]
+    return bodies
+
+
+def reprocess_archive(conn, *, now=utcnow) -> dict:
+    """Backfill kill_events (and recover unstorable matches) from the archive.
+    Returns {"matches_recovered": n, "kill_events_rebuilt": m}."""
+    bodies = _latest_match_bodies(conn)
+    shop_item_ids = {r["item_id"] for r in
+                     conn.execute("SELECT item_id FROM items").fetchall()}
+    recovered = 0
+    rebuilt = 0
+
+    for match_id, body in bodies.items():
+        meta = json.loads(body)
+        already_stored = conn.execute(
+            "SELECT 1 FROM matches WHERE match_id = ?", (match_id,)
+        ).fetchone() is not None
+
+        # One match = one transaction: the inserts and the queue flip commit together.
+        with conn:
+            if already_stored:
+                replace_kill_events(conn, match_id, derive_kill_events(meta))
+            else:
+                start_iso = unix_to_iso(meta["match_info"]["start_time"])
+                era_id = era_id_for(conn, start_iso)
+                parsed = parse_metadata(meta, body, shop_item_ids, era_id,
+                                        now().isoformat())
+                insert_match(conn, parsed)  # includes its kill_events
+                # Flip the queue row if one exists (no-op otherwise): the body was
+                # fetched-200 long ago but never stored.
+                conn.execute(
+                    "UPDATE fetch_queue SET status = 'fetched', next_retry_at = NULL,"
+                    " last_error = NULL WHERE match_id = ?",
+                    (match_id,),
+                )
+                recovered += 1
+
+        rebuilt += conn.execute(
+            "SELECT COUNT(*) FROM kill_events WHERE match_id = ?", (match_id,)
+        ).fetchone()[0]
+
+    log.info("reprocess-archive: %d match(es) recovered, %d kill event(s) rebuilt",
+             recovered, rebuilt)
+    return {"matches_recovered": recovered, "kill_events_rebuilt": rebuilt}

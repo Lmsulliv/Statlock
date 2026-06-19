@@ -428,3 +428,110 @@ and should still be loaded (needed to parse older matches).
 Loader mapping to `items`: `id → item_id`, `name → name`,
 `item_tier → tier`, `item_slot_type → slot_type`,
 `shop_image ?? image → image_url`.
+
+---
+
+## Not-parsed / unfetchable matches (spike, verified 2026-06-19)
+
+Gathered by the throwaway `scripts/spike_not_parsed.py` to decide the
+deferral detection rule and give-up policy. Raw bodies archived in
+`spikes/out/notparsed_*`.
+
+**The metadata endpoint signals "no data for this match" with HTTP 400,
+NOT 404.** Observed body shape:
+`{"error":"Match salts for match <id> cannot be fetched","status":400}`.
+No 404 / 202 / 425 / 409 / 429 was seen. ("Salts" are the per-match
+metadata/replay decryption keys deadlock-api fetches from Steam before it can
+return metadata — see the mechanism note in the follow-up section below.)
+
+> **Correction (see follow-up below).** An earlier draft of this section
+> claimed these matches' "replays Valve has purged" / are "genuinely gone".
+> That was an over-reach: the passive 400 does not say *why* salts are missing,
+> and the (a) sample below was fired too fast to trust. The follow-up spike
+> tests recoverability properly.
+
+### (a) Are existing `unavailable` rows recoverable? (n=12)
+
+| result | count |
+| --- | ---: |
+| 400 "salts cannot be fetched" | 12 |
+
+Recovered (now 200): none. **But this result is not trustworthy:** all 12
+probes went out in ~1 minute, and fetching salts for an uncached match routes
+through Steam, which is rate-limited to **10 req / 30 min per IP** (see
+mechanism note). So most of these 400s are likely the rate limit, not missing
+data. The follow-up spike re-tests within the limit.
+
+### (b) Signal for the newest matches from live account history
+
+| match_id | already_fetched | status | category | headers |
+| ---: | :---: | ---: | --- | --- |
+| 89193045 | True | 200 | 200 (data available) | Content-Type=application/json, Cache-Control=public, max-age=604800 |
+| 89103814 | True | 200 | 200 (data available) | Content-Type=application/json, Cache-Control=public, max-age=604800 |
+| 89034903 | True | 200 | 200 (data available) | Content-Type=application/json, Cache-Control=public, max-age=604800 |
+| 88653444 | True | 200 | 200 (data available) | Content-Type=application/json, Cache-Control=public, max-age=604800 |
+| 88639055 | True | 200 | 200 (data available) | Content-Type=application/json, Cache-Control=public, max-age=604800 |
+| 88579983 | True | 200 | 200 (data available) | Content-Type=application/json, Cache-Control=public, max-age=604800 |
+
+### (c) Does re-requesting change the answer?
+
+No not-ready match was available to re-probe in this run.
+
+---
+
+## How salts/metadata fetching actually works (from OpenAPI, verified 2026-06-19)
+
+From `spikes/out/03_openapi.json` (the live spec), the salts pipeline is:
+
+- **`GET /v1/matches/{match_id}/metadata`** has a `disable_steam` flag
+  (default *off*): "skip the Steam fallback when the metadata is not available
+  in S3 and return an error instead." So our plain `/metadata` call already
+  *does* try Steam. The 400 means even the Steam fallback couldn't get salts.
+- **`GET /v1/matches/{match_id}/salts`** is the direct salts fetch. Its
+  documented rate limits: **DB 100 req/s, but Steam fallback 10 req/30 min per
+  IP** (and 10 req/10 s globally). Uncached old matches always hit the Steam
+  path, so a burst of probes self-inflicts 400s.
+- **`POST /v1/matches/salts` ("Match Salts Ingest")** lets community members
+  submit salts they harvested from their own client — this is how most matches
+  get salts in the first place (confirms: salts exist for a match only once
+  someone who was in it, running the ingest tool, surfaces it, or Steam still
+  serves it).
+- **`force_refetch`** is a flag on `/v1/players/{id}/match-history` only
+  ("refetch the match history from Steam"). It refreshes the match *list*, NOT
+  per-match salts — so it is **not** a lever for recovering a specific match.
+
+## Recoverability re-test, within the rate limit (spike #2, verified 2026-06-19)
+
+`scripts/spike_salts_recovery.py`: 4 `GET /v1/matches/{id}/salts` calls (Steam
+fallback on), well spaced, ~30 min after spike #1 so the Steam window had reset,
+on the 4 newest `unavailable` matches (ids ~28.2M).
+
+| context | result |
+| --- | --- |
+| `GET /v1/matches/recently-fetched` | 200, fresh match 89.5M — the fetch pool is **live** |
+| 4× `GET /v1/matches/{id}/salts` (spaced) | **4/4 HTTP 400 "salts cannot be fetched"**, **no 429**, no rate-limit headers |
+
+**What this supports (and what it doesn't):** with the pool demonstrably live
+and the rate limit *not* blown (no 429), the direct salts fetch still fails for
+these old matches. So for them, deadlock-api currently cannot obtain salts from
+Steam — most likely because Valve's game coordinator no longer serves
+salts/replays for matches this old. This is *not* proof every old match is
+permanently gone (n=4), and such a match could still be recovered if a
+participant submits salts via `POST /v1/matches/salts` — but our worker can't
+trigger that.
+
+**Implications for the drain loop (deferral, ingest/drain.py):**
+
+- The 400-salts signal is **ambiguous by design** between "too new, salts not
+  harvested yet" (recoverable soon) and "too old, Steam won't serve them"
+  (effectively unrecoverable by us). There is no field that separates them.
+- Deferral handles both correctly *because* it retries slowly: hourly retries
+  are ~1 req/hour, far under the 10 req/30 min Steam-salts limit, so (i) a NEW
+  match's salts get fetched once the pool reaches them, and (ii) 400s that were
+  merely **rate-limit fallout from a bulk backfill** (the common case while
+  importing an account) clear themselves on a later, unhurried retry. Old,
+  truly-unfetchable matches keep failing and are given up after MAX_DEFER_AGE_S.
+- This is the corrected justification for the design: NOT "those matches are
+  proven gone," but "recoverable ones recover within the retry window; the rest
+  age out." The existing `unavailable` rows are therefore left as-is (no requeue
+  migration); the nightly revive still re-probes them slowly.

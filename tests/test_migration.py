@@ -11,10 +11,11 @@ EXPECTED_TABLES = {
     "baseline_hero_matchups", "baseline_hero_item_stats", "baseline_snapshots",
     "baseline_refresh_state",
     "tracked_accounts", "sync_state", "fetch_queue", "raw_api_responses",
-    "era_candidates", "worker_meta",
+    "era_candidates", "worker_meta", "kill_events",
 }
 EXPECTED_VIEWS   = {"v_my_matchups", "v_my_item_stats"}
-EXPECTED_INDEXES = {"idx_mp_account", "idx_mp_hero"}
+EXPECTED_INDEXES = {"idx_mp_account", "idx_mp_hero",
+                    "idx_ke_match_victim", "idx_ke_match_killer"}
 
 
 def names_of_type(conn: sqlite3.Connection, obj_type: str) -> set[str]:
@@ -36,9 +37,9 @@ def test_all_indexes_created(db):
     assert EXPECTED_INDEXES <= names_of_type(db, "index")
 
 
-def test_user_version_is_5(db):
+def test_user_version_is_7(db):
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 5
+    assert version == 7
 
 
 def test_migrate_is_idempotent(tmp_path):
@@ -46,7 +47,12 @@ def test_migrate_is_idempotent(tmp_path):
     migrate(conn)
     migrate(conn)  # second call must not raise
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 5
+    assert version == 7
+
+
+def test_fetch_queue_has_deferred_since(db):
+    cols = {row[1] for row in db.execute("PRAGMA table_info(fetch_queue)").fetchall()}
+    assert "deferred_since" in cols
 
 
 def test_upgrade_from_v1_preserves_data(tmp_path):
@@ -64,7 +70,7 @@ def test_upgrade_from_v1_preserves_data(tmp_path):
 
     migrate(conn)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
     assert conn.execute("SELECT COUNT(*) FROM tracked_accounts").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM era_candidates").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM ranks").fetchone()[0] == 0
@@ -105,9 +111,9 @@ def test_v5_backfills_player_slot_from_raw_json(tmp_path):
         " purchase_time_s, sold_time_s) VALUES (1, 500, 100, 600, 0)")
     conn.commit()
 
-    migrate(conn)  # applies 005
+    migrate(conn)  # applies 005 (and onward)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
     slots = {r["account_id"]: r["player_slot"] for r in
              conn.execute("SELECT account_id, player_slot FROM match_players WHERE match_id = 1")}
     assert slots == {500: 4, 0: 7, 600: 9}

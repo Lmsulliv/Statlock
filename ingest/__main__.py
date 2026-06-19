@@ -1,10 +1,12 @@
 """CLI entry point: python -m ingest <command>.
 
 Commands:
-    run-once      maintenance (if due) -> discovery -> drain to empty, then exit
-    run-daemon    persistent loop running all three schedules
-    status        queue depth, counts by status, sync freshness, candidates
-    add-account   register a tracked account (accepts ID / SteamID64 / URL)
+    run-once          maintenance (if due) -> discovery -> drain to empty, then exit
+    run-daemon        persistent loop running all three schedules
+    status            queue depth, counts by status, sync freshness, candidates
+    add-account       register a tracked account (accepts ID / SteamID64 / URL)
+    reprocess-archive rebuild kill_events (and recover unstorable matches) from
+                      the raw_api_responses archive, no API calls
 """
 import argparse
 import logging
@@ -14,6 +16,7 @@ from pathlib import Path
 from ingest.accounts import add_account
 from ingest.client import Client
 from ingest.ratelimit import DEFAULT_STAMP, TokenBucket
+from ingest.reprocess import reprocess_archive
 from ingest.runner import run_daemon, run_once
 from tracker.db import connect
 from tracker.migrate import migrate
@@ -92,6 +95,12 @@ def cmd_run_daemon(conn, args) -> None:
     run_daemon(conn, _build_client())
 
 
+def cmd_reprocess_archive(conn, args) -> None:
+    result = reprocess_archive(conn)
+    print(f"Reprocessed archive: recovered {result['matches_recovered']} match(es), "
+          f"rebuilt {result['kill_events_rebuilt']} kill event(s).")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m ingest", description=__doc__)
     parser.add_argument("--db", default=str(DEFAULT_DB), help="path to the SQLite database")
@@ -100,6 +109,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("run-once", help="discovery + drain once, then exit")
     sub.add_parser("run-daemon", help="run all three loops continuously")
     sub.add_parser("status", help="print queue depth and counts by status")
+    sub.add_parser("reprocess-archive",
+                   help="rebuild kill_events from the archive (no API calls)")
 
     add = sub.add_parser("add-account", help="track a new account")
     add.add_argument("identifier", help="account ID, SteamID64, or profile URL")
@@ -114,6 +125,7 @@ _DISPATCH = {
     "run-daemon": cmd_run_daemon,
     "status": cmd_status,
     "add-account": cmd_add_account,
+    "reprocess-archive": cmd_reprocess_archive,
 }
 
 

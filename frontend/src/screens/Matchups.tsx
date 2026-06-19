@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMatchups, useSyncStatus } from '../api/queries'
 import type { MatchupRow } from '../api/types'
-import { BaselineCell, DeltaCell } from '../components/cells'
+import { BaselineCell, DeltaCell, KillCountCell } from '../components/cells'
 import { EmptyState } from '../components/EmptyState'
 import { HeroIcon } from '../components/HeroIcon'
 import { IntervalBar } from '../components/IntervalBar'
@@ -11,7 +11,16 @@ import { VERDICT_ORDER } from '../components/verdict'
 import { VerdictBadge } from '../components/VerdictBadge'
 import { useScope } from '../scope/useScope'
 
-type SortKey = 'name' | 'games' | 'winrate' | 'global' | 'raw_delta' | 'delta' | 'verdict'
+type SortKey =
+  | 'name'
+  | 'games'
+  | 'kills_on_you'
+  | 'your_kills'
+  | 'winrate'
+  | 'global'
+  | 'raw_delta'
+  | 'delta'
+  | 'verdict'
 
 interface Column {
   key: SortKey
@@ -24,6 +33,18 @@ interface Column {
 const COLUMNS: Column[] = [
   { key: 'name', label: 'Enemy hero' },
   { key: 'games', label: 'Record' },
+  {
+    key: 'kills_on_you',
+    label: 'Kills on you',
+    title:
+      'Raw total kills this enemy hero landed on you across the games faced — a count, not a rate.',
+  },
+  {
+    key: 'your_kills',
+    label: 'Your kills',
+    title:
+      'Raw total kills you landed on this enemy hero across the games faced — a count, not a rate.',
+  },
   { key: 'winrate', label: 'Win rate & 95% CI' },
   {
     key: 'global',
@@ -55,6 +76,10 @@ function sortValue(r: MatchupRow, key: SortKey): number | string | null {
       return r.enemy_hero_name.toLowerCase()
     case 'games':
       return r.games
+    case 'kills_on_you':
+      return r.kills_by_them_on_you
+    case 'your_kills':
+      return r.kills_by_you_on_them
     case 'winrate':
       return r.winrate
     case 'global':
@@ -174,6 +199,12 @@ function MatchupsTable({
             </td>
             <td>
               <SampleSize games={r.games} wins={r.wins} />
+            </td>
+            <td className="col-delta">
+              <KillCountCell value={r.kills_by_them_on_you} games={r.games} />
+            </td>
+            <td className="col-delta">
+              <KillCountCell value={r.kills_by_you_on_them} games={r.games} />
             </td>
             <td className="col-interval">
               <IntervalBar

@@ -17,7 +17,9 @@ import pytest
 import ingest.drain as drain_module
 from ingest.accounts import add_account
 from ingest.discovery import run_discovery
-from ingest.drain import DrainWorker, STRIKE_PAUSE_S, TRANSIENT_RETRY_S
+from ingest.drain import (
+    DEFERRED_RETRY_S, DrainWorker, MAX_DEFER_AGE_S, STRIKE_PAUSE_S, TRANSIENT_RETRY_S,
+)
 from ingest.maintenance import revive_unavailable
 from ingest.parse import insert_match
 from tracker.reference import load_heroes, load_items
@@ -313,3 +315,117 @@ def test_transient_retry_is_flat_five_minutes(populated_db, now):
     from datetime import datetime
     actual = datetime.fromisoformat(row["next_retry_at"]).timestamp()
     assert abs(actual - expected) < 2
+
+
+# ── Deferral: not-yet-parsed matches (the 400 "salts cannot be fetched" path) ─
+#
+# The metadata endpoint reports "no data for this match" with HTTP 400 + body
+# `{"error":"Match salts for match X cannot be fetched",...}` (verified by the
+# 2026-06-18 spike, docs/api-findings.md). That is the match's SITUATION -- it
+# hasn't been parsed yet (or its old replay was purged) -- not its fault, so the
+# drain loop DEFERS it: patient hourly retries OUTSIDE the attempt budget, lower
+# priority than fresh work, given up only after MAX_DEFER_AGE_S.
+
+from datetime import timedelta
+
+from ingest.util import iso_to_unix
+
+
+def salts_400(match_id: int = SHARED_MATCH):
+    body = f'{{"error":"Match salts for match {match_id} cannot be fetched","status":400}}'
+    return (400, {}, body)
+
+
+def enqueue(db, match_id, now, **cols):
+    """Insert one fetch_queue row (pending by default; override any column)."""
+    row = {"discovered_at": now().isoformat(), "status": "pending"}
+    row.update(cols)
+    columns = ["match_id", *row]
+    db.execute(
+        f"INSERT INTO fetch_queue({', '.join(columns)})"
+        f" VALUES ({', '.join('?' for _ in columns)})",
+        [match_id, *row.values()],
+    )
+    db.commit()
+
+
+def test_not_parsed_match_is_deferred_not_faulted(populated_db, now):
+    enqueue(populated_db, SHARED_MATCH, now)
+    client = FakeClient()
+    client.add("/metadata", salts_400())
+    worker = make_worker(populated_db, client, now)
+
+    outcome = worker.step()
+
+    row = queue_rows(populated_db)[0]
+    assert outcome == "deferred"
+    assert row["status"] == "deferred"
+    assert row["attempts"] == 0                     # attempt budget untouched
+    assert worker.transient_strikes == 0            # circuit breaker untouched
+    assert row["deferred_since"] is not None        # give-up clock started
+    # next_retry_at is exactly DEFERRED_RETRY_S in the future.
+    assert iso_to_unix(row["next_retry_at"]) - iso_to_unix(now().isoformat()) == DEFERRED_RETRY_S
+
+
+def test_deferred_yields_to_fresh_work(populated_db, now):
+    # Both a due deferred row and a pending row are eligible at once.
+    enqueue(populated_db, 111, now, status="deferred",
+            next_retry_at=now().isoformat(), deferred_since=now().isoformat())
+    enqueue(populated_db, 222, now, status="pending")
+    worker = make_worker(populated_db, FakeClient(), now)
+
+    # Fresh work wins: the pending row is picked before the due deferred row.
+    assert worker._next_row()["match_id"] == 222
+
+    # Only once no pending/failed row is eligible does the deferred row come up.
+    populated_db.execute("UPDATE fetch_queue SET status='fetched' WHERE match_id=222")
+    populated_db.commit()
+    assert worker._next_row()["match_id"] == 111
+
+    # A deferred row whose retry isn't due yet is left alone.
+    populated_db.execute(
+        "UPDATE fetch_queue SET next_retry_at='2999-01-01T00:00:00+00:00' WHERE match_id=111")
+    populated_db.commit()
+    assert worker._next_row() is None
+
+
+def test_deferred_match_later_parses_and_ingests(populated_db, now):
+    enqueue(populated_db, SHARED_MATCH, now, status="deferred",
+            next_retry_at=now().isoformat(), deferred_since=now().isoformat())
+    client = FakeClient()
+    client.add("/metadata", ok(metadata_body_for(SHARED_MATCH)))
+    worker = make_worker(populated_db, client, now)
+
+    assert worker.step() == "fetched"
+    assert queue_rows(populated_db)[0]["status"] == "fetched"
+    assert populated_db.execute(
+        "SELECT 1 FROM match_players WHERE match_id=? AND account_id=?",
+        (SHARED_MATCH, ME),
+    ).fetchone() is not None
+
+
+def test_deferred_past_max_age_gives_up_as_unavailable(populated_db, now):
+    old = (now() - timedelta(seconds=MAX_DEFER_AGE_S + 3600)).isoformat()
+    enqueue(populated_db, SHARED_MATCH, now, status="deferred",
+            next_retry_at=now().isoformat(), deferred_since=old)
+    client = FakeClient()
+    client.add("/metadata", salts_400())
+    worker = make_worker(populated_db, client, now)
+
+    assert worker.step() == "unavailable"
+    row = queue_rows(populated_db)[0]
+    assert row["status"] == "unavailable"        # dead match still terminates
+    assert row["attempts"] == 0                  # without ever spending the budget
+
+
+def test_generic_400_without_salts_is_still_a_match_fault(populated_db, now):
+    # Detection is body-specific: a plain 400 is a real fault and DOES count.
+    enqueue(populated_db, SHARED_MATCH, now)
+    client = FakeClient()
+    client.add("/metadata", (400, {}, '{"error":"bad request","status":400}'))
+    worker = make_worker(populated_db, client, now)
+
+    assert worker.step() == "failed"
+    row = queue_rows(populated_db)[0]
+    assert row["status"] == "failed"
+    assert row["attempts"] == 1

@@ -41,15 +41,30 @@ export async function fetchJson<T>(
   return (await res.json()) as T
 }
 
-// The one write path in the app: the era confirm/dismiss POSTs. No body is
-// needed (the candidate id is in the URL), so this is deliberately minimal.
-export async function postJson<T>(path: string): Promise<T> {
+// The app's write paths. `body` is optional: the era confirm/dismiss POSTs carry
+// the id in the URL and send none, while the account importer/namer send a JSON
+// body. Content-Type is only set when there's a body to describe.
+async function sendJson<T>(
+  method: 'POST' | 'PATCH',
+  path: string,
+  body?: unknown,
+): Promise<T> {
   const res = await fetch(path, {
-    method: 'POST',
-    headers: { Accept: 'application/json' },
+    method,
+    headers: {
+      Accept: 'application/json',
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   })
   if (!res.ok) {
     throw new ApiError(res.status, `Request to ${path} failed (${res.status})`)
   }
   return (await res.json()) as T
 }
+
+export const postJson = <T>(path: string, body?: unknown) =>
+  sendJson<T>('POST', path, body)
+
+export const patchJson = <T>(path: string, body: unknown) =>
+  sendJson<T>('PATCH', path, body)

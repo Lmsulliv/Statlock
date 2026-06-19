@@ -150,7 +150,9 @@ CREATE TABLE fetch_queue (
     match_id        INTEGER PRIMARY KEY,
     discovered_at   TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'pending',
-                    -- pending | fetched | failed | unavailable
+                    -- pending | fetched | failed | unavailable | deferred
+                    -- (deferred = not yet parsed upstream; see migration 007.
+                    --  deferred_since is added by migration 007, not here.)
     attempts        INTEGER DEFAULT 0,
     last_attempt_at TEXT,
     next_retry_at   TEXT,

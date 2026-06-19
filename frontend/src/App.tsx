@@ -8,6 +8,7 @@ import { Improvement } from './screens/Improvement'
 import { Tilt } from './screens/Tilt'
 import { RecurringPlayers } from './screens/RecurringPlayers'
 import { Eras } from './screens/Eras'
+import { Accounts } from './screens/Accounts'
 import { MatchDetail } from './screens/MatchDetail'
 
 // `ownerOnly` entries are hidden unless the interim owner flag is set (see
@@ -19,6 +20,7 @@ const NAV = [
   { to: '/improvement', label: 'Improvement', end: false },
   { to: '/tilt', label: 'Tilt', end: false },
   { to: '/recurring-players', label: 'Recurring players', end: false },
+  { to: '/accounts', label: 'Accounts', end: false, ownerOnly: true },
   { to: '/eras', label: 'Era manager', end: false, ownerOnly: true },
 ]
 
@@ -59,8 +61,9 @@ export function App() {
           <Route path="/improvement" element={<Improvement />} />
           <Route path="/tilt" element={<Tilt />} />
           <Route path="/recurring-players" element={<RecurringPlayers />} />
-          {/* Owner-only: the route isn't registered unless the flag is set, so
-              the Era manager isn't reachable by URL either. */}
+          {/* Owner-only: the routes aren't registered unless the flag is set, so
+              the Accounts importer and Era manager aren't reachable by URL either. */}
+          {isOwner && <Route path="/accounts" element={<Accounts />} />}
           {isOwner && <Route path="/eras" element={<Eras />} />}
         </Routes>
       </main>

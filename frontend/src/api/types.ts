@@ -30,6 +30,10 @@ export interface MatchupRow extends StatFields {
   enemy_hero_image_url: string | null
   games: number
   wins: number
+  // Raw kill counts vs this enemy hero across the games faced (not a rate, no
+  // confidence interval). Totals over the same scope as `games`.
+  kills_by_them_on_you: number
+  kills_by_you_on_them: number
 }
 
 // ── Tilt (api/service.tilt) ──────────────────────────────────────────────────
@@ -91,8 +95,9 @@ export interface Rank {
   badge_url: string // derived server-side from the tier
 }
 
-// A tracked account, for the (viewing-only) account switcher in the ScopeBar.
-// display_name is null until names are added in a later phase.
+// A tracked account, for the account switcher in the ScopeBar and the Accounts
+// screen (where it's added via the importer and named via inline rename).
+// display_name is null until a name is set.
 export interface TrackedAccount {
   account_id: number
   display_name: string | null
@@ -260,6 +265,21 @@ export interface DeathEvent {
   killer_is_you: boolean
 }
 
+// One enemy player's kill trade vs the perspective account in a single match.
+// Raw counts in both directions, attributed by slot off kill_events — so an
+// anonymized opponent (account_id 0, indistinguishable by id) still counts and
+// is labeled by its hero. Enemy team only; teammates would always be 0/0.
+export interface KillTrade {
+  player_slot: number
+  account_id: number // 0 for anonymized opponents
+  hero_id: number
+  hero_name: string
+  image_url: string | null
+  team: number
+  kills_by_them_on_you: number
+  kills_by_you_on_them: number
+}
+
 export interface MatchDetail {
   match_id: number
   start_time: string
@@ -272,4 +292,5 @@ export interface MatchDetail {
   players: MatchDetailPlayer[]
   purchases: MatchPurchase[]
   deaths: DeathEvent[]
+  trades: KillTrade[]
 }

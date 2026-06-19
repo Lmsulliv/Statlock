@@ -1,10 +1,22 @@
 """Loop 2: drain. Fetch full metadata for queued matches, rate-limited.
 
-This is where the two failure-kind rules live (docs/ingestion-spec.md, as
-amended): only the match's own fault (404 / not-yet-parsed) counts against
-its attempt budget; our fault (429) and the world's fault (5xx, timeouts,
-network blips) never do. Conflating them is the classic bug where a flaky
-3 a.m. network permanently marks good matches 'unavailable'.
+Failure-kind rules (docs/ingestion-spec.md, as amended) decide what touches a
+match's attempt budget:
+  - the match's FAULT (a real 4xx like a malformed/forbidden request) counts
+    against the 5-attempt budget;
+  - our fault (429) and the world's fault (5xx, timeouts, network blips) never
+    do -- conflating them is the classic bug where a flaky 3 a.m. network
+    permanently marks good matches 'unavailable';
+  - the match's SITUATION -- deadlock-api has no replay salts for it, an HTTP
+    400 "Match salts ... cannot be fetched" (docs/api-findings.md, verified
+    2026-06-19) -- is NOT a fault. Either the salts haven't been harvested yet
+    (recoverable soon) or Steam no longer serves them for an old match; the 400
+    can't tell which, and during a bulk import many are just transient fallout
+    from the 10-req/30-min Steam-salts rate limit. We DEFER: patient hourly
+    retries (well under that limit) OUTSIDE the attempt budget, lower priority
+    than fresh work, given up only after MAX_DEFER_AGE_S. So recoverable matches
+    recover on a later unhurried retry, the rest age out, and a big import can't
+    burn good matches' budgets nor starve current ingestion.
 
 One match = one transaction (hard rule 4): the match/players/purchases
 inserts and the queue-status flip commit together, so a crash can't leave
@@ -17,7 +29,7 @@ import sqlite3
 
 from ingest.client import BASE_URL, NetworkError, archive_response
 from ingest.parse import era_id_for, insert_match, parse_metadata
-from ingest.util import unix_to_iso, utcnow
+from ingest.util import iso_to_unix, unix_to_iso, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -29,10 +41,23 @@ TRANSIENT_RETRY_S = 300       # flat 5 min retry for 5xx / timeout / network
 DEFAULT_RATE_LIMIT_SLEEP_S = 300
 STRIKE_LIMIT = 5              # consecutive transient strikes before pausing
 STRIKE_PAUSE_S = 900          # 15 min circuit-breaker pause
+# Not-yet-parsed deferral. 1 h is slow enough to stay background (a match parsed
+# mid-day is still picked up the same day) without spending the shared 1-req/5-s
+# budget that fresh discovery + drain need. After 14 days an un-parsed match is
+# almost certainly deleted/private/purged, so we stop deferring and give up.
+DEFERRED_RETRY_S = 3_600
+MAX_DEFER_AGE_S = 14 * 24 * 3_600
 
 
 def _metadata_url(match_id: int) -> str:
     return f"{BASE_URL}/v1/matches/{match_id}/metadata"
+
+
+def _is_not_parsed(status: int, body: str) -> bool:
+    """deadlock-api signals "I have no data for this match" with HTTP 400 and a
+    body mentioning replay "salts" (docs/api-findings.md). This is the match's
+    situation, not its fault -- distinguished from a genuine 400 by the body."""
+    return status == 400 and "salts" in body.lower()
 
 
 class DrainWorker:
@@ -53,11 +78,24 @@ class DrainWorker:
 
     def _next_row(self):
         now_iso = self._now().isoformat()
-        return self.conn.execute(
+        # Fresh work first: pending + due failed (oldest-discovered first). This
+        # query is unchanged from before deferral existed.
+        row = self.conn.execute(
             "SELECT * FROM fetch_queue"
             " WHERE status = 'pending'"
             "    OR (status = 'failed' AND next_retry_at <= ?)"
             " ORDER BY discovered_at, match_id"
+            " LIMIT 1",
+            (now_iso,),
+        ).fetchone()
+        if row is not None:
+            return row
+        # Only when nothing fresh is eligible do we touch deferred work, so a
+        # large un-parsed backfill can never starve current ingestion.
+        return self.conn.execute(
+            "SELECT * FROM fetch_queue"
+            " WHERE status = 'deferred' AND next_retry_at <= ?"
+            " ORDER BY next_retry_at, match_id"
             " LIMIT 1",
             (now_iso,),
         ).fetchone()
@@ -91,7 +129,9 @@ class DrainWorker:
         if status >= 500:
             log.warning("match %s: HTTP %s -> transient", match_id, status)
             return self._handle_transient(match_id, fetched_at)
-        # 404 and other 4xx: the match's fault.
+        if _is_not_parsed(status, body):
+            return self._handle_not_parsed(row, fetched_at)
+        # Other 4xx (a genuine 404/403/malformed 400): the match's fault.
         return self._handle_match_fault(row, status, fetched_at)
 
     # ── outcome handlers ────────────────────────────────────────────────────
@@ -140,6 +180,36 @@ class DrainWorker:
         self.conn.commit()
         log.info("match %s -> failed (attempt %d, retry at %s)", match_id, attempts, next_retry)
         return "failed"
+
+    def _handle_not_parsed(self, row, fetched_at: str) -> str:
+        # Not the match's fault: deadlock-api just has no replay salts for it
+        # (yet, or ever). Defer patiently -- never touch attempts or the circuit
+        # breaker -- but stop after MAX_DEFER_AGE_S so a permanently dead match
+        # can't loop on the patient path forever. deferred_since is set ONCE (the
+        # first deferral), so the give-up clock measures total time deferred.
+        match_id = row["match_id"]
+        deferred_since = row["deferred_since"] or fetched_at
+        if iso_to_unix(fetched_at) - iso_to_unix(deferred_since) >= MAX_DEFER_AGE_S:
+            self.conn.execute(
+                "UPDATE fetch_queue SET status = 'unavailable', deferred_since = ?,"
+                " last_attempt_at = ?, last_error = 'not parsed (gave up)'"
+                " WHERE match_id = ?",
+                (deferred_since, fetched_at, match_id),
+            )
+            self.conn.commit()
+            log.info("match %s -> unavailable (deferred past max age)", match_id)
+            return "unavailable"
+
+        next_retry = self._iso_after(DEFERRED_RETRY_S)
+        self.conn.execute(
+            "UPDATE fetch_queue SET status = 'deferred', deferred_since = ?,"
+            " last_attempt_at = ?, next_retry_at = ?, last_error = 'not parsed'"
+            " WHERE match_id = ?",
+            (deferred_since, fetched_at, next_retry, match_id),
+        )
+        self.conn.commit()
+        log.info("match %s -> deferred (not parsed yet, retry at %s)", match_id, next_retry)
+        return "deferred"
 
     def _handle_rate_limited(self, match_id: int, headers: dict) -> str:
         # 429 is our fault, global, not this match's: leave the row entirely

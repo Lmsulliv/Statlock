@@ -1,0 +1,26 @@
+-- Schema v7: a 'deferred' status for matches deadlock-api can't fetch yet.
+--
+-- The metadata endpoint answers "I have no data for this match" with HTTP 400 +
+-- body `{"error":"Match salts for match X cannot be fetched",...}` (NOT 404 --
+-- verified by the 2026-06-18 spike, docs/api-findings.md). That is the match's
+-- SITUATION (not yet parsed upstream), not its fault, so the drain loop now
+-- defers it -- patient hourly retries OUTSIDE the 5-attempt budget -- instead of
+-- burning the budget and marking a real game 'unavailable' forever.
+--
+-- deferred_since anchors the give-up clock: ingest/drain.py stops deferring and
+-- marks the row 'unavailable' once it has been deferred longer than
+-- MAX_DEFER_AGE_S (14 days), so a deleted/private match can't loop forever.
+-- The status column is free text, so 'deferred' needs no DDL of its own; only
+-- the new timestamp column does.
+ALTER TABLE fetch_queue ADD COLUMN deferred_since TEXT;
+
+-- NO one-time requeue of the existing 'unavailable' rows. They are 72 old
+-- matches (ids 5.2M-28.2M) from one 2026-06-13 account import, all HTTP
+-- 400-salts. A re-test within the documented Steam-salts rate limit
+-- (scripts/spike_salts_recovery.py: direct GET /salts, pool verified live, no
+-- 429) still couldn't fetch salts for them -- most likely Valve no longer
+-- serves salts for matches that old, so our worker can't recover them. (We do
+-- NOT claim they are permanently gone: a participant could still submit salts
+-- via POST /v1/matches/salts; the worker just has no way to trigger that.)
+-- See docs/api-findings.md "Recoverability re-test". The nightly
+-- revive_unavailable still re-probes them slowly, so a requeue would only churn.

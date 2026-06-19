@@ -740,6 +740,105 @@ code {
   font-weight: 600;
 }
 
+/* ── Accounts screen (importer + namer) ───────────────────────────────────── */
+
+.accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.account-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.account-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.account-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.account-input {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.account-id-input {
+  width: 320px;
+  max-width: 100%;
+}
+
+.state-ok {
+  color: var(--pos);
+  margin: 10px 0 0;
+}
+
+.sync-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 28px;
+}
+
+.sync-num {
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.sync-num-sm {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.account-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.account-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-item:last-child {
+  border-bottom: none;
+}
+
+.account-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.account-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+
+.account-edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* ── Era-candidate banner (Overview) ──────────────────────────────────────── */
 
 .banner {
@@ -1062,6 +1161,37 @@ code {
 .player-lane {
   min-width: 56px;
   text-align: right;
+}
+
+/* Kill-trades rows mirror .player-row, minus the souls/lane columns: hero on the
+   left, two right-aligned count columns. The legend row reuses .muted. */
+.trade-row {
+  display: grid;
+  grid-template-columns: 1fr 9rem 9rem;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.trade-row:last-child {
+  border-bottom: none;
+}
+
+.trade-row .player-kda {
+  text-align: right;
+}
+
+.trade-head {
+  border-bottom: 1px solid var(--border);
+}
+
+.trade-head span {
+  text-align: right;
+}
+
+.trade-head span:first-child {
+  text-align: left;
 }
 
 .purchase-list,

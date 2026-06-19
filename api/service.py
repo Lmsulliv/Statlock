@@ -5,7 +5,8 @@ stats/, and returns plain JSON-serializable dicts. Both api.app (FastAPI) and
 stats/__main__.py (the CLI) call these, so the two can never disagree on a
 number -- that's the whole point of the stepping-stone CLI.
 
-Imports stats + tracker only; never FastAPI, so the CLI stays lightweight.
+Imports stats, tracker, and ingest (to reuse account registration) only; never
+FastAPI, so the CLI stays lightweight.
 """
 import dataclasses
 import json
@@ -28,6 +29,8 @@ from stats.sessions import (
     group_sessions,
 )
 from stats.recurring import MIN_CO_OCCURRENCE, split_recurring
+
+from ingest import accounts as ingest_accounts
 
 from api import match_detail as detail
 from api import queries
@@ -110,6 +113,12 @@ def matchups(conn: sqlite3.Connection, scope: Scope,
     names = queries.hero_names(conn)
     images = queries.hero_images(conn)
 
+    # Kill trades per enemy hero (design note 3), from the same scope. A separate
+    # query so it can't perturb the games-faced counts above; raw counts only --
+    # any future kill-trade verdict would belong in stats/, not here.
+    trades = {t["enemy_hero"]: t
+              for t in queries.personal_kill_trades(conn, scope, my_hero_id=hero_id)}
+
     agg: dict[int, dict] = {}
     for row in personal:
         enemy = row["enemy_hero"]
@@ -126,12 +135,15 @@ def matchups(conn: sqlite3.Connection, scope: Scope,
         # Every aggregated enemy is returned; min_games is an "enough to judge"
         # line the UI reads off the verdict, not a row filter. Thin rows still
         # resolve to not_enough_data via the stats floor.
+        t = trades.get(enemy, {})
         row = {
             "enemy_hero_id": enemy,
             "enemy_hero_name": names.get(enemy, str(enemy)),
             "enemy_hero_image_url": images.get(enemy),
             "games": b["games"],
             "wins": b["wins"],
+            "kills_by_them_on_you": t.get("kills_by_them_on_you", 0),
+            "kills_by_you_on_them": t.get("kills_by_you_on_them", 0),
         }
         row.update(_stat_fields(b["wins"], b["games"], b["gw"], b["gm"]))
         rows.append(row)
@@ -401,6 +413,44 @@ def accounts(conn: sqlite3.Connection) -> list[dict]:
             for a in queries.list_tracked_accounts(conn)]
 
 
+def add_account(conn: sqlite3.Connection, identifier: int | str,
+                display_name: str | None = None) -> dict:
+    """Import a tracked account and return its stored row (the importer endpoint).
+
+    Reuses the CLI's ingest.accounts.add_account, which idempotently inserts the
+    tracked_accounts + sync_state rows. That insert IS the enqueue: the worker's
+    discovery loop reads every tracked account each cycle, so nothing is fetched
+    here -- the request returns at once and the worker does the ingestion later.
+
+    is_self stays False on purpose: importing (or, later, "claiming") an account
+    is not the same as marking it the single 'self' account -- a concept per-user
+    ownership will replace. Re-adding an existing account returns its stored row
+    unchanged (INSERT OR IGNORE), so the response is always the truth on disk.
+
+    Raises ValueError (from to_account_id) on an unparseable identifier; the
+    handler turns that into a 400.
+    """
+    account_id = ingest_accounts.add_account(conn, identifier, display_name=display_name)
+    stored = queries.get_tracked_account(conn, account_id)
+    return {**stored, "is_self": bool(stored["is_self"])}
+
+
+def rename_account(conn: sqlite3.Connection, account_id: int,
+                   display_name: str | None) -> dict:
+    """Set a tracked account's display name (the namer). Returns {"ok": False}
+    when the account isn't tracked so the handler can 404; otherwise {"ok": True}
+    plus the updated row. Mirrors confirm_candidate's get-then-write shape."""
+    if queries.get_tracked_account(conn, account_id) is None:
+        return {"ok": False}
+    conn.execute(
+        "UPDATE tracked_accounts SET display_name = ? WHERE account_id = ?",
+        (display_name, account_id),
+    )
+    conn.commit()
+    updated = queries.get_tracked_account(conn, account_id)
+    return {"ok": True, **updated, "is_self": bool(updated["is_self"])}
+
+
 # ── Overview / sync / eras ───────────────────────────────────────────────────
 
 def sync_status(conn: sqlite3.Connection) -> dict:
@@ -511,6 +561,33 @@ def match_detail(conn: sqlite3.Connection, match_id: int,
                 "item_image_url": item_images.get(b["item_id"]),
             })
 
+    # Per-match kill trades vs each opponent (design note 2): raw counts in both
+    # directions, attributed by slot off kill_events so an anonymized opponent
+    # (account_id = 0) is still counted, with its hero surfaced for labelling.
+    # Enemy team only -- kills are cross-team, so a teammate row would be 0/0.
+    # No verdict here: a kill-trade verdict needs a baseline and lives in stats/.
+    trades = []
+    if perspective_slot is not None:
+        perspective_team = next(
+            (p["team"] for p in players if p["player_slot"] == perspective_slot), None)
+        counts = {(t["killer_slot"], t["victim_slot"]): t["n"]
+                  for t in queries.match_kill_trades(conn, match_id)}
+        for p in players:
+            if p["team"] == perspective_team:        # skips the perspective and its team
+                continue
+            slot = p["player_slot"]
+            trades.append({
+                "player_slot": slot,
+                "account_id": p["account_id"],
+                "hero_id": p["hero_id"],
+                "hero_name": p["hero_name"],
+                "image_url": p["image_url"],
+                "team": p["team"],
+                "kills_by_them_on_you": counts.get((slot, perspective_slot), 0),
+                "kills_by_you_on_them": counts.get((perspective_slot, slot), 0),
+            })
+        trades.sort(key=lambda t: t["player_slot"])
+
     return {
         "match_id": row["match_id"],
         "start_time": row["start_time"],
@@ -523,6 +600,7 @@ def match_detail(conn: sqlite3.Connection, match_id: int,
         "players": players,
         "purchases": purchases,
         "deaths": deaths,
+        "trades": trades,
     }
 
 

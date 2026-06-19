@@ -20,6 +20,7 @@ class ParsedMatch:
     match_row: dict
     players: list[dict]
     purchases: list[tuple]  # (match_id, player_slot, account_id, item_id, purchase_time_s, sold_time_s)
+    kill_events: list[tuple]  # (match_id, game_time_s, victim_slot, killer_slot)
 
 
 def finals_from_stats(stats: list[dict] | None) -> tuple[int | None, int | None, int | None]:
@@ -28,6 +29,39 @@ def finals_from_stats(stats: list[dict] | None) -> tuple[int | None, int | None,
         return (None, None, None)
     last = stats[-1]
     return (last.get("player_damage"), last.get("boss_damage"), last.get("player_healing"))
+
+
+def derive_kill_events(meta: dict) -> list[tuple]:
+    """Per-kill rows from each player's death_details[]. Pure, no DB/HTTP.
+
+    This is the storage-facing sibling of api.match_detail.parse_deaths and walks
+    death_details the same way (kept separate because ingest must not import api):
+    each player owns the array of their own deaths, so the victim is that player
+    and the killer is `killer_player_slot`. Two deliberate differences for storage:
+
+    - a killer slot that maps to no roster player (a tower/creep kill) is stored as
+      killer_slot = NULL -- there's nothing to join to -- rather than dropping the
+      event, so the death is never lost;
+    - rows are ordered by game_time_s (NULLs last) for a stable, readable feed.
+
+    Every field is read with .get() so a sparse or empty ('{}') payload yields an
+    empty list instead of raising. Each row: (match_id, game_time_s, victim_slot,
+    killer_slot), matching the kill_events columns.
+    """
+    info = meta.get("match_info") or {}
+    match_id = info.get("match_id")
+    players = info.get("players") or []
+    roster_slots = {p.get("player_slot") for p in players}
+    events: list[tuple] = []
+    for p in players:
+        victim_slot = p.get("player_slot")
+        for d in p.get("death_details") or []:
+            killer_slot = d.get("killer_player_slot")
+            if killer_slot not in roster_slots:
+                killer_slot = None  # tower / creep: no roster player to attribute to
+            events.append((match_id, d.get("game_time_s"), victim_slot, killer_slot))
+    events.sort(key=lambda e: (e[1] is None, e[1]))
+    return events
 
 
 def parse_metadata(meta: dict, raw_body: str, shop_item_ids: set[int],
@@ -81,7 +115,7 @@ def parse_metadata(meta: dict, raw_body: str, shop_item_ids: set[int],
                 purchases.append((match_id, p["player_slot"], p["account_id"], item_id,
                                   entry.get("game_time_s"), entry.get("sold_time_s", 0)))
 
-    return ParsedMatch(match_row, players, purchases)
+    return ParsedMatch(match_row, players, purchases, derive_kill_events(meta))
 
 
 def era_id_for(conn: sqlite3.Connection, start_time_iso: str) -> int | None:
@@ -121,9 +155,26 @@ def insert_match(conn: sqlite3.Connection, parsed: ParsedMatch) -> None:
         " VALUES (?, ?, ?, ?, ?, ?)",
         parsed.purchases,
     )
+    replace_kill_events(conn, m["match_id"], parsed.kill_events)
+
+
+def replace_kill_events(conn: sqlite3.Connection, match_id: int,
+                        events: list[tuple]) -> None:
+    """Idempotently write a match's kill_events: clear this match's rows, then
+    insert the derived ones. Delete-then-insert (rather than INSERT OR IGNORE)
+    because event_id is an autoincrement surrogate with no natural key to dedupe
+    on -- so the backfill can re-run without piling up duplicates. On first ingest
+    the DELETE simply matches nothing. Caller owns the transaction (hard rule 4)."""
+    conn.execute("DELETE FROM kill_events WHERE match_id = ?", (match_id,))
+    conn.executemany(
+        "INSERT INTO kill_events(match_id, game_time_s, victim_slot, killer_slot)"
+        " VALUES (?, ?, ?, ?)",
+        events,
+    )
 
 
 # Re-exported for convenience: tests and callers treat parse as the module
 # that knows how metadata timestamps become ISO strings.
-__all__ = ["ParsedMatch", "finals_from_stats", "parse_metadata", "era_id_for",
-           "insert_match", "unix_to_iso"]
+__all__ = ["ParsedMatch", "finals_from_stats", "derive_kill_events",
+           "parse_metadata", "era_id_for", "insert_match", "replace_kill_events",
+           "unix_to_iso"]

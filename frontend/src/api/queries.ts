@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Scope } from '../scope/useScope'
-import { fetchJson, postJson, scopeParams } from './client'
+import { fetchJson, patchJson, postJson, scopeParams } from './client'
 import type {
   ErasResponse,
   Improvement,
@@ -92,10 +92,14 @@ export function useRecurringPlayers(scope: Scope) {
   })
 }
 
-export function useSyncStatus() {
+// `refetchInterval` lets a screen poll the worker's heartbeat (the Accounts
+// screen passes one so a freshly imported account's queue depth updates live).
+// Omitted elsewhere, so existing callers keep the default 30s-stale behavior.
+export function useSyncStatus(refetchInterval?: number) {
   return useQuery({
     queryKey: ['sync-status'],
     queryFn: () => fetchJson<SyncStatus>('/api/sync-status'),
+    refetchInterval,
   })
 }
 
@@ -137,13 +141,42 @@ export function useRanks() {
   })
 }
 
-// Tracked accounts for the ScopeBar's account switcher. Effectively static for a
-// viewing session (new accounts come from the ingest CLI), so cache like ranks.
+// Tracked accounts for the ScopeBar's account switcher and the Accounts screen.
+// staleTime: Infinity because the list rarely changes within a session; the
+// add/rename mutations below invalidate ['accounts'] to force a refetch when it
+// does (invalidation overrides staleTime).
 export function useAccounts() {
   return useQuery({
     queryKey: ['accounts'],
     queryFn: () => fetchJson<TrackedAccount[]>('/api/accounts'),
     staleTime: Infinity,
+  })
+}
+
+// Import a tracked account (the owner-gated POST /api/accounts). The server only
+// records the account and returns 202; the worker ingests later, so on success
+// we refresh the accounts list and the sync-status badge (queue depth bumps as
+// the worker discovers matches). Mirrors useCandidateMutation's invalidation.
+export function useAddAccount() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { account_id: string; display_name?: string }) =>
+      postJson<TrackedAccount>('/api/accounts', body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['accounts'] })
+      qc.invalidateQueries({ queryKey: ['sync-status'] })
+    },
+  })
+}
+
+// Rename a tracked account (the owner-gated PATCH). Only the accounts list
+// reflects the name, so that's all we invalidate.
+export function useRenameAccount() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ accountId, displayName }: { accountId: number; displayName: string }) =>
+      patchJson<TrackedAccount>(`/api/accounts/${accountId}`, { display_name: displayName }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['accounts'] }),
   })
 }
 

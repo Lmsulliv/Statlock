@@ -2,10 +2,12 @@ import { Link, useLocation, useParams } from 'react-router-dom'
 import { useMatchDetail } from '../api/queries'
 import type {
   DeathEvent,
+  KillTrade,
   MatchDetail as MatchDetailData,
   MatchDetailPlayer,
   MatchPurchase,
 } from '../api/types'
+import { EmptyState } from '../components/EmptyState'
 import { HeroIcon } from '../components/HeroIcon'
 import { QueryBoundary } from '../components/QueryBoundary'
 import { fmtClock, gameModeLabel } from '../format'
@@ -72,6 +74,11 @@ function MatchBody({ data }: { data: MatchDetailData }) {
         <h2 className="card-title">Kill / death timeline</h2>
         <Timeline deaths={data.deaths} />
       </section>
+
+      <section className="card">
+        <h2 className="card-title">Kill trades</h2>
+        <KillTrades trades={data.trades} />
+      </section>
     </div>
   )
 }
@@ -125,6 +132,41 @@ function Purchases({ purchases }: { purchases: MatchPurchase[] }) {
         </li>
       ))}
     </ul>
+  )
+}
+
+// Per-opponent kill trades vs the perspective account: their kills on you and
+// your kills on them, both raw counts. No verdict — a kill-trade verdict needs a
+// baseline and would live in stats/, not the view. Enemy team only, and labeled
+// by hero because anonymized opponents share account_id 0 (indistinguishable by
+// id) and the response carries no player name.
+function KillTrades({ trades }: { trades: KillTrade[] }) {
+  // The backend emits a row per enemy even with zero kills (and [] when the
+  // perspective didn't play this match), so detect "no kill events" explicitly.
+  const hasEvents = trades.some(
+    (t) => t.kills_by_them_on_you > 0 || t.kills_by_you_on_them > 0,
+  )
+  if (trades.length === 0 || !hasEvents) {
+    return <EmptyState title="No kill events recorded for this match." />
+  }
+  return (
+    <div className="roster">
+      <div className="trade-row trade-head">
+        <span className="muted">Enemy</span>
+        <span className="muted">They killed you</span>
+        <span className="muted">You killed them</span>
+      </div>
+      {trades.map((t) => (
+        <div key={t.player_slot} className="trade-row">
+          <span className="enemy-cell">
+            <HeroIcon name={t.hero_name} url={t.image_url} />
+            {t.hero_name}
+          </span>
+          <span className="player-kda">{t.kills_by_them_on_you}</span>
+          <span className="player-kda">{t.kills_by_you_on_them}</span>
+        </div>
+      ))}
+    </div>
   )
 }
 

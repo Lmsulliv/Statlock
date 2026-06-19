@@ -7,6 +7,7 @@ statistics. The frontend renders what these return and computes nothing.
 import sqlite3
 
 from fastapi import Depends, FastAPI, HTTPException
+from pydantic import BaseModel
 
 from api import service
 from api.config import db_path, owner_enabled
@@ -88,6 +89,43 @@ def get_ranks(conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
 @app.get("/api/accounts")
 def get_accounts(conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
     return service.accounts(conn)
+
+
+class AddAccountBody(BaseModel):
+    # int | str: the identifier may be a raw account id, a 17-digit SteamID64, or
+    # a profile URL -- service.add_account normalizes them all (ingest.to_account_id).
+    account_id: int | str
+    display_name: str | None = None
+
+
+class RenameAccountBody(BaseModel):
+    display_name: str | None = None
+
+
+@app.post("/api/accounts", status_code=202, dependencies=[Depends(require_owner)])
+def post_account(body: AddAccountBody,
+                 conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+    """Import a tracked account. 202 Accepted, not 200/201: this only records the
+    account (the enqueue); the worker ingests its matches on a later cycle, so we
+    never block the request on the rate-limited API.
+
+    Owner-gated today; the same shape becomes the per-user 'claim my account'
+    endpoint under real auth. The handler doesn't assume who the actor is -- only
+    that require_owner let them through -- so that swap touches just the gate."""
+    try:
+        return service.add_account(conn, body.account_id, body.display_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/api/accounts/{account_id}", dependencies=[Depends(require_owner)])
+def patch_account(account_id: int, body: RenameAccountBody,
+                  conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+    """Rename a tracked account (the namer), owner-gated like the importer."""
+    result = service.rename_account(conn, account_id, body.display_name)
+    if not result["ok"]:
+        raise HTTPException(status_code=404, detail="Account not tracked")
+    return result
 
 
 @app.get("/api/improvement")

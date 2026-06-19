@@ -289,6 +289,8 @@ def run_maintenance(conn, client, *, now=utcnow) -> dict:
     candidates = detect_era_candidates(conn, client, now=now)
 
     counts = _queue_counts(conn)
+    # Deferred rows (not-yet-parsed matches) are deliberately NOT part of queue
+    # depth: they are deprioritized background work, not a fresh backlog.
     queue_depth = counts.get("pending", 0) + counts.get("failed", 0)
     conn.execute(
         "INSERT INTO worker_meta(key, value) VALUES('last_maintenance_at', ?)"
@@ -304,9 +306,9 @@ def run_maintenance(conn, client, *, now=utcnow) -> dict:
         "queue_depth": queue_depth,
     }
     log.info(
-        "maintenance summary: fetched %d, failed %d, unavailable %d, queue depth %d, "
-        "revived %d, new era candidates %d",
-        counts.get("fetched", 0), counts.get("failed", 0), counts.get("unavailable", 0),
-        queue_depth, revived, candidates,
+        "maintenance summary: fetched %d, failed %d, deferred %d, unavailable %d, "
+        "queue depth %d, revived %d, new era candidates %d",
+        counts.get("fetched", 0), counts.get("failed", 0), counts.get("deferred", 0),
+        counts.get("unavailable", 0), queue_depth, revived, candidates,
     )
     return summary

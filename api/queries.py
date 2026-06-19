@@ -34,6 +34,16 @@ def list_tracked_accounts(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_tracked_account(conn: sqlite3.Connection, account_id: int) -> dict | None:
+    """One tracked account, or None if it isn't tracked (lets the namer 404)."""
+    row = conn.execute(
+        "SELECT account_id, display_name, is_self FROM tracked_accounts"
+        " WHERE account_id = ?",
+        (account_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def latest_snapshot_id(conn: sqlite3.Connection) -> int | None:
     row = conn.execute("SELECT MAX(snapshot_id) AS s FROM baseline_snapshots").fetchone()
     return row["s"] if row and row["s"] is not None else None
@@ -93,6 +103,52 @@ def personal_matchups(conn: sqlite3.Connection, scope: Scope,
         " WHERE me.account_id = ? AND m.game_mode = ?"
         + era_sql + badge_sql + hero_sql + lane_sql +
         " GROUP BY me.hero_id, opp.hero_id"
+    )
+    params = [scope.account_id, scope.game_mode] + era_params + badge_params + hero_params
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def personal_kill_trades(conn: sqlite3.Connection, scope: Scope,
+                         my_hero_id: int | None = None) -> list[dict]:
+    """Kill counts per enemy hero for the scoped account, in both directions:
+    {enemy_hero, kills_by_you_on_them, kills_by_them_on_you}. The kill-trade twin
+    of personal_matchups -- the same me/opponent self-join and the SAME scope
+    clauses, so these counts line up with that query's games-faced figures -- but
+    it also joins kill_events on the (me, opp) slot pair and tallies each
+    direction. Killer/victim resolve to a hero through match_players by
+    (match_id, player_slot), so an anonymized opponent (account_id = 0) still
+    counts under the hero it piloted.
+
+    Kept separate from personal_matchups on purpose: folding this kill_events join
+    into that query would multiply its rows and corrupt its COUNT(*)/SUM(won)
+    games-faced counts. An enemy hero faced but never traded with simply doesn't
+    appear here, and the caller merges it back in as 0. NULL killer_slot rows
+    (tower/creep) match neither slot condition, so non-player kills never count."""
+    era_sql, era_params = _era_clause(scope, "m.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "me.team")
+    hero_sql, hero_params = ("", [])
+    if my_hero_id is not None:
+        hero_sql, hero_params = " AND me.hero_id = ?", [my_hero_id]
+    lane_sql = (" AND (me.lane + 1) / 2 = (opp.lane + 1) / 2") if scope.in_lane else ""
+
+    sql = (
+        "SELECT opp.hero_id AS enemy_hero,"
+        " SUM(CASE WHEN ke.killer_slot = me.player_slot"
+        "          AND ke.victim_slot = opp.player_slot THEN 1 ELSE 0 END)"
+        "   AS kills_by_you_on_them,"
+        " SUM(CASE WHEN ke.killer_slot = opp.player_slot"
+        "          AND ke.victim_slot = me.player_slot THEN 1 ELSE 0 END)"
+        "   AS kills_by_them_on_you"
+        " FROM match_players me"
+        " JOIN match_players opp"
+        "   ON opp.match_id = me.match_id AND opp.team != me.team"
+        " JOIN matches m ON m.match_id = me.match_id"
+        " JOIN kill_events ke ON ke.match_id = me.match_id"
+        "   AND ((ke.killer_slot = me.player_slot AND ke.victim_slot = opp.player_slot)"
+        "     OR (ke.killer_slot = opp.player_slot AND ke.victim_slot = me.player_slot))"
+        " WHERE me.account_id = ? AND m.game_mode = ?"
+        + era_sql + badge_sql + hero_sql + lane_sql +
+        " GROUP BY opp.hero_id"
     )
     params = [scope.account_id, scope.game_mode] + era_params + badge_params + hero_params
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
@@ -331,6 +387,21 @@ def match_purchases(conn: sqlite3.Connection, match_id: int,
         " FROM match_item_purchases WHERE match_id = ? AND player_slot = ?"
         " ORDER BY purchase_time_s",
         (match_id, player_slot),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def match_kill_trades(conn: sqlite3.Connection, match_id: int) -> list[dict]:
+    """Per-(killer_slot, victim_slot) kill counts for one match, read straight
+    from kill_events, as {killer_slot, victim_slot, n}. Slot-keyed, so it
+    attributes kills even to anonymized opponents (account_id = 0) whose slot is
+    still unique within the match. NULL-killer rows (tower/creep) are returned as
+    stored; the service never looks them up, since a trade needs two players."""
+    rows = conn.execute(
+        "SELECT killer_slot, victim_slot, COUNT(*) AS n"
+        " FROM kill_events WHERE match_id = ?"
+        " GROUP BY killer_slot, victim_slot",
+        (match_id,),
     ).fetchall()
     return [dict(r) for r in rows]
 
