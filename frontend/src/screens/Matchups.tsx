@@ -37,13 +37,13 @@ const COLUMNS: Column[] = [
     key: 'kills_on_you',
     label: 'Kills on you',
     title:
-      'Raw total kills this enemy hero landed on you across the games faced — a count, not a rate.',
+      'Raw kills this enemy hero landed on you, summed across every game faced.',
   },
   {
     key: 'your_kills',
     label: 'Your kills',
     title:
-      'Raw total kills you landed on this enemy hero across the games faced — a count, not a rate.',
+      'Raw kills you landed on this enemy hero, summed across every game faced.',
   },
   { key: 'winrate', label: 'Win rate & 95% CI' },
   {
@@ -60,13 +60,13 @@ const COLUMNS: Column[] = [
     key: 'delta',
     label: 'Adj. Δ',
     title:
-      'Shrinkage-adjusted rate minus global — thin samples are pulled toward the baseline first.',
+      'Shrinkage-adjusted rate minus global; thin samples are pulled toward the baseline first.',
   },
   {
     key: 'verdict',
     label: 'Verdict',
     title:
-      'Weighs sample size and confidence, not raw win rate — a thin sample reads as inconclusive, not a strong call.',
+      'Weighs sample size and confidence, so a thin sample reads as inconclusive until a well-supported gap earns a verdict.',
   },
 ]
 
@@ -112,11 +112,11 @@ export function Matchups() {
     <section>
       <h1 className="screen-title">Matchups</h1>
       <p className="screen-sub">
-        One row per enemy hero, sorted A→Z by default — click any header to
-        re-sort. Win rate shows as a 95% confidence interval (a bar with
-        whiskers), never a bare percentage; the gold dashed line marks the global
-        baseline when available, and color marks a confirmed verdict, not a big
-        number.
+        One row per enemy hero, sorted A→Z by default; click any header to
+        re-sort. Win rate always shows as a 95% confidence interval (a bar with
+        whiskers), and the gold dashed line marks the global baseline when
+        available. Color marks a confirmed verdict, lighting up only when the
+        interval clears the baseline.
       </p>
       <QueryBoundary query={matchups}>
         {(rows) =>

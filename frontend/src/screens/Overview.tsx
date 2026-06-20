@@ -86,7 +86,7 @@ function EraCandidateBanner({ count }: { count: number }) {
 function MmrChart({ series }: { series: MmrPoint[] }) {
   const ranks = useRanks()
   if (series.length === 0) {
-    return <p className="muted">No rank history yet — it appears once ranked matches are ingested.</p>
+    return <p className="muted">No rank history yet. It appears once ranked matches are ingested.</p>
   }
 
   const W = 680
@@ -141,7 +141,7 @@ function RecentMatches({ matches }: { matches: RecentMatch[] }) {
   const navigate = useNavigate()
   const { search } = useLocation()
   if (matches.length === 0) {
-    return <p className="muted">No matches ingested yet — the worker may still be syncing.</p>
+    return <p className="muted">No matches ingested yet. The worker may still be syncing.</p>
   }
   // Each row opens the match detail view, carrying `search` so the detail view
   // sees the same scope (and thus the same "you" account) as this Overview.

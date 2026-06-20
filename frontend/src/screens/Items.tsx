@@ -50,19 +50,19 @@ const COLUMNS: Column[] = [
     key: 'delta',
     label: 'Adj. Δ',
     title:
-      'Shrinkage-adjusted rate minus global — thin samples are pulled toward the baseline first.',
+      'Shrinkage-adjusted rate minus global; thin samples are pulled toward the baseline first.',
   },
   {
     key: 'timing',
     label: 'Purchase timing',
     title:
-      'Your average purchase time minus the global average — when you buy this, not whether it wins.',
+      'Your average purchase time minus the global average, capturing when you buy this item independent of its win rate.',
   },
   {
     key: 'verdict',
     label: 'Verdict',
     title:
-      'Weighs sample size and confidence, not raw win rate — a thin sample reads as inconclusive, not a strong call.',
+      'Weighs sample size and confidence, so a thin sample reads as inconclusive until a well-supported gap earns a verdict.',
   },
 ]
 
@@ -107,10 +107,11 @@ export function Items() {
       <h1 className="screen-title">Items</h1>
       <p className="screen-sub">
         One row per item for the hero you’ve picked in the scope bar, sorted A→Z
-        by default — click any header to re-sort. Win rate shows as a 95%
-        confidence interval, never a bare percentage; color marks a confirmed
-        verdict, not a big number. The purchase-timing column is independent of
-        win rate — it’s when you buy the item versus everyone else.
+        by default; click any header to re-sort. Win rate always shows as a 95%
+        confidence interval, and color marks a confirmed verdict, lighting up only
+        when the interval clears the baseline. The purchase-timing column stands on
+        its own: it compares when you buy the item against everyone else,
+        independent of win rate.
       </p>
       {scope.heroId === null ? (
         <ItemsNoHero />

@@ -29,8 +29,8 @@ export function verdictLabel(verdict: Verdict, games: number): string {
 export function verdictHint(verdict: Verdict, games: number): string | undefined {
   if (verdict !== 'not_enough_data') return undefined
   return games < VERDICT_FLOOR
-    ? `Fewer than ${VERDICT_FLOOR} games — too few to earn a verdict.`
-    : 'Your rate is too close to the baseline to call — the confidence interval still includes it.'
+    ? `Fewer than ${VERDICT_FLOOR} games, too few to earn a verdict.`
+    : 'Your rate is too close to the baseline to call; the confidence interval still includes it.'
 }
 
 export const VERDICT_TONE: Record<Verdict, string> = {

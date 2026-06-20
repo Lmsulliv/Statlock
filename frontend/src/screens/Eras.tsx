@@ -20,8 +20,8 @@ export function Eras() {
       <p className="screen-sub">
         Eras are the balance windows your stats are scoped to. The system proposes
         candidates from patch notes; you decide. Confirming one closes the current
-        era at the patch date and re-bins every match — no re-ingestion — so the
-        new era has correctly scoped numbers immediately.
+        era at the patch date and re-bins every match in place, reusing the data
+        already stored, so the new era has correctly scoped numbers immediately.
       </p>
       <QueryBoundary query={eras}>
         {(data) =>
@@ -55,7 +55,7 @@ function Candidates({ candidates }: { candidates: EraCandidate[] }) {
         Pending candidates <span className="muted">({candidates.length})</span>
       </h2>
       {(confirm.isError || dismiss.isError) && (
-        <p className="state-error">Couldn’t update the candidate — is the backend running?</p>
+        <p className="state-error">Couldn’t update the candidate. Is the backend running?</p>
       )}
       {candidates.length === 0 ? (
         <p className="muted">
@@ -108,7 +108,7 @@ function EraList({ eras }: { eras: Era[] }) {
         Eras <span className="muted">({eras.length})</span>
       </h2>
       {eras.length === 0 ? (
-        <p className="muted">No eras defined yet — confirm a candidate to create the first one.</p>
+        <p className="muted">No eras defined yet. Confirm a candidate to create the first one.</p>
       ) : (
         <table className="data-table">
           <thead>

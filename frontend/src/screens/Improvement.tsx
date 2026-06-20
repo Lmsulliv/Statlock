@@ -26,11 +26,11 @@ export function Improvement() {
     <section>
       <h1 className="screen-title">Directions for improvement</h1>
       <p className="screen-sub">
-        A short, honest digest — not every number, just the calls the data
-        actually supports. Confirmed weaknesses and strengths have intervals that
-        clear the global baseline; the watch list is large gaps that aren’t
-        confirmed yet, kept separate on purpose. Every rate is shown with its 95%
-        interval, never bare.
+        A short, honest digest of just the calls the data actually supports.
+        Confirmed weaknesses and strengths have intervals that clear the global
+        baseline; the watch list collects large gaps that are still short of
+        confirmation, kept separate on purpose. Every rate is shown with its 95%
+        interval.
       </p>
       <QueryBoundary query={improvement}>
         {(data) =>
@@ -67,17 +67,17 @@ function KindDigest({
       <h2 className="improve-heading">{heading}</h2>
       <ImprovementSection
         title="Confirmed weaknesses"
-        hint="Significant negative deltas, largest first — these are the priorities."
+        hint="Significant negative deltas, largest first; these are the priorities."
         entries={pick(data.confirmed_weaknesses)}
       />
       <ImprovementSection
         title="Confirmed strengths"
-        hint="Significant positive deltas — what to lean on."
+        hint="Significant positive deltas to lean on."
         entries={pick(data.confirmed_strengths)}
       />
       <ImprovementSection
         title="Watch list"
-        hint="Large gaps whose intervals don’t yet clear the baseline — not confirmed, just worth watching."
+        hint="Large gaps whose intervals fall just short of clearing the baseline, worth keeping an eye on."
         entries={pick(data.watch_list)}
         watch
       />

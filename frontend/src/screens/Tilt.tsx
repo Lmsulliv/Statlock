@@ -18,13 +18,13 @@ export function Tilt() {
     <section>
       <h1 className="screen-title">Tilt</h1>
       <p className="screen-sub">
-        Performance by <em>when</em> you play, not who you face. Your matches are
-        grouped into sessions (a sitting; a gap of a few hours starts a new one),
-        then split by how far into a session a game is and by how many losses came
-        right before it. Each bucket is judged against{' '}
-        <strong>your own overall win rate</strong> — not a global baseline — so a
-        verdict means a real departure from your usual self. Every rate shows its
-        95% interval, and thin buckets stay “not enough data.”
+        Measures how you perform across a single sitting. Games are grouped into
+        sessions, with a new session starting after a break of about three hours,
+        then split by how deep into the session each game falls and by how many
+        losses came right before it. Each group is judged against{' '}
+        <strong>your own overall win rate</strong>, so a verdict means a real shift
+        from how you usually play. Every rate shows its 95% interval, and thin
+        groups stay marked “not enough data.”
       </p>
       <QueryBoundary query={tilt}>
         {(data) => (data.overall.games === 0 ? <TiltEmpty /> : <TiltBody data={data} />)}
@@ -76,13 +76,13 @@ function TiltTable({ rows, firstHeader }: { rows: TiltBucket[]; firstHeader: str
           <th>{firstHeader}</th>
           <th>Record</th>
           <th className="col-interval">Win rate &amp; 95% CI</th>
-          <th title="Your overall win rate at this scope — the baseline each bucket is judged against.">
+          <th title="Your overall win rate at this scope; the baseline each bucket is judged against.">
             Your overall
           </th>
-          <th title="Shrinkage-adjusted rate minus your overall — thin samples are pulled toward your baseline first.">
+          <th title="Shrinkage-adjusted rate minus your overall; thin samples are pulled toward your baseline first.">
             Adj. Δ
           </th>
-          <th title="Weighs sample size and confidence, not raw win rate — a thin bucket reads as inconclusive.">
+          <th title="Weighs sample size and confidence, so a thin bucket reads as inconclusive.">
             Verdict
           </th>
         </tr>

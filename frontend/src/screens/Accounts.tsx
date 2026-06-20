@@ -24,9 +24,9 @@ function errorMessage(error: unknown): string {
     if (error.status === 400)
       return "That doesn’t look like an account id, SteamID64, or profile URL."
     if (error.status === 403)
-      return 'Account management is owner-only — set DEADLOCK_OWNER on the API.'
+      return 'Account management is owner-only. Set DEADLOCK_OWNER on the API.'
   }
-  return 'Something went wrong — is the backend running?'
+  return 'Something went wrong. Is the backend running?'
 }
 
 export function Accounts() {
@@ -35,8 +35,8 @@ export function Accounts() {
       <h1 className="screen-title">Accounts</h1>
       <p className="screen-sub">
         Track a new account by id, SteamID64, or profile URL, and give the ones
-        you track friendly names. Adding an account only queues it — the worker
-        discovers and ingests its matches on its next cycle; nothing is fetched
+        you track friendly names. Adding an account only queues it; the worker
+        discovers and ingests its matches on its next cycle, so nothing is fetched
         while you wait here.
       </p>
       <div className="accounts">
@@ -102,7 +102,7 @@ function AddAccountForm() {
       {add.isError && <p className="state-error">{errorMessage(add.error)}</p>}
       {add.isSuccess && (
         <p className="state-ok">
-          Queued account {add.data.account_id} — the worker will ingest its
+          Queued account {add.data.account_id}. The worker will ingest its
           matches on its next discovery cycle.
         </p>
       )}

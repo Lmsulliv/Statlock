@@ -22,13 +22,13 @@ export function RecurringPlayers() {
     <section>
       <h1 className="screen-title">Recurring players</h1>
       <p className="screen-sub">
-        The other real players who keep turning up across your matches — split
+        The other real players who keep turning up across your matches, split
         into <strong>teammates</strong> (your win rate <em>with</em> them) and{' '}
         <strong>opponents</strong> (your win rate <em>against</em> them). Each is
-        judged against <strong>your own win rate</strong> over the same matches —
-        not a global baseline — so a verdict means you do better or worse with (or
-        against) that player than your usual self. Every rate shows its 95%
-        interval, and players you've only met a few times stay “not enough data.”
+        judged against <strong>your own win rate</strong> over the same matches, so
+        a verdict means you do better or worse with (or against) that player than
+        you usually do. Every rate shows its 95% interval, and players you've only
+        met a few times stay “not enough data.”
       </p>
       <QueryBoundary query={recurring}>
         {(data) =>
@@ -55,7 +55,7 @@ function RecurringBody({ data }: { data: RecurringPlayersResponse }) {
       </p>
 
       <section className="recurring-section">
-        <h2 className="improve-heading">Teammates — win rate with</h2>
+        <h2 className="improve-heading">Teammates: win rate with</h2>
         <p className="muted">
           Players who keep landing on your team, most-shared first. A confirmed
           strength is someone you genuinely win more alongside.
@@ -64,10 +64,10 @@ function RecurringBody({ data }: { data: RecurringPlayersResponse }) {
       </section>
 
       <section className="recurring-section">
-        <h2 className="improve-heading">Opponents — win rate against</h2>
+        <h2 className="improve-heading">Opponents: win rate against</h2>
         <p className="muted">
           Players you keep running into on the other side. A confirmed weakness is
-          a genuine nemesis — you beat them less than your usual self.
+          a genuine nemesis: you beat them less than you usually do.
         </p>
         <RecurringTable rows={data.opponents} firstHeader="Opponent" />
       </section>
@@ -94,13 +94,13 @@ function RecurringTable({ rows, firstHeader }: { rows: RecurringPlayer[]; firstH
           <th>{firstHeader}</th>
           <th>Record</th>
           <th className="col-interval">Win rate &amp; 95% CI</th>
-          <th title="Your overall win rate at this scope — the baseline each player is judged against.">
+          <th title="Your overall win rate at this scope; the baseline each player is judged against.">
             Your overall
           </th>
-          <th title="Shrinkage-adjusted rate minus your overall — thin samples are pulled toward your baseline first.">
+          <th title="Shrinkage-adjusted rate minus your overall; thin samples are pulled toward your baseline first.">
             Adj. Δ
           </th>
-          <th title="Weighs sample size and confidence, not raw win rate — a thin record reads as inconclusive.">
+          <th title="Weighs sample size and confidence, so a thin record reads as inconclusive.">
             Verdict
           </th>
         </tr>
