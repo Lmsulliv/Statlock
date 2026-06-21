@@ -1,7 +1,8 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import type { Scope } from '../scope/useScope'
-import { fetchJson, patchJson, postJson, scopeParams } from './client'
+import { deleteJson, fetchJson, postJson, putJson, scopeParams } from './client'
 import type {
+  AccountName,
   ErasResponse,
   Improvement,
   ItemRow,
@@ -169,14 +170,34 @@ export function useAddAccount() {
   })
 }
 
-// Rename a tracked account (the owner-gated PATCH). Only the accounts list
-// reflects the name, so that's all we invalidate.
-export function useRenameAccount() {
+// A rename changes a resolved name, which the API surfaces on the accounts list,
+// the recurring-players rows, and any open match detail. Invalidate all three
+// (prefix-matched, so every scoped variant refetches).
+function invalidateNames(qc: QueryClient) {
+  qc.invalidateQueries({ queryKey: ['accounts'] })
+  qc.invalidateQueries({ queryKey: ['recurring-players'] })
+  qc.invalidateQueries({ queryKey: ['match'] })
+}
+
+// Set a manual label for any account (the owner-gated namer, PUT). Works for
+// untracked co-players/opponents too, which is the point.
+export function useRenameName() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ accountId, displayName }: { accountId: number; displayName: string }) =>
-      patchJson<TrackedAccount>(`/api/accounts/${accountId}`, { display_name: displayName }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['accounts'] }),
+      putJson<AccountName>(`/api/accounts/${accountId}/name`, { display_name: displayName }),
+    onSuccess: () => invalidateNames(qc),
+  })
+}
+
+// Clear a manual label (DELETE), reverting the name to the Steam persona then the
+// bare id. Idempotent server-side, so it is safe even when no label was set.
+export function useClearName() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (accountId: number) =>
+      deleteJson<AccountName>(`/api/accounts/${accountId}/name`),
+    onSuccess: () => invalidateNames(qc),
   })
 }
 

@@ -35,3 +35,13 @@ def owner_enabled() -> bool:
     environment per-test and each request re-checks the current value.
     """
     return os.environ.get("DEADLOCK_OWNER", "").strip().lower() in _OWNER_TRUTHY
+
+
+def steam_api_key() -> str | None:
+    """Steam Web API key from STEAM_API_KEY, or None if unset/blank.
+
+    Optional by design: when None, persona fetching is a clean no-op and the
+    rest of the app falls back to bare account ids (graceful degradation). Read
+    fresh on every call (like db_path) so tests can monkeypatch it per-test.
+    """
+    return os.environ.get("STEAM_API_KEY", "").strip() or None

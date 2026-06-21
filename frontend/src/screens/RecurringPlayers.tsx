@@ -2,6 +2,7 @@ import { useRecurringPlayers, useSyncStatus } from '../api/queries'
 import type { RecurringPlayer, RecurringPlayersResponse } from '../api/types'
 import { BaselineCell, DeltaCell } from '../components/cells'
 import { EmptyState } from '../components/EmptyState'
+import { InlineRename } from '../components/InlineRename'
 import { IntervalBar } from '../components/IntervalBar'
 import { QueryBoundary } from '../components/QueryBoundary'
 import { SampleSize } from '../components/SampleSize'
@@ -10,7 +11,8 @@ import { useScope } from '../scope/useScope'
 
 const pct = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100)}%`)
 
-// Untracked players have no name yet, so fall back to the bare account id.
+// display_name is resolved server-side (manual label > Steam persona > id), so
+// it is normally a string; the ?? keeps a defensive fallback to the bare id.
 const playerLabel = (p: RecurringPlayer) =>
   p.display_name ?? `Account ${p.account_id}`
 
@@ -108,7 +110,12 @@ function RecurringTable({ rows, firstHeader }: { rows: RecurringPlayer[]; firstH
       <tbody>
         {rows.map((r) => (
           <tr key={r.account_id}>
-            <td className="player-name">{playerLabel(r)}</td>
+            <td className="player-name">
+              <span className="player-name-cell">
+                <span className="player-name-text">{playerLabel(r)}</span>
+                <InlineRename accountId={r.account_id} currentName={playerLabel(r)} />
+              </span>
+            </td>
             <td>
               <SampleSize games={r.games} wins={r.wins} />
             </td>

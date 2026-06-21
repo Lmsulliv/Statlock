@@ -1,6 +1,7 @@
-"""The in-app account importer + namer (api.app POST/PATCH /api/accounts).
+"""The in-app account importer (api.app POST /api/accounts).
 
-These exercise the owner-gated write endpoints that back the Accounts screen.
+These exercise the owner-gated importer that backs the Accounts screen. The
+rename API (PUT/DELETE /api/accounts/{id}/name) lives in tests/test_account_names.py.
 The autouse `_no_network` fixture (conftest) blocks `urlopen`, so a passing POST
 is itself proof that ingestion was NOT run in the request -- the endpoint only
 records the account (the enqueue) and returns 202; the worker does the fetching.
@@ -129,23 +130,13 @@ def test_add_is_idempotent(api_db, monkeypatch):
     assert count == 1
 
 
-# ── PATCH /api/accounts/{id}: the namer ──────────────────────────────────────
-
-def test_rename_forbidden_without_owner_flag(api_db):
-    resp = _client().patch("/api/accounts/1", json={"display_name": "x"})
-    assert resp.status_code == 403
-
-
-def test_rename_sets_display_name(api_db, monkeypatch):
+def test_add_with_name_writes_a_label(api_db, monkeypatch):
+    # account_labels is the single source of manual names, so add-with-name also
+    # lands a label (otherwise the resolver-backed views wouldn't show it).
     monkeypatch.setenv("DEADLOCK_OWNER", "true")
-    # The seeded self account (1) starts with no display_name.
-    resp = _client().patch("/api/accounts/1", json={"display_name": "Main"})
-    assert resp.status_code == 200
-    assert resp.json()["display_name"] == "Main"
-    assert _tracked(api_db, 1)["display_name"] == "Main"
-
-
-def test_rename_unknown_account_is_404(api_db, monkeypatch):
-    monkeypatch.setenv("DEADLOCK_OWNER", "true")
-    resp = _client().patch("/api/accounts/999999", json={"display_name": "x"})
-    assert resp.status_code == 404
+    _client().post("/api/accounts", json={"account_id": ACCOUNT_ID, "display_name": "smurf"})
+    label = api_db.execute(
+        "SELECT display_name FROM account_labels WHERE owner_id=0 AND account_id=?",
+        (ACCOUNT_ID,),
+    ).fetchone()
+    assert label["display_name"] == "smurf"

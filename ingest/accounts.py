@@ -40,6 +40,11 @@ def to_account_id(value: str | int) -> int:
     return number
 
 
+def to_steamid64(account_id: int) -> int:
+    """32-bit account id -> SteamID64. Inverse of to_account_id()."""
+    return account_id + STEAMID64_OFFSET
+
+
 def add_account(conn, value: str | int, *, display_name: str | None = None,
                 is_self: bool = False, now=utcnow) -> int:
     """Register a tracked account (idempotent) and ensure its sync_state row."""

@@ -1,0 +1,31 @@
+{
+  "response": {
+    "players": [
+      {
+        "steamid": "76561197960265828",
+        "communityvisibilitystate": 3,
+        "profilestate": 1,
+        "personaname": "Alice",
+        "profileurl": "https://steamcommunity.com/id/alice/",
+        "avatar": "https://avatars.steamstatic.com/alice.jpg",
+        "avatarmedium": "https://avatars.steamstatic.com/alice_medium.jpg",
+        "avatarfull": "https://avatars.steamstatic.com/alice_full.jpg",
+        "avatarhash": "aaaa",
+        "personastate": 1,
+        "lastlogoff": 1700000000
+      },
+      {
+        "steamid": "76561197960266028",
+        "communityvisibilitystate": 3,
+        "profilestate": 1,
+        "personaname": "Carol",
+        "profileurl": "https://steamcommunity.com/profiles/76561197960266028/",
+        "avatar": "https://avatars.steamstatic.com/carol.jpg",
+        "avatarmedium": "https://avatars.steamstatic.com/carol_medium.jpg",
+        "avatarfull": "https://avatars.steamstatic.com/carol_full.jpg",
+        "avatarhash": "cccc",
+        "personastate": 0
+      }
+    ]
+  }
+}

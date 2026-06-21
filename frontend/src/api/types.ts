@@ -64,9 +64,10 @@ export interface TiltResponse {
 
 // One other real player who keeps sharing your matches. Carries the same
 // StatFields as a matchup/tilt row, but `global_rate`/`global_matches` are your
-// OWN win rate over the same match set (overall, or on the filtered hero) — the
-// "you vs your usual self" baseline. `display_name` is null unless the player is
-// a tracked account; otherwise the UI shows the bare account_id.
+// OWN win rate over the same match set (overall, or on the filtered hero), the
+// "you vs your usual self" baseline. `display_name` is resolved server-side
+// (manual label > Steam persona > bare account id); the UI keeps a defensive
+// fallback to the id in case it is ever absent.
 export interface RecurringPlayer extends StatFields {
   account_id: number
   display_name: string | null
@@ -97,11 +98,20 @@ export interface Rank {
 
 // A tracked account, for the account switcher in the ScopeBar and the Accounts
 // screen (where it's added via the importer and named via inline rename).
-// display_name is null until a name is set.
+// display_name is resolved server-side (manual label > Steam persona > id), so
+// the switcher shows the same name as the rest of the app.
 export interface TrackedAccount {
   account_id: number
   display_name: string | null
   is_self: boolean
+}
+
+// The body returned by the rename writes (PUT/DELETE /api/accounts/{id}/name):
+// the account and its now-effective resolved name (the label just set, or the
+// Steam persona / id it reverted to after a clear).
+export interface AccountName {
+  account_id: number
+  display_name: string
 }
 
 export interface ItemRow extends StatFields {
@@ -224,6 +234,7 @@ export interface Overview {
 export interface MatchDetailPlayer {
   player_slot: number
   account_id: number
+  display_name: string // resolved server-side; "0" for anonymized players
   hero_id: number
   hero_name: string
   image_url: string | null
@@ -266,12 +277,13 @@ export interface DeathEvent {
 }
 
 // One enemy player's kill trade vs the perspective account in a single match.
-// Raw counts in both directions, attributed by slot off kill_events — so an
+// Raw counts in both directions, attributed by slot off kill_events, so an
 // anonymized opponent (account_id 0, indistinguishable by id) still counts and
 // is labeled by its hero. Enemy team only; teammates would always be 0/0.
 export interface KillTrade {
   player_slot: number
   account_id: number // 0 for anonymized opponents
+  display_name: string // resolved server-side; the UI shows it only when id != 0
   hero_id: number
   hero_name: string
   image_url: string | null

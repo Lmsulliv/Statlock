@@ -13,6 +13,8 @@ htmlcov/
 *.db-shm
 *.db-journal
 spikes/out/
+data/*
+!data/.gitkeep
 
 # Secrets and local config
 .env
@@ -28,3 +30,11 @@ frontend/dist/
 # OS noise
 Thumbs.db
 .DS_Store
+
+# Backup Files
+*.bak
+*.bak-*
+
+# Editor Noise
+.vscode/ 
+.idea/

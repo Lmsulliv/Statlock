@@ -31,9 +31,11 @@ from stats.sessions import (
 from stats.recurring import MIN_CO_OCCURRENCE, split_recurring
 
 from ingest import accounts as ingest_accounts
+from ingest.util import utcnow
 
 from api import match_detail as detail
 from api import queries
+from api.queries import GLOBAL_OWNER
 from api.scope import Scope
 
 _RATE_DP = 4   # decimal places for rates (keeps JSON clean and deterministic)
@@ -319,8 +321,8 @@ def recurring_players(conn: sqlite3.Connection, scope: Scope,
     set -- so a verdict means you do better/worse with (or against) that player
     than your usual self. Co-players below stats.recurring.MIN_CO_OCCURRENCE
     shared games are dropped; thin survivors fall under the verdict floor and
-    read not_enough_data. Names exist only for tracked accounts; everyone else is
-    surfaced by account_id (display_name None)."""
+    read not_enough_data. display_name is resolved (manual label > Steam persona >
+    bare account id) so even untracked co-players surface by their best name."""
     empty = {
         "teammates": [], "opponents": [],
         "overall": {"games": 0, "wins": 0, "winrate": None},
@@ -335,7 +337,8 @@ def recurring_players(conn: sqlite3.Connection, scope: Scope,
     overall_wins = sum(r["won"] for r in results)
 
     split = split_recurring(queries.recurring_co_players(conn, scope, my_hero_id=hero_id))
-    names = queries.tracked_account_names(conn)
+    names = queries.resolve_names(
+        conn, [c["account_id"] for c in split["teammates"] + split["opponents"]])
 
     def _row(co: dict) -> dict:
         row = {
@@ -407,10 +410,15 @@ def ranks(conn: sqlite3.Connection) -> list[dict]:
 # ── Tracked accounts (the account switcher) ──────────────────────────────────
 
 def accounts(conn: sqlite3.Connection) -> list[dict]:
-    """Tracked accounts for the viewer's account switcher. is_self is coerced to a
-    bool so the JSON reads cleanly (mirrors overview's bool(won))."""
-    return [{**a, "is_self": bool(a["is_self"])}
-            for a in queries.list_tracked_accounts(conn)]
+    """Tracked accounts for the viewer's account switcher. display_name is resolved
+    (manual label > Steam persona > bare account id) so the switcher reads the same
+    names as the rest of the app; is_self is coerced to a bool so the JSON reads
+    cleanly (mirrors overview's bool(won))."""
+    rows = queries.list_tracked_accounts(conn)
+    names = queries.resolve_names(conn, [a["account_id"] for a in rows])
+    return [{"account_id": a["account_id"], "display_name": names[a["account_id"]],
+             "is_self": bool(a["is_self"])}
+            for a in rows]
 
 
 def add_account(conn: sqlite3.Connection, identifier: int | str,
@@ -431,24 +439,47 @@ def add_account(conn: sqlite3.Connection, identifier: int | str,
     handler turns that into a 400.
     """
     account_id = ingest_accounts.add_account(conn, identifier, display_name=display_name)
+    # account_labels is the single source of manual names, so an add-with-name also
+    # writes a label -- otherwise the resolver (which no longer reads
+    # tracked_accounts.display_name) wouldn't surface the name the importer just set.
+    if display_name and display_name.strip():
+        set_account_name(conn, account_id, display_name.strip())
     stored = queries.get_tracked_account(conn, account_id)
     return {**stored, "is_self": bool(stored["is_self"])}
 
 
-def rename_account(conn: sqlite3.Connection, account_id: int,
-                   display_name: str | None) -> dict:
-    """Set a tracked account's display name (the namer). Returns {"ok": False}
-    when the account isn't tracked so the handler can 404; otherwise {"ok": True}
-    plus the updated row. Mirrors confirm_candidate's get-then-write shape."""
-    if queries.get_tracked_account(conn, account_id) is None:
-        return {"ok": False}
+def set_account_name(conn: sqlite3.Connection, account_id: int, display_name: str,
+                     *, owner_id: int = GLOBAL_OWNER, now=utcnow) -> dict:
+    """Upsert a manual label for an account (the namer). Works for ANY account_id,
+    tracked or not -- co-players and opponents are mostly untracked, and naming
+    them is the whole point. owner_id is the per-user seam (global today). Returns
+    {account_id, display_name} where display_name is the now-effective resolved
+    name."""
     conn.execute(
-        "UPDATE tracked_accounts SET display_name = ? WHERE account_id = ?",
-        (display_name, account_id),
+        "INSERT INTO account_labels(owner_id, account_id, display_name, updated_at)"
+        " VALUES (?, ?, ?, ?)"
+        " ON CONFLICT(owner_id, account_id) DO UPDATE SET"
+        "   display_name = excluded.display_name, updated_at = excluded.updated_at",
+        (owner_id, account_id, display_name, now().isoformat()),
     )
     conn.commit()
-    updated = queries.get_tracked_account(conn, account_id)
-    return {"ok": True, **updated, "is_self": bool(updated["is_self"])}
+    return {"account_id": account_id,
+            "display_name": queries.resolve_names(conn, [account_id], owner_id)[account_id]}
+
+
+def clear_account_name(conn: sqlite3.Connection, account_id: int,
+                       *, owner_id: int = GLOBAL_OWNER) -> dict:
+    """Clear an account's manual label, reverting it to its Steam persona then its
+    bare id. Idempotent: clearing a label that isn't there is a no-op, not a 404.
+    Returns {account_id, display_name} with the reverted resolved name so the UI
+    can show what it fell back to."""
+    conn.execute(
+        "DELETE FROM account_labels WHERE owner_id = ? AND account_id = ?",
+        (owner_id, account_id),
+    )
+    conn.commit()
+    return {"account_id": account_id,
+            "display_name": queries.resolve_names(conn, [account_id], owner_id)[account_id]}
 
 
 # ── Overview / sync / eras ───────────────────────────────────────────────────
@@ -519,6 +550,8 @@ def match_detail(conn: sqlite3.Connection, match_id: int,
 
     names = queries.hero_names(conn)
     images = queries.hero_images(conn)
+    account_names = queries.resolve_names(
+        conn, [p["account_id"] for p in parsed["players"]])
 
     players = []
     for p in parsed["players"]:
@@ -526,6 +559,7 @@ def match_detail(conn: sqlite3.Connection, match_id: int,
             **p,
             "hero_name": names.get(p["hero_id"], str(p["hero_id"])),
             "image_url": images.get(p["hero_id"]),
+            "display_name": account_names.get(p["account_id"], str(p["account_id"])),
             "is_you": p["account_id"] == perspective,
         })
 
@@ -579,6 +613,7 @@ def match_detail(conn: sqlite3.Connection, match_id: int,
             trades.append({
                 "player_slot": slot,
                 "account_id": p["account_id"],
+                "display_name": p["display_name"],
                 "hero_id": p["hero_id"],
                 "hero_name": p["hero_name"],
                 "image_url": p["image_url"],

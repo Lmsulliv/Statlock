@@ -152,6 +152,45 @@ integers are account IDs.
 
 ---
 
+## Steam Personas (`GetPlayerSummaries`, Phase 1 of 3)
+
+Source of the display names the read layer shows instead of bare account IDs.
+This is the **Steam Web API**, not deadlock-api, so it has its own key and its own
+rate budget (we give it a separate token bucket; it never spends the deadlock
+1-req/5s budget).
+
+> Provenance note: field shapes below are from Steam's **official Web API docs**
+> (stable, public) — not yet confirmed against a live archived response because
+> the spike machine has no `STEAM_API_KEY`. The first real maintenance run archives
+> a sample into `raw_api_responses` (URL with the key **redacted**); paste that
+> sample path here once captured. **TODO: live-verified sample path.**
+
+```text
+GET https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/
+        ?key=<STEAM_API_KEY>&steamids=<id1>,<id2>,...
+```
+
+- **Auth:** requires a key (unlike Steam News). No key → the whole feature no-ops
+  and the app falls back to account IDs.
+- **Input:** comma-separated **SteamID64**s, **up to 100 per call**. Forward
+  conversion `to_steamid64(account_id) = account_id + 76561197960265728` (inverse
+  of `to_account_id`). Skip `account_id <= 0` — anonymized players have no Steam ID.
+- **Response:** `{"response": {"players": [ {...} ]}}`. Fields we use per player:
+
+  | Field | Use |
+  | --- | --- |
+  | `steamid` | SteamID64 string; convert back to map to `account_id` |
+  | `personaname` | display name → `steam_personas.persona_name` |
+  | `avatarfull` | 184px avatar URL → `steam_personas.avatar_url` |
+
+- **Private / missing profiles** are simply **omitted from `players[]`** — never an
+  error. We write a NULL-name placeholder row for them so they age out of the
+  refresh query instead of being re-requested every cycle.
+- **Secret handling:** the key rides in the query string, so the archived URL is
+  stored with the key replaced by `***` (the response body carries no key).
+
+---
+
 ## Endpoints verified
 
 | Endpoint | Purpose | Raw sample |

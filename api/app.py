@@ -98,8 +98,8 @@ class AddAccountBody(BaseModel):
     display_name: str | None = None
 
 
-class RenameAccountBody(BaseModel):
-    display_name: str | None = None
+class SetNameBody(BaseModel):
+    display_name: str
 
 
 @app.post("/api/accounts", status_code=202, dependencies=[Depends(require_owner)])
@@ -118,14 +118,25 @@ def post_account(body: AddAccountBody,
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@app.patch("/api/accounts/{account_id}", dependencies=[Depends(require_owner)])
-def patch_account(account_id: int, body: RenameAccountBody,
-                  conn: sqlite3.Connection = Depends(get_conn)) -> dict:
-    """Rename a tracked account (the namer), owner-gated like the importer."""
-    result = service.rename_account(conn, account_id, body.display_name)
-    if not result["ok"]:
-        raise HTTPException(status_code=404, detail="Account not tracked")
-    return result
+@app.put("/api/accounts/{account_id}/name", dependencies=[Depends(require_owner)])
+def put_account_name(account_id: int, body: SetNameBody,
+                     conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+    """Set a manual label for any account (the one rename path), owner-gated. Works
+    for untracked accounts too -- co-players/opponents are the point. Empty names
+    are 400; use DELETE to clear. The owner is global today; the same shape becomes
+    the per-user namer under real auth (only require_owner changes)."""
+    name = body.display_name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="display_name must not be empty")
+    return service.set_account_name(conn, account_id, name)
+
+
+@app.delete("/api/accounts/{account_id}/name", dependencies=[Depends(require_owner)])
+def delete_account_name(account_id: int,
+                        conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+    """Clear an account's manual label, reverting to its persona then bare id.
+    Idempotent (no 404 when there was no label)."""
+    return service.clear_account_name(conn, account_id)
 
 
 @app.get("/api/improvement")

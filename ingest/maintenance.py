@@ -17,8 +17,10 @@ import logging
 from dataclasses import dataclass
 from datetime import timedelta
 
+from api.config import steam_api_key
 from ingest.client import BASE_URL, archive_response
 from ingest.eras import detect_era_candidates
+from ingest.personas import build_steam_client, refresh_personas
 from ingest.util import iso_to_unix, utcnow
 from tracker.reference import load_heroes, load_items, load_ranks
 
@@ -286,6 +288,11 @@ def run_maintenance(conn, client, *, now=utcnow) -> dict:
     revived = revive_unavailable(conn, now=now)
     refresh_baselines(conn, client, now=now)
     refresh_assets(conn, client, now=now)
+    # Personas ride their OWN client/token bucket (separate budget). Gate on the
+    # key so contributors without one build no throwaway client and skip cleanly.
+    personas = 0
+    if steam_api_key():
+        personas = refresh_personas(conn, build_steam_client(), now=now)
     candidates = detect_era_candidates(conn, client, now=now)
 
     counts = _queue_counts(conn)
@@ -302,13 +309,14 @@ def run_maintenance(conn, client, *, now=utcnow) -> dict:
     summary = {
         "revived": revived,
         "candidates": candidates,
+        "personas": personas,
         "queue": counts,
         "queue_depth": queue_depth,
     }
     log.info(
         "maintenance summary: fetched %d, failed %d, deferred %d, unavailable %d, "
-        "queue depth %d, revived %d, new era candidates %d",
+        "queue depth %d, revived %d, new era candidates %d, personas %d",
         counts.get("fetched", 0), counts.get("failed", 0), counts.get("deferred", 0),
-        counts.get("unavailable", 0), queue_depth, revived, candidates,
+        counts.get("unavailable", 0), queue_depth, revived, candidates, personas,
     )
     return summary

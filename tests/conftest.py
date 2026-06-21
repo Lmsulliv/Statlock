@@ -34,6 +34,14 @@ def _no_network(monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", _blocked)
 
 
+@pytest.fixture(autouse=True)
+def _no_steam_key(monkeypatch):
+    """Default every test to the keyless path so a STEAM_API_KEY in the dev's
+    real environment can't make persona fetching fire mid-test. Persona tests
+    opt in explicitly with monkeypatch.setenv('STEAM_API_KEY', ...)."""
+    monkeypatch.delenv("STEAM_API_KEY", raising=False)
+
+
 # ── Presentation-layer fixture (api_db) ──────────────────────────────────────
 #
 # A small, fully controlled world for the API/CLI acceptance scenarios. Counts

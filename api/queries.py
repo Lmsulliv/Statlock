@@ -314,12 +314,59 @@ def item_names(conn: sqlite3.Connection) -> dict[int, str]:
             conn.execute("SELECT item_id, name FROM items").fetchall()}
 
 
-def tracked_account_names(conn: sqlite3.Connection) -> dict[int, str | None]:
-    """account_id -> display_name for the tracked accounts (the only names the DB
-    holds). Co-players are mostly untracked, so callers .get() this and fall back
-    to the bare account id; real names for the rest are a later source."""
-    return {r["account_id"]: r["display_name"] for r in
-            conn.execute("SELECT account_id, display_name FROM tracked_accounts").fetchall()}
+# ── Name resolution (manual label > Steam persona > bare account id) ─────────
+
+# owner_id 0 is the GLOBAL_OWNER sentinel: one shared namespace of manual labels
+# today, real user ids later with no schema change. resolve_names() and the rename
+# writes (api.service) both default to it -- the single per-user seam.
+GLOBAL_OWNER = 0
+
+
+def _labels_for(conn: sqlite3.Connection, account_ids: list[int],
+                owner_id: int) -> dict[int, str]:
+    """{account_id: display_name} from account_labels for one owner, restricted to
+    the requested ids."""
+    if not account_ids:
+        return {}
+    placeholders = ",".join("?" for _ in account_ids)
+    rows = conn.execute(
+        f"SELECT account_id, display_name FROM account_labels"
+        f" WHERE owner_id = ? AND account_id IN ({placeholders})",
+        [owner_id, *account_ids],
+    ).fetchall()
+    return {r["account_id"]: r["display_name"] for r in rows}
+
+
+def _persona_names(conn: sqlite3.Connection, account_ids: list[int]) -> dict[int, str]:
+    """{account_id: persona_name} from steam_personas, skipping NULL placeholders
+    (private/unresolved profiles must lose to the bare-id fallback)."""
+    if not account_ids:
+        return {}
+    placeholders = ",".join("?" for _ in account_ids)
+    rows = conn.execute(
+        f"SELECT account_id, persona_name FROM steam_personas"
+        f" WHERE account_id IN ({placeholders}) AND persona_name IS NOT NULL",
+        list(account_ids),
+    ).fetchall()
+    return {r["account_id"]: r["persona_name"] for r in rows}
+
+
+def resolve_names(conn: sqlite3.Connection, account_ids, owner_id: int = GLOBAL_OWNER
+                  ) -> dict[int, str]:
+    """{account_id: name} for every requested id, with precedence: this owner's
+    manual label > the global-0 label > steam_personas.persona_name >
+    str(account_id). Every id resolves to a string (never None), so callers can
+    surface co-players and opponents -- mostly untracked -- by their best name."""
+    ids = list(dict.fromkeys(account_ids))   # dedupe, preserve order
+    owner_labels = _labels_for(conn, ids, owner_id)
+    global_labels = (owner_labels if owner_id == GLOBAL_OWNER
+                     else _labels_for(conn, ids, GLOBAL_OWNER))
+    personas = _persona_names(conn, ids)
+    return {
+        aid: (owner_labels.get(aid) or global_labels.get(aid)
+              or personas.get(aid) or str(aid))
+        for aid in ids
+    }
 
 
 def item_images(conn: sqlite3.Connection) -> dict[int, str | None]:

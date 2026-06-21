@@ -295,12 +295,19 @@ def test_api_ranks_returns_per_tier_entries(api_db):
 
 def test_api_accounts_lists_tracked_accounts_self_first(api_db):
     """/api/accounts lists every tracked account for the viewer's switcher, the
-    is_self account first, with is_self as a bool and display_name exposed. The
-    fixture seeds the self account (ME); add a second, named, non-self one."""
+    is_self account first, with is_self as a bool and a resolved display_name. The
+    fixture seeds the self account (ME); add a second, labelled, non-self one."""
     other = 900_001
     api_db.execute(
-        "INSERT INTO tracked_accounts(account_id, display_name, is_self, added_at)"
-        " VALUES (?, 'Smurf', 0, '2026-06-15T12:00:00+00:00')",
+        "INSERT INTO tracked_accounts(account_id, is_self, added_at)"
+        " VALUES (?, 0, '2026-06-15T12:00:00+00:00')",
+        (other,),
+    )
+    # The manual name lives in account_labels now (the single source the resolver
+    # reads); tracked_accounts.display_name is no longer consulted.
+    api_db.execute(
+        "INSERT INTO account_labels(owner_id, account_id, display_name, updated_at)"
+        " VALUES (0, ?, 'Smurf', '2026-06-15T12:00:00+00:00')",
         (other,),
     )
     api_db.commit()
@@ -311,5 +318,6 @@ def test_api_accounts_lists_tracked_accounts_self_first(api_db):
     assert all({"account_id", "display_name", "is_self"} == set(r) for r in rows)
     me_row, other_row = rows
     assert me_row["is_self"] is True and other_row["is_self"] is False
-    assert me_row["display_name"] is None         # the self account has no name yet
-    assert other_row["display_name"] == "Smurf"
+    # No label/persona for the self account -> it resolves to its bare id.
+    assert me_row["display_name"] == str(ME)
+    assert other_row["display_name"] == "Smurf"   # the manual label

@@ -25,6 +25,8 @@ _STEPS = [
     _DB_DIR / "migrations" / "005_player_slot.sql",  # 4 -> 5: player_slot per-match key
     _DB_DIR / "migrations" / "006_kill_events.sql",  # 5 -> 6: per-kill attribution table
     _DB_DIR / "migrations" / "007_deferred_status.sql",  # 6 -> 7: deferred not-yet-parsed matches
+    _DB_DIR / "migrations" / "008_steam_personas.sql",  # 7 -> 8: steam_personas
+    _DB_DIR / "migrations" / "009_account_labels.sql",  # 8 -> 9: account_labels
 ]
 
 

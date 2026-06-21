@@ -56,6 +56,12 @@ def _seed(conn) -> None:
                  " VALUES (?, 1, ?)", (ME, BASE.isoformat()))
     conn.execute("INSERT INTO tracked_accounts(account_id, display_name, is_self,"
                  " added_at) VALUES (?, 'Pocket', 0, ?)", (FRIEND, BASE.isoformat()))
+    # One of each resolver precedence level: a manual label (FRIEND) and a Steam
+    # persona (NEMESIS); MATE has neither and falls back to its bare id.
+    conn.execute("INSERT INTO account_labels(owner_id, account_id, display_name,"
+                 " updated_at) VALUES (0, ?, 'Pocket', ?)", (FRIEND, BASE.isoformat()))
+    conn.execute("INSERT INTO steam_personas(account_id, persona_name, avatar_url,"
+                 " fetched_at) VALUES (?, 'NemesisHandle', NULL, ?)", (NEMESIS, BASE.isoformat()))
 
     # Teammate MATE: 5 hero-7 games (4 won) + 2 hero-8 games (0 won) on my team.
     for mid, won in ((1, True), (2, True), (3, True), (4, True), (5, False)):
@@ -119,10 +125,12 @@ def test_thin_recurring_player_reads_not_enough_data(rec_db):
     assert friend["verdict"] == VERDICT_NOT_ENOUGH_DATA
 
 
-def test_display_name_present_only_when_tracked(rec_db):
-    mates = _by_id(service.recurring_players(rec_db, make_scope())["teammates"])
-    assert mates[FRIEND]["display_name"] == "Pocket"   # tracked
-    assert mates[MATE]["display_name"] is None          # untracked -> account id only
+def test_display_name_resolves_label_persona_then_id(rec_db):
+    result = service.recurring_players(rec_db, make_scope())
+    mates, opps = _by_id(result["teammates"]), _by_id(result["opponents"])
+    assert mates[FRIEND]["display_name"] == "Pocket"          # manual label wins
+    assert opps[NEMESIS]["display_name"] == "NemesisHandle"   # Steam persona
+    assert mates[MATE]["display_name"] == str(MATE)           # bare id fallback
 
 
 def test_baseline_is_the_accounts_own_rate(rec_db):

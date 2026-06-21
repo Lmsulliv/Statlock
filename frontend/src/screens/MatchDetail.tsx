@@ -104,6 +104,9 @@ function PlayerRow({ p }: { p: MatchDetailPlayer }) {
         <span>
           {p.hero_name}
           {p.is_you && <span className="you-tag"> (you)</span>}
+          {p.account_id !== 0 && (
+            <span className="muted player-name-sub">{p.display_name}</span>
+          )}
         </span>
       </span>
       <span className="player-kda">
@@ -137,9 +140,9 @@ function Purchases({ purchases }: { purchases: MatchPurchase[] }) {
 
 // Per-opponent kill trades vs the perspective account: their kills on you and
 // your kills on them, both raw counts. No verdict — a kill-trade verdict needs a
-// baseline and would live in stats/, not the view. Enemy team only, and labeled
-// by hero because anonymized opponents share account_id 0 (indistinguishable by
-// id) and the response carries no player name.
+// baseline and would live in stats/, not the view. Enemy team only. Each row
+// shows the resolved player name when the opponent is a real account; anonymized
+// opponents share account_id 0 (indistinguishable by id), so they stay hero-only.
 function KillTrades({ trades }: { trades: KillTrade[] }) {
   // The backend emits a row per enemy even with zero kills (and [] when the
   // perspective didn't play this match), so detect "no kill events" explicitly.
@@ -160,7 +163,12 @@ function KillTrades({ trades }: { trades: KillTrade[] }) {
         <div key={t.player_slot} className="trade-row">
           <span className="enemy-cell">
             <HeroIcon name={t.hero_name} url={t.image_url} />
-            {t.hero_name}
+            <span>
+              {t.hero_name}
+              {t.account_id !== 0 && (
+                <span className="muted player-name-sub">{t.display_name}</span>
+              )}
+            </span>
           </span>
           <span className="player-kda">{t.kills_by_them_on_you}</span>
           <span className="player-kda">{t.kills_by_you_on_them}</span>

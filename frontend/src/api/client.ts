@@ -45,7 +45,7 @@ export async function fetchJson<T>(
 // the id in the URL and send none, while the account importer/namer send a JSON
 // body. Content-Type is only set when there's a body to describe.
 async function sendJson<T>(
-  method: 'POST' | 'PATCH',
+  method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   path: string,
   body?: unknown,
 ): Promise<T> {
@@ -68,3 +68,9 @@ export const postJson = <T>(path: string, body?: unknown) =>
 
 export const patchJson = <T>(path: string, body: unknown) =>
   sendJson<T>('PATCH', path, body)
+
+export const putJson = <T>(path: string, body: unknown) =>
+  sendJson<T>('PUT', path, body)
+
+// DELETE carries no body; the namer's clear path reverts a label by id alone.
+export const deleteJson = <T>(path: string) => sendJson<T>('DELETE', path)

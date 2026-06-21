@@ -1,13 +1,9 @@
 import { useState } from 'react'
 import { ApiError } from '../api/client'
-import {
-  useAccounts,
-  useAddAccount,
-  useRenameAccount,
-  useSyncStatus,
-} from '../api/queries'
+import { useAccounts, useAddAccount, useSyncStatus } from '../api/queries'
 import type { SyncStatus, TrackedAccount } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
+import { InlineRename } from '../components/InlineRename'
 import { QueryBoundary } from '../components/QueryBoundary'
 
 const fmtTime = (iso: string | null) => {
@@ -144,7 +140,6 @@ function SyncPanel() {
 
 function AccountList() {
   const accounts = useAccounts()
-  const rename = useRenameAccount()
 
   return (
     <section className="card">
@@ -158,77 +153,30 @@ function AccountList() {
           ) : (
             <ul className="account-list">
               {rows.map((a) => (
-                <AccountRow key={a.account_id} account={a} rename={rename} />
+                <AccountRow key={a.account_id} account={a} />
               ))}
             </ul>
           )
         }
       </QueryBoundary>
-      {rename.isError && (
-        <p className="state-error">{errorMessage(rename.error)}</p>
-      )}
     </section>
   )
 }
 
-function AccountRow({
-  account,
-  rename,
-}: {
-  account: TrackedAccount
-  rename: ReturnType<typeof useRenameAccount>
-}) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(account.display_name ?? '')
-
-  // One shared mutation, so only the row in flight is busy (variables holds the
-  // account id we last passed it) — the same trick the Eras candidates use.
-  const busy = rename.isPending && rename.variables?.accountId === account.account_id
-
-  const save = () => {
-    rename.mutate(
-      { accountId: account.account_id, displayName: draft.trim() },
-      { onSuccess: () => setEditing(false) },
-    )
-  }
-
+function AccountRow({ account }: { account: TrackedAccount }) {
+  // display_name is resolved server-side now; use it as the editable starting
+  // point, falling back to the bare id if it is ever absent.
+  const currentName = account.display_name ?? String(account.account_id)
   return (
     <li className="account-item">
       <div className="account-meta">
         <span className="account-name">
-          {account.display_name ?? <span className="muted">Unnamed</span>}
+          {currentName}
           {account.is_self && <span className="badge tone-neutral">self</span>}
         </span>
         <span className="muted">{account.account_id}</span>
       </div>
-      {editing ? (
-        <div className="account-edit">
-          <input
-            className="account-input"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            autoFocus
-          />
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>
-            {busy ? 'Saving…' : 'Save'}
-          </button>
-          <button
-            type="button"
-            className="btn"
-            disabled={busy}
-            onClick={() => {
-              setDraft(account.display_name ?? '')
-              setEditing(false)
-            }}
-          >
-            Cancel
-          </button>
-        </div>
-      ) : (
-        <button type="button" className="btn" onClick={() => setEditing(true)}>
-          Rename
-        </button>
-      )}
+      <InlineRename accountId={account.account_id} currentName={currentName} />
     </li>
   )
 }
