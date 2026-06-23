@@ -36,6 +36,118 @@ export interface MatchupRow extends StatFields {
   kills_by_you_on_them: number
 }
 
+// ── Performance (api/service.performance) ────────────────────────────────────
+
+// One continuous metric (net worth/min, kills, deaths, ...) for one scope row.
+// `games` is the non-null sample size the stat rests on (sparse metrics like
+// healing can be 0 even when the scope has matches). Means are on the metric's
+// own scale, not 0..1; ci bounds are null when the sample is too thin for an
+// interval. `verdict` is already direction-aware server-side: for a metric where
+// lower is better (deaths), beating the baseline reads as a strength.
+export interface MetricField {
+  key: string
+  label: string
+  higher_is_better: boolean
+  games: number
+  mean: number | null
+  ci_low: number | null // 95% t-interval lower bound
+  ci_high: number | null
+  baseline_mean: number | null // population mean, null when no baseline
+  baseline_games: number // population sample size for this metric's hero
+  delta: number | null // mean - baseline_mean, in metric units
+  verdict: Verdict
+}
+
+// One scope row: the "overall" row (hero_id null) or one hero. The metrics list
+// is in the canonical server order; `games` is the match count for the scope.
+export interface PerformanceRow {
+  scope: 'overall' | 'hero'
+  hero_id: number | null
+  hero_name: string | null
+  hero_image_url: string | null
+  games: number
+  metrics: MetricField[]
+}
+
+// Early-game (laning) report rows are structurally identical to performance rows
+// (a metrics list of MetricField), just a different metric set: net worth, last
+// hits, and denies at the lane-end mark. Same renderer, same honesty machinery.
+export type LaningRow = PerformanceRow
+
+// ── Death patterns (api/service.death_patterns) ──────────────────────────────
+
+// One enemy hero in the death ranking: raw deaths you suffered to it plus the
+// games you faced it, across the scope. No verdict/interval — there is no stored
+// per-matchup death baseline, so (like the match-detail kill trades) these are
+// honest raw counts, never a fabricated comparison.
+export interface DeathByEnemyHero {
+  enemy_hero_id: number
+  enemy_hero_name: string
+  enemy_hero_image_url: string | null
+  deaths: number
+  games_faced: number
+}
+
+// One game-minute bin of the death timeline. `deaths` is the raw total in the
+// bin; the rest are the continuous-metric block (_metric_fields): `mean` is your
+// deaths per game in the bin, compared to the live population `baseline_mean`.
+// `verdict` is direction-aware server-side — fewer deaths than the field reads as
+// a strength — and is not_enough_data when there is no population to compare to.
+export interface DeathTimelineBin {
+  minute: number
+  label: string
+  deaths: number
+  games: number
+  mean: number | null
+  ci_low: number | null
+  ci_high: number | null
+  baseline_mean: number | null
+  baseline_games: number
+  delta: number | null
+  verdict: Verdict
+}
+
+export interface DeathPatternsResponse {
+  by_enemy_hero: DeathByEnemyHero[]
+  timeline: DeathTimelineBin[]
+  total_deaths: number // timed deaths placed on the timeline (untimed excluded)
+  games: number
+}
+
+// ── Trends (api/service.trends) ──────────────────────────────────────────────
+
+// One point of a metric's time series: a calendar bucket (week/month) or a
+// rolling-window position. `value` is a win rate (0..1) for win_rate, else the
+// metric's mean on its own scale; `n` is that point's sample size. `enough_data`
+// is the honesty floor (n >= VERDICT_FLOOR): a thin window/bucket reads
+// not-enough-data, and the frontend greys it and breaks the trend line.
+export interface TrendPoint {
+  label: string
+  n: number
+  value: number | null
+  ci_low: number | null
+  ci_high: number | null
+  enough_data: boolean
+}
+
+// One metric's whole series. `baseline` is the single reference line drawn under
+// the sparkline: the account's overall win rate for win_rate, the live
+// population mean for the continuous metrics (null when there is no baseline).
+export interface TrendMetric {
+  key: string
+  label: string
+  higher_is_better: boolean
+  baseline: number | null
+  points: TrendPoint[]
+}
+
+export interface TrendsResponse {
+  mode: 'rolling' | 'calendar'
+  granularity: 'week' | 'month'
+  window_games: number
+  metrics: TrendMetric[]
+}
+
 // ── Tilt (api/service.tilt) ──────────────────────────────────────────────────
 
 // One bucket of the tilt tables. Carries the same StatFields as a matchup row,
@@ -104,6 +216,19 @@ export interface TrackedAccount {
   account_id: number
   display_name: string | null
   is_self: boolean
+}
+
+// The viewer's identity (GET /api/auth/me). `auth_enabled` reflects whether Steam
+// login is configured at all (DEADLOCK_BASE_URL): when false the app is in local
+// single-user mode and shows no login controls. `authenticated` is true only when
+// a real session is present. When logged in, account_id is the user's self account
+// and display_name its resolved name.
+export interface Me {
+  auth_enabled: boolean
+  authenticated: boolean
+  user_id: number | null
+  account_id: number | null
+  display_name: string | null
 }
 
 // The body returned by the rename writes (PUT/DELETE /api/accounts/{id}/name):

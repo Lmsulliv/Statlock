@@ -54,12 +54,14 @@ def _seed(conn) -> None:
                      (hid, name, BASE.isoformat()))
     conn.execute("INSERT INTO tracked_accounts(account_id, is_self, added_at)"
                  " VALUES (?, 1, ?)", (ME, BASE.isoformat()))
+    conn.execute("INSERT INTO user_accounts(user_id, account_id, is_self, added_at)"
+                 " VALUES (1, ?, 1, ?)", (ME, BASE.isoformat()))
     conn.execute("INSERT INTO tracked_accounts(account_id, display_name, is_self,"
                  " added_at) VALUES (?, 'Pocket', 0, ?)", (FRIEND, BASE.isoformat()))
     # One of each resolver precedence level: a manual label (FRIEND) and a Steam
     # persona (NEMESIS); MATE has neither and falls back to its bare id.
-    conn.execute("INSERT INTO account_labels(owner_id, account_id, display_name,"
-                 " updated_at) VALUES (0, ?, 'Pocket', ?)", (FRIEND, BASE.isoformat()))
+    conn.execute("INSERT INTO account_labels(user_id, account_id, display_name,"
+                 " updated_at) VALUES (1, ?, 'Pocket', ?)", (FRIEND, BASE.isoformat()))
     conn.execute("INSERT INTO steam_personas(account_id, persona_name, avatar_url,"
                  " fetched_at) VALUES (?, 'NemesisHandle', NULL, ?)", (NEMESIS, BASE.isoformat()))
 
@@ -161,6 +163,7 @@ def test_anonymized_coplayers_excluded_real_ones_kept(db):
     into one inflated bucket -- while still surfacing real co-players."""
     db.execute("INSERT INTO heroes(hero_id, name, fetched_at) VALUES (7, 'Wraith', 't')")
     db.execute("INSERT INTO tracked_accounts(account_id, is_self, added_at) VALUES (1, 1, 't')")
+    db.execute("INSERT INTO user_accounts(user_id, account_id, is_self, added_at) VALUES (1, 1, 1, 't')")
     for i in range(4):
         mid = 700 + i
         start = (BASE + timedelta(minutes=mid)).isoformat()

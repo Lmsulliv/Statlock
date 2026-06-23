@@ -1,9 +1,9 @@
-"""Interim owner gating for the era-management writes (api.app.require_owner).
+"""Write-gating for era management (api.app.require_user).
 
-This is NOT a test of authentication -- there is none yet. It checks the stopgap
-config gate: confirm/dismiss return 403 unless the DEADLOCK_OWNER flag is set,
-and the read path (GET /api/eras) stays open regardless. The flag is unset by
-default, so the "forbidden" cases need no setup beyond the seeded `api_db`.
+Era confirm/dismiss are state-changing writes, so they go through require_user.
+In local/dev mode (no DEADLOCK_BASE_URL) there is no login and writes run as the
+default user -- so they're open, like every other write. In auth mode they need a
+valid session. The read path (GET /api/eras) is never gated.
 """
 from fastapi.testclient import TestClient
 
@@ -21,44 +21,34 @@ def _insert_pending_candidate(conn) -> int:
     return cur.lastrowid
 
 
-def test_confirm_forbidden_without_owner_flag(api_db):
-    # No DEADLOCK_OWNER set: the gate runs before any candidate lookup, so even a
-    # nonexistent id is 403 (not 404).
-    resp = TestClient(app).post("/api/eras/candidates/1/confirm")
-    assert resp.status_code == 403
-
-
-def test_dismiss_forbidden_without_owner_flag(api_db):
-    resp = TestClient(app).post("/api/eras/candidates/1/dismiss")
-    assert resp.status_code == 403
-
-
-def test_reading_eras_stays_open_without_owner_flag(api_db):
-    # The GET is read-only and never gated; only the writes are.
-    assert TestClient(app).get("/api/eras").status_code == 200
-
-
-def test_confirm_allowed_with_owner_flag(api_db, monkeypatch):
-    monkeypatch.setenv("DEADLOCK_OWNER", "true")
+# ── local/dev mode (auth off): writes open as the default user ────────────────
+def test_confirm_open_in_local_mode(api_db):
     candidate_id = _insert_pending_candidate(api_db)
-
     resp = TestClient(app).post(f"/api/eras/candidates/{candidate_id}/confirm")
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
 
 
-def test_dismiss_allowed_with_owner_flag(api_db, monkeypatch):
-    monkeypatch.setenv("DEADLOCK_OWNER", "true")
+def test_dismiss_open_in_local_mode(api_db):
     candidate_id = _insert_pending_candidate(api_db)
-
     resp = TestClient(app).post(f"/api/eras/candidates/{candidate_id}/dismiss")
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
 
 
-def test_unknown_candidate_with_flag_is_404_not_403(api_db, monkeypatch):
-    # With the gate open, an unknown id falls through to the normal 404 -- proof
-    # the 403 above is the gate, not a missing-candidate error.
-    monkeypatch.setenv("DEADLOCK_OWNER", "true")
+def test_unknown_candidate_is_404_in_local_mode(api_db):
+    # No gate in local mode, so an unknown id falls through to the normal 404.
     resp = TestClient(app).post("/api/eras/candidates/999999/confirm")
     assert resp.status_code == 404
+
+
+def test_reading_eras_stays_open(api_db):
+    assert TestClient(app).get("/api/eras").status_code == 200
+
+
+# ── auth mode: a login is required ────────────────────────────────────────────
+def test_confirm_requires_login_in_auth_mode(api_db, monkeypatch):
+    monkeypatch.setenv("DEADLOCK_BASE_URL", "https://stats.example.com")
+    # No session cookie -> the gate rejects before any candidate lookup.
+    resp = TestClient(app).post("/api/eras/candidates/1/confirm")
+    assert resp.status_code == 401

@@ -4,24 +4,30 @@ No HTTP -- hard rule 2's archive (every status-200 body is stored before parsing
 is the source of truth here, so backfilling costs zero requests and can't trip the
 rate limit. For every archived match body we idempotently:
 
-  - if the match is already stored: (re)materialize only its kill_events;
+  - if the match is already stored: (re)materialize its derived tables
+    (kill_events + laning_stats) from raw_json;
   - if it is NOT stored (e.g. a pre-player_slot 6x0 anonymized match that crashed
     ingest before the schema could accept it): parse and insert match + players +
-    purchases + kill_events now, and flip its fetch_queue row to 'fetched'.
+    purchases + kill_events + laning_stats now, and flip its fetch_queue row to
+    'fetched'.
 
 One match = one transaction (hard rule 4). Re-running is a no-op on row counts:
-recovered matches take the "already stored" branch on the next pass, and
-replace_kill_events delete-then-inserts, so kill_events stays stable.
+recovered matches take the "already stored" branch on the next pass, and the
+replace_* helpers delete-then-insert, so the derived tables stay stable. This is
+also how new derived tables backfill historical matches with zero API calls: add
+the table, add its replace_* call here, run reprocess-archive (laning_stats did).
 """
 import json
 import logging
 
 from ingest.parse import (
     derive_kill_events,
+    derive_laning_stats,
     era_id_for,
     insert_match,
     parse_metadata,
     replace_kill_events,
+    replace_laning_stats,
 )
 from ingest.util import unix_to_iso, utcnow
 
@@ -59,6 +65,7 @@ def reprocess_archive(conn, *, now=utcnow) -> dict:
                      conn.execute("SELECT item_id FROM items").fetchall()}
     recovered = 0
     rebuilt = 0
+    laning_rebuilt = 0
 
     for match_id, body in bodies.items():
         meta = json.loads(body)
@@ -70,6 +77,7 @@ def reprocess_archive(conn, *, now=utcnow) -> dict:
         with conn:
             if already_stored:
                 replace_kill_events(conn, match_id, derive_kill_events(meta))
+                replace_laning_stats(conn, match_id, derive_laning_stats(meta))
             else:
                 start_iso = unix_to_iso(meta["match_info"]["start_time"])
                 era_id = era_id_for(conn, start_iso)
@@ -88,7 +96,11 @@ def reprocess_archive(conn, *, now=utcnow) -> dict:
         rebuilt += conn.execute(
             "SELECT COUNT(*) FROM kill_events WHERE match_id = ?", (match_id,)
         ).fetchone()[0]
+        laning_rebuilt += conn.execute(
+            "SELECT COUNT(*) FROM laning_stats WHERE match_id = ?", (match_id,)
+        ).fetchone()[0]
 
-    log.info("reprocess-archive: %d match(es) recovered, %d kill event(s) rebuilt",
-             recovered, rebuilt)
-    return {"matches_recovered": recovered, "kill_events_rebuilt": rebuilt}
+    log.info("reprocess-archive: %d match(es) recovered, %d kill event(s) rebuilt,"
+             " %d laning row(s) rebuilt", recovered, rebuilt, laning_rebuilt)
+    return {"matches_recovered": recovered, "kill_events_rebuilt": rebuilt,
+            "laning_rows_rebuilt": laning_rebuilt}

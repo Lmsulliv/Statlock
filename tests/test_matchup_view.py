@@ -81,6 +81,11 @@ def seeded_db(db):
     db.execute(
         "INSERT INTO tracked_accounts VALUES(200,'Bystander',0,'2026-01-01T00:00:00Z')"
     )
+    # is_self lives on the per-user link now; the view reads user_accounts.
+    db.execute(
+        "INSERT INTO user_accounts(user_id, account_id, is_self, added_at)"
+        " VALUES(1,100,1,'2026-01-01T00:00:00Z')"
+    )
 
     # ── Match A: era 1, team 0 wins ──────────────────────────────────────────
     _insert_match(db, 1, 1, 0)
@@ -179,6 +184,7 @@ def test_matchups_count_anonymized_opponents(db):
     db.execute("INSERT INTO heroes(hero_id, name, fetched_at) VALUES (7, 'Wraith', 't')")
     db.execute("INSERT INTO heroes(hero_id, name, fetched_at) VALUES (15, 'Bebop', 't')")
     db.execute("INSERT INTO tracked_accounts(account_id, is_self, added_at) VALUES (1, 1, 't')")
+    db.execute("INSERT INTO user_accounts(user_id, account_id, is_self, added_at) VALUES (1, 1, 1, 't')")
     for mid in (800, 801, 802):
         db.execute(
             "INSERT INTO matches(match_id, start_time, duration_s, game_mode,"

@@ -98,7 +98,8 @@ def cmd_run_daemon(conn, args) -> None:
 def cmd_reprocess_archive(conn, args) -> None:
     result = reprocess_archive(conn)
     print(f"Reprocessed archive: recovered {result['matches_recovered']} match(es), "
-          f"rebuilt {result['kill_events_rebuilt']} kill event(s).")
+          f"rebuilt {result['kill_events_rebuilt']} kill event(s), "
+          f"{result['laning_rows_rebuilt']} laning row(s).")
 
 
 def build_parser() -> argparse.ArgumentParser:

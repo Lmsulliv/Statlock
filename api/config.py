@@ -20,21 +20,24 @@ def db_path() -> Path:
     return Path(env) if env else DEFAULT_DB
 
 
-# Interim owner gate. There is no real authentication yet; the era-management
-# writes (confirm/dismiss candidates) are the app's only write surface, so until
-# a login exists we keep them private behind a single deploy-time flag. This is
-# authorization-by-config, NOT authentication: there's no identity and no
-# session. Replace with a real login before exposing the app publicly.
-_OWNER_TRUTHY = {"1", "true", "yes"}
+# Authentication is opt-in via DEADLOCK_BASE_URL. It must be the app's public
+# origin (e.g. https://stats.example.com) because Steam OpenID redirects back to
+# <base>/api/auth/callback and scopes the login to the <base>/ realm. When unset
+# (local/dev) auth is OFF: the app runs as the single default user and the write
+# endpoints are open -- the same single-user workflow as before. When set, login
+# is required and the cookie-based writes are CSRF-protected.
+def base_url() -> str | None:
+    """The app's public origin (DEADLOCK_BASE_URL), trailing slash trimmed, or None.
 
-
-def owner_enabled() -> bool:
-    """True when the owner flag (DEADLOCK_OWNER) is set to a truthy value.
-
-    Read fresh on every call (like db_path) so tests can monkeypatch the
-    environment per-test and each request re-checks the current value.
+    Read fresh on every call (like db_path) so tests can monkeypatch it per-test.
     """
-    return os.environ.get("DEADLOCK_OWNER", "").strip().lower() in _OWNER_TRUTHY
+    raw = os.environ.get("DEADLOCK_BASE_URL", "").strip().rstrip("/")
+    return raw or None
+
+
+def auth_enabled() -> bool:
+    """True when a public base URL is configured, which turns Steam login on."""
+    return base_url() is not None
 
 
 def steam_api_key() -> str | None:

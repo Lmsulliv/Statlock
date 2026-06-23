@@ -12,15 +12,17 @@ const fmtTime = (iso: string | null) => {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
 }
 
-// Turn a failed mutation into a human sentence. The owner gate (403) and an
-// unparseable id (400) are the two the user can actually act on; anything else
-// is most likely the backend being down.
+// Turn a failed mutation into a human sentence. An unparseable id (400), a lost
+// login (401), and a stale session/CSRF token (403) are the ones the user can act
+// on; anything else is most likely the backend being down.
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 400)
       return "That doesn’t look like an account id, SteamID64, or profile URL."
+    if (error.status === 401)
+      return 'Please log in to manage accounts.'
     if (error.status === 403)
-      return 'Account management is owner-only. Set DEADLOCK_OWNER on the API.'
+      return 'Your session looks stale. Reload the page and log in again.'
   }
   return 'Something went wrong. Is the backend running?'
 }

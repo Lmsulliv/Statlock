@@ -84,6 +84,9 @@ def _seed(conn: sqlite3.Connection) -> None:
 
     conn.execute("INSERT INTO tracked_accounts(account_id, is_self, added_at)"
                  " VALUES (?, 1, ?)", (ME, JUNE))
+    # is_self lives on the per-user link now (migration 011); user 1 is seeded.
+    conn.execute("INSERT INTO user_accounts(user_id, account_id, is_self, added_at)"
+                 " VALUES (1, ?, 1, ?)", (ME, JUNE))
     conn.execute("INSERT INTO patch_eras(label, started_at) VALUES ('E1', '2020-01-01T00:00:00+00:00')")
     conn.execute("INSERT INTO patch_eras(label, started_at) VALUES ('E2', '2026-06-01T00:00:00+00:00')")
 

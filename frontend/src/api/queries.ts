@@ -3,18 +3,23 @@ import type { Scope } from '../scope/useScope'
 import { deleteJson, fetchJson, postJson, putJson, scopeParams } from './client'
 import type {
   AccountName,
+  DeathPatternsResponse,
   ErasResponse,
   Improvement,
   ItemRow,
+  LaningRow,
   MatchDetail,
   MatchupRow,
+  Me,
   Overview,
+  PerformanceRow,
   PlayedHero,
   Rank,
   RecurringPlayersResponse,
   SyncStatus,
   TiltResponse,
   TrackedAccount,
+  TrendsResponse,
 } from './types'
 
 // Each hook's query key embeds the scope params, so changing the scope produces
@@ -39,6 +44,60 @@ export function useItems(scope: Scope) {
     queryKey: ['items', params],
     queryFn: () => fetchJson<ItemRow[]>('/api/items', params),
     enabled: scope.heroId !== null,
+  })
+}
+
+// Continuous-metric performance per hero and overall, each vs a live population
+// baseline. Account-wide (no hero_id gate); scope drives the refetch like matchups.
+export function usePerformance(scope: Scope) {
+  const params = scopeParams(scope)
+  return useQuery({
+    queryKey: ['performance', params],
+    queryFn: () => fetchJson<PerformanceRow[]>('/api/performance', params),
+  })
+}
+
+// Early-game (laning) report: net worth / last hits / denies at the lane-end mark
+// per hero and overall, each vs the live population. Same shape as performance.
+export function useLaning(scope: Scope) {
+  const params = scopeParams(scope)
+  return useQuery({
+    queryKey: ['laning', params],
+    queryFn: () => fetchJson<LaningRow[]>('/api/laning', params),
+  })
+}
+
+// Performance over time: win rate + continuous metrics as a chronological
+// series. The view toggles (rolling vs calendar, the window width, week vs
+// month) are UI state, not scope, so they're passed in separately and folded
+// into both the request params and the query key (so toggling refetches).
+export interface TrendsParams {
+  mode: 'rolling' | 'calendar'
+  granularity: 'week' | 'month'
+  windowGames: number
+}
+
+export function useTrends(scope: Scope, opts: TrendsParams) {
+  const params = {
+    ...scopeParams(scope),
+    mode: opts.mode,
+    granularity: opts.granularity,
+    window_games: String(opts.windowGames),
+  }
+  return useQuery({
+    queryKey: ['trends', params],
+    queryFn: () => fetchJson<TrendsResponse>('/api/trends', params),
+  })
+}
+
+// Death patterns: which enemy heroes kill you most (raw counts + games faced)
+// and how your deaths distribute over the game timeline vs a live population
+// baseline. Account-wide; scope drives the refetch like performance.
+export function useDeathPatterns(scope: Scope) {
+  const params = scopeParams(scope)
+  return useQuery({
+    queryKey: ['death-patterns', params],
+    queryFn: () => fetchJson<DeathPatternsResponse>('/api/death-patterns', params),
   })
 }
 
@@ -139,6 +198,29 @@ export function useRanks() {
     queryKey: ['ranks'],
     queryFn: () => fetchJson<Rank[]>('/api/ranks'),
     staleTime: Infinity,
+  })
+}
+
+// ── Authentication ───────────────────────────────────────────────────────────
+
+// The viewer's identity (Steam login state). The account switcher and management
+// nav key off this. staleTime: Infinity because login/logout are full-page
+// navigations (a Steam redirect; a logout reload), so this refetches on load.
+export function useMe() {
+  return useQuery({
+    queryKey: ['me'],
+    queryFn: () => fetchJson<Me>('/api/auth/me'),
+    staleTime: Infinity,
+  })
+}
+
+// Log out (revoke the session) then hard-reload to the root, so all per-user data
+// refetches as anonymous and the cleared cookies take effect. A full reload is the
+// simplest correct reset for cookie-based auth.
+export function useLogout() {
+  return useMutation({
+    mutationFn: () => postJson<void>('/api/auth/logout'),
+    onSuccess: () => window.location.assign('/'),
   })
 }
 

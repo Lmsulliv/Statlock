@@ -27,6 +27,9 @@ _STEPS = [
     _DB_DIR / "migrations" / "007_deferred_status.sql",  # 6 -> 7: deferred not-yet-parsed matches
     _DB_DIR / "migrations" / "008_steam_personas.sql",  # 7 -> 8: steam_personas
     _DB_DIR / "migrations" / "009_account_labels.sql",  # 8 -> 9: account_labels
+    _DB_DIR / "migrations" / "010_laning_stats.sql",  # 9 -> 10: end-of-laning snapshot table
+    _DB_DIR / "migrations" / "011_per_user_identity.sql",  # 10 -> 11: users, user_accounts, account_labels.user_id
+    _DB_DIR / "migrations" / "012_auth.sql",  # 11 -> 12: users.steam_account_id, sessions
 ]
 
 

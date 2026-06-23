@@ -1,14 +1,15 @@
 """The in-app account importer (api.app POST /api/accounts).
 
-These exercise the owner-gated importer that backs the Accounts screen. The
-rename API (PUT/DELETE /api/accounts/{id}/name) lives in tests/test_account_names.py.
-The autouse `_no_network` fixture (conftest) blocks `urlopen`, so a passing POST
-is itself proof that ingestion was NOT run in the request -- the endpoint only
+These exercise the importer that backs the Accounts screen. The rename API
+(PUT/DELETE /api/accounts/{id}/name) lives in tests/test_account_names.py. The
+autouse `_no_network` fixture (conftest) blocks `urlopen`, so a passing POST is
+itself proof that ingestion was NOT run in the request -- the endpoint only
 records the account (the enqueue) and returns 202; the worker does the fetching.
 
-DEADLOCK_OWNER is unset by default, so the "forbidden" cases need no setup
-beyond the seeded `api_db`. `891231519` is the canonical normalized id (the
-SteamID64 76561198851497247) and is distinct from the seeded self account (1).
+In local/dev mode (no DEADLOCK_BASE_URL) the importer is open as the default user,
+so the happy-path cases need no auth setup. `891231519` is the canonical
+normalized id (the SteamID64 76561198851497247) and is distinct from the seeded
+self account (1).
 """
 from fastapi.testclient import TestClient
 
@@ -29,19 +30,19 @@ def _tracked(conn, account_id):
     ).fetchone()
 
 
-# ── POST /api/accounts: owner gate ───────────────────────────────────────────
+# ── POST /api/accounts: auth gate ────────────────────────────────────────────
 
-def test_add_forbidden_without_owner_flag(api_db):
-    # The gate runs before any work, so even a well-formed body is 403.
+def test_add_requires_login_in_auth_mode(api_db, monkeypatch):
+    # In auth mode the gate runs before any work, so even a well-formed body is 401.
+    monkeypatch.setenv("DEADLOCK_BASE_URL", "https://stats.example.com")
     resp = _client().post("/api/accounts", json={"account_id": ACCOUNT_ID})
-    assert resp.status_code == 403
+    assert resp.status_code == 401
     assert _tracked(api_db, ACCOUNT_ID) is None  # nothing was written
 
 
 # ── POST /api/accounts: the happy path is "enqueue, don't ingest" ────────────
 
 def test_add_enqueues_and_returns_202_without_ingesting(api_db, monkeypatch):
-    monkeypatch.setenv("DEADLOCK_OWNER", "true")
     queue_before = api_db.execute("SELECT COUNT(*) FROM fetch_queue").fetchone()[0]
 
     resp = _client().post(
@@ -74,7 +75,6 @@ def test_add_enqueues_and_returns_202_without_ingesting(api_db, monkeypatch):
 
 
 def test_add_normalizes_steamid64_string(api_db, monkeypatch):
-    monkeypatch.setenv("DEADLOCK_OWNER", "true")
     resp = _client().post("/api/accounts", json={"account_id": STEAMID64})
     assert resp.status_code == 202
     assert resp.json()["account_id"] == ACCOUNT_ID
@@ -82,7 +82,6 @@ def test_add_normalizes_steamid64_string(api_db, monkeypatch):
 
 
 def test_add_normalizes_profile_url(api_db, monkeypatch):
-    monkeypatch.setenv("DEADLOCK_OWNER", "true")
     resp = _client().post("/api/accounts", json={"account_id": PROFILE_URL})
     assert resp.status_code == 202
     assert resp.json()["account_id"] == ACCOUNT_ID
@@ -92,7 +91,6 @@ def test_add_normalizes_profile_url(api_db, monkeypatch):
 
 def test_add_vanity_url_is_400(api_db, monkeypatch):
     # Vanity URLs can't be resolved offline -> to_account_id raises -> 400.
-    monkeypatch.setenv("DEADLOCK_OWNER", "true")
     resp = _client().post(
         "/api/accounts",
         json={"account_id": "https://steamcommunity.com/id/somename"},
@@ -101,26 +99,22 @@ def test_add_vanity_url_is_400(api_db, monkeypatch):
 
 
 def test_add_non_positive_is_400(api_db, monkeypatch):
-    monkeypatch.setenv("DEADLOCK_OWNER", "true")
     assert _client().post("/api/accounts", json={"account_id": -5}).status_code == 400
 
 
 def test_add_garbage_is_400(api_db, monkeypatch):
-    monkeypatch.setenv("DEADLOCK_OWNER", "true")
     resp = _client().post("/api/accounts", json={"account_id": "not an id"})
     assert resp.status_code == 400
 
 
 def test_add_missing_account_id_is_422(api_db, monkeypatch):
     # Schema validation (missing required field) is Pydantic's job -> 422.
-    monkeypatch.setenv("DEADLOCK_OWNER", "true")
     assert _client().post("/api/accounts", json={}).status_code == 422
 
 
 # ── POST /api/accounts: idempotency ──────────────────────────────────────────
 
 def test_add_is_idempotent(api_db, monkeypatch):
-    monkeypatch.setenv("DEADLOCK_OWNER", "true")
     first = _client().post("/api/accounts", json={"account_id": ACCOUNT_ID})
     second = _client().post("/api/accounts", json={"account_id": ACCOUNT_ID})
     assert first.status_code == 202 and second.status_code == 202
@@ -133,10 +127,9 @@ def test_add_is_idempotent(api_db, monkeypatch):
 def test_add_with_name_writes_a_label(api_db, monkeypatch):
     # account_labels is the single source of manual names, so add-with-name also
     # lands a label (otherwise the resolver-backed views wouldn't show it).
-    monkeypatch.setenv("DEADLOCK_OWNER", "true")
     _client().post("/api/accounts", json={"account_id": ACCOUNT_ID, "display_name": "smurf"})
     label = api_db.execute(
-        "SELECT display_name FROM account_labels WHERE owner_id=0 AND account_id=?",
+        "SELECT display_name FROM account_labels WHERE user_id=1 AND account_id=?",
         (ACCOUNT_ID,),
     ).fetchone()
     assert label["display_name"] == "smurf"

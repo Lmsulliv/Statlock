@@ -70,6 +70,8 @@ def _seed_match(db) -> None:
                    " VALUES (?, ?, ?, ?)", (hid, name, f"http://img/{hid}.png", JUNE))
     db.execute("INSERT INTO tracked_accounts(account_id, is_self, added_at)"
                " VALUES (?, 1, ?)", (ME, JUNE))
+    db.execute("INSERT INTO user_accounts(user_id, account_id, is_self, added_at)"
+               " VALUES (1, ?, 1, ?)", (ME, JUNE))
     meta = _meta()
     parsed = parse_metadata(meta, json.dumps(meta), set(), None, JUNE)
     with db:
@@ -162,6 +164,8 @@ def agg_db(db):
                    (hid, name, JUNE))
     db.execute("INSERT INTO tracked_accounts(account_id, is_self, added_at)"
                " VALUES (?, 1, ?)", (SELF_ACC, JUNE))
+    db.execute("INSERT INTO user_accounts(user_id, account_id, is_self, added_at)"
+               " VALUES (1, ?, 1, ?)", (SELF_ACC, JUNE))
     db.execute("INSERT INTO patch_eras(era_id, label, started_at)"
                " VALUES (1, 'E1', '2026-01-01T00:00:00Z')")
     db.execute("INSERT INTO patch_eras(era_id, label, started_at)"

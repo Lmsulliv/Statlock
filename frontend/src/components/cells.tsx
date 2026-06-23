@@ -44,3 +44,32 @@ export function BaselineCell({ rate, matches }: { rate: number | null; matches: 
     </>
   )
 }
+
+// ── Continuous-metric cells (Performance screen) ─────────────────────────────
+
+const fmtNum = (x: number | null) =>
+  x === null ? '—' : x.toLocaleString(undefined, { maximumFractionDigits: 2 })
+
+// A continuous-metric delta in raw units (e.g. +50 souls/min), signed. Muted
+// below the stats floor, like DeltaCell, because a gap off 1–2 games is noise.
+export function NumberDeltaCell({ value, games }: { value: number | null; games: number }) {
+  if (games < VERDICT_FLOOR) {
+    return <span className="muted">not enough info</span>
+  }
+  if (value === null) return <>—</>
+  return <>{`${value > 0 ? '+' : ''}${fmtNum(value)}`}</>
+}
+
+// The population-baseline column for continuous metrics (mean + sample size), the
+// numeric twin of BaselineCell. "no baseline" when nobody else's data backs it.
+export function MetricBaselineCell({ mean, games }: { mean: number | null; games: number }) {
+  if (games === 0 || mean === null) {
+    return <span className="muted">no baseline</span>
+  }
+  return (
+    <>
+      <div>{fmtNum(mean)}</div>
+      <div className="muted">{games.toLocaleString()} games</div>
+    </>
+  )
+}

@@ -6,7 +6,7 @@ because SteamID64 acceptance by deadlock-api is undocumented behavior.
 """
 import re
 
-from ingest.util import utcnow
+from ingest.util import DEFAULT_USER_ID, utcnow
 
 STEAMID64_OFFSET = 76561197960265728
 
@@ -46,13 +46,25 @@ def to_steamid64(account_id: int) -> int:
 
 
 def add_account(conn, value: str | int, *, display_name: str | None = None,
-                is_self: bool = False, now=utcnow) -> int:
-    """Register a tracked account (idempotent) and ensure its sync_state row."""
+                is_self: bool = False, user_id: int = DEFAULT_USER_ID, now=utcnow) -> int:
+    """Register a tracked account (idempotent) and ensure its sync_state row.
+
+    tracked_accounts is the global ingestion registry; user_accounts links the
+    account to a user (the local/dev user by default) and is where is_self lives
+    now, so the per-user self resolver picks up a freshly added self account. Both
+    inserts are INSERT OR IGNORE, so re-adding an account leaves its stored row and
+    self flag unchanged -- the same idempotency as before.
+    """
     account_id = to_account_id(value)
     conn.execute(
         "INSERT OR IGNORE INTO tracked_accounts(account_id, display_name, is_self, added_at)"
         " VALUES (?, ?, ?, ?)",
         (account_id, display_name, int(is_self), now().isoformat()),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO user_accounts(user_id, account_id, is_self, added_at)"
+        " VALUES (?, ?, ?, ?)",
+        (user_id, account_id, int(is_self), now().isoformat()),
     )
     conn.execute(
         "INSERT OR IGNORE INTO sync_state(account_id) VALUES (?)", (account_id,)

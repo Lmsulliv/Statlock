@@ -303,11 +303,17 @@ def test_api_accounts_lists_tracked_accounts_self_first(api_db):
         " VALUES (?, 0, '2026-06-15T12:00:00+00:00')",
         (other,),
     )
+    # The switcher lists the user's accounts via user_accounts (is_self lives there).
+    api_db.execute(
+        "INSERT INTO user_accounts(user_id, account_id, is_self, added_at)"
+        " VALUES (1, ?, 0, '2026-06-15T12:00:00+00:00')",
+        (other,),
+    )
     # The manual name lives in account_labels now (the single source the resolver
     # reads); tracked_accounts.display_name is no longer consulted.
     api_db.execute(
-        "INSERT INTO account_labels(owner_id, account_id, display_name, updated_at)"
-        " VALUES (0, ?, 'Smurf', '2026-06-15T12:00:00+00:00')",
+        "INSERT INTO account_labels(user_id, account_id, display_name, updated_at)"
+        " VALUES (1, ?, 'Smurf', '2026-06-15T12:00:00+00:00')",
         (other,),
     )
     api_db.commit()

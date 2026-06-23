@@ -101,6 +101,25 @@ code {
   background: var(--surface-2);
 }
 
+/* Login/logout, pushed to the right edge of the header. */
+.auth-controls {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.auth-user {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+a.btn {
+  text-decoration: none;
+  display: inline-block;
+}
+
 .app-main {
   padding-top: 22px;
 }
@@ -290,6 +309,23 @@ code {
 
 .col-interval {
   width: 300px;
+}
+
+/* Performance screen: one block per scope row (overall, then each hero). */
+.perf-block {
+  margin-bottom: 28px;
+}
+
+.perf-scope-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+
+.perf-scope-games {
+  font-weight: 400;
 }
 
 .col-delta {
@@ -889,6 +925,190 @@ code {
   margin-top: 6px;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* ── Trends (per-metric sparklines) ───────────────────────────────────────── */
+
+.trend-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.trend-window {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.trend-window input {
+  width: 64px;
+  padding: 5px 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Compact cards: as many across as fit, each holding one metric's sparkline. */
+.trend-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--gap);
+}
+
+.trend-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trend-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.trend-card-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* The headline "where you are now" value. Colored only by a real verdict tone
+   (significance, not magnitude); neutral when thin or baseline-less. */
+.trend-latest {
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-latest.tone-pos {
+  color: var(--pos);
+}
+.trend-latest.tone-neg {
+  color: var(--neg);
+}
+.trend-latest.tone-neutral {
+  color: var(--text-muted);
+}
+
+.sparkline {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Gold dashed reference, matching the Performance baseline marker (never a
+   verdict color, so it reads as a reference rather than a good/bad signal). */
+.sparkline-baseline {
+  stroke: var(--baseline);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.7;
+}
+
+.sparkline-line {
+  fill: none;
+  stroke: var(--text);
+  stroke-width: 1.5;
+}
+
+.sparkline-dot {
+  fill: var(--text);
+}
+
+/* Below the honesty floor: hollow grey, and the line skips it. */
+.sparkline-dot.thin {
+  fill: var(--bg);
+  stroke: var(--neutral);
+  stroke-width: 1;
+}
+
+/* ── Deaths timing bar chart ──────────────────────────────────────────────── */
+
+.deaths-summary {
+  font-size: 13px;
+  margin: 0 0 16px;
+}
+
+.deaths-section-title {
+  font-size: 16px;
+  margin: 24px 0 4px;
+}
+
+.deaths-note {
+  font-size: 12px;
+  margin: 0 0 12px;
+}
+
+/* Horizontal scroll when a long game produces many minute bins. */
+.death-chart-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.death-bars {
+  width: 100%;
+  height: auto;
+  display: block;
+  min-width: 420px;
+}
+
+/* Bars tint only on a confirmed verdict (significance, not magnitude). Neutral
+   and leaning tiers stay muted so an unconfirmed minute never looks decisive. */
+.death-bar {
+  fill: var(--neutral);
+}
+.death-bar.tone-pos {
+  fill: var(--pos);
+}
+.death-bar.tone-pos-weak {
+  fill: var(--pos-weak);
+}
+.death-bar.tone-neg {
+  fill: var(--neg);
+}
+.death-bar.tone-neg-weak {
+  fill: var(--neg-weak);
+}
+
+/* Gold dashed tick = the population baseline for that bin (matches every other
+   baseline marker; never a verdict color). */
+.death-baseline-tick {
+  stroke: var(--baseline);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+  opacity: 0.9;
+}
+
+.death-axis-label {
+  fill: var(--text-muted);
+  font-size: 9px;
+}
+
+.death-axis-caption {
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.trend-empty {
+  font-size: 12px;
+  padding: 12px 0;
+}
+
+.trend-card-foot {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Recent-match result + sync badge (Overview) ──────────────────────────── */

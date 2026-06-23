@@ -13,6 +13,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from ingest.util import unix_to_iso
+from stats.laning import laning_mark
 
 
 @dataclass
@@ -21,6 +22,7 @@ class ParsedMatch:
     players: list[dict]
     purchases: list[tuple]  # (match_id, player_slot, account_id, item_id, purchase_time_s, sold_time_s)
     kill_events: list[tuple]  # (match_id, game_time_s, victim_slot, killer_slot)
+    laning_stats: list[tuple]  # (match_id, player_slot, net_worth, last_hits, denies, sampled_at_s)
 
 
 def finals_from_stats(stats: list[dict] | None) -> tuple[int | None, int | None, int | None]:
@@ -62,6 +64,34 @@ def derive_kill_events(meta: dict) -> list[tuple]:
             events.append((match_id, d.get("game_time_s"), victim_slot, killer_slot))
     events.sort(key=lambda e: (e[1] is None, e[1]))
     return events
+
+
+def derive_laning_stats(meta: dict) -> list[tuple]:
+    """Each player's end-of-laning snapshot from their stats[] series. Pure, no
+    DB/HTTP -- the storage-facing reader of the laning finding (api-findings).
+
+    For every player, stats.laning.laning_mark picks the latest snapshot at or
+    before LANE_END_S; we read net_worth, creep_kills (the per-snapshot last-hit
+    proxy -- the snapshot's own last_hits field is null), and denies from it, and
+    record which snapshot via sampled_at_s. A player with no lane-end snapshot
+    (empty/short series) is SKIPPED rather than stored as zeros, so a missing mark
+    stays "we don't know" and can't poison a baseline average.
+
+    Every field is read with .get() so a sparse or empty ('{}') payload yields an
+    empty list instead of raising. Each row: (match_id, player_slot, net_worth,
+    last_hits, denies, sampled_at_s), matching the laning_stats columns.
+    """
+    info = meta.get("match_info") or {}
+    match_id = info.get("match_id")
+    rows: list[tuple] = []
+    for p in info.get("players") or []:
+        mark = laning_mark(p.get("stats"))
+        if mark is None:
+            continue
+        rows.append((match_id, p.get("player_slot"), mark.get("net_worth"),
+                     mark.get("creep_kills"), mark.get("denies"),
+                     mark.get("time_stamp_s")))
+    return rows
 
 
 def parse_metadata(meta: dict, raw_body: str, shop_item_ids: set[int],
@@ -115,7 +145,8 @@ def parse_metadata(meta: dict, raw_body: str, shop_item_ids: set[int],
                 purchases.append((match_id, p["player_slot"], p["account_id"], item_id,
                                   entry.get("game_time_s"), entry.get("sold_time_s", 0)))
 
-    return ParsedMatch(match_row, players, purchases, derive_kill_events(meta))
+    return ParsedMatch(match_row, players, purchases, derive_kill_events(meta),
+                       derive_laning_stats(meta))
 
 
 def era_id_for(conn: sqlite3.Connection, start_time_iso: str) -> int | None:
@@ -156,6 +187,7 @@ def insert_match(conn: sqlite3.Connection, parsed: ParsedMatch) -> None:
         parsed.purchases,
     )
     replace_kill_events(conn, m["match_id"], parsed.kill_events)
+    replace_laning_stats(conn, m["match_id"], parsed.laning_stats)
 
 
 def replace_kill_events(conn: sqlite3.Connection, match_id: int,
@@ -173,8 +205,23 @@ def replace_kill_events(conn: sqlite3.Connection, match_id: int,
     )
 
 
+def replace_laning_stats(conn: sqlite3.Connection, match_id: int,
+                         rows: list[tuple]) -> None:
+    """Idempotently write a match's laning_stats: clear this match's rows, then
+    insert the derived ones. Delete-then-insert (rather than INSERT OR REPLACE) so
+    a player who no longer has a lane-end snapshot on a re-parse is dropped, not
+    left stale. On first ingest the DELETE matches nothing. Caller owns the
+    transaction (hard rule 4), same shape as replace_kill_events."""
+    conn.execute("DELETE FROM laning_stats WHERE match_id = ?", (match_id,))
+    conn.executemany(
+        "INSERT INTO laning_stats(match_id, player_slot, net_worth, last_hits,"
+        " denies, sampled_at_s) VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+
+
 # Re-exported for convenience: tests and callers treat parse as the module
 # that knows how metadata timestamps become ISO strings.
 __all__ = ["ParsedMatch", "finals_from_stats", "derive_kill_events",
-           "parse_metadata", "era_id_for", "insert_match", "replace_kill_events",
-           "unix_to_iso"]
+           "derive_laning_stats", "parse_metadata", "era_id_for", "insert_match",
+           "replace_kill_events", "replace_laning_stats", "unix_to_iso"]

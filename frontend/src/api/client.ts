@@ -41,6 +41,16 @@ export async function fetchJson<T>(
   return (await res.json()) as T
 }
 
+// The double-submit CSRF token: the backend sets a readable `csrf` cookie at
+// login, and every write must echo it in the X-CSRF-Token header (the API
+// compares the two). Absent in local/dev mode (auth off), where the API doesn't
+// check it. Reading our own cookie is safe -- only the httpOnly session cookie is
+// hidden from JS.
+function csrfToken(): string | null {
+  const match = document.cookie.match(/(?:^|;\s*)csrf=([^;]+)/)
+  return match ? decodeURIComponent(match[1]) : null
+}
+
 // The app's write paths. `body` is optional: the era confirm/dismiss POSTs carry
 // the id in the URL and send none, while the account importer/namer send a JSON
 // body. Content-Type is only set when there's a body to describe.
@@ -49,17 +59,21 @@ async function sendJson<T>(
   path: string,
   body?: unknown,
 ): Promise<T> {
+  const csrf = csrfToken()
   const res = await fetch(path, {
     method,
     headers: {
       Accept: 'application/json',
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      ...(csrf ? { 'X-CSRF-Token': csrf } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
   if (!res.ok) {
     throw new ApiError(res.status, `Request to ${path} failed (${res.status})`)
   }
+  // 204 No Content (e.g. logout) has no body to parse.
+  if (res.status === 204) return undefined as T
   return (await res.json()) as T
 }
 

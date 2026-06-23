@@ -115,6 +115,8 @@ def _seed(conn) -> None:
                      " VALUES (?, ?, ?, ?)", (iid, name, f"http://img/i{iid}.png", JUNE))
     conn.execute("INSERT INTO tracked_accounts(account_id, is_self, added_at)"
                  " VALUES (?, 1, ?)", (ME, JUNE))
+    conn.execute("INSERT INTO user_accounts(user_id, account_id, is_self, added_at)"
+                 " VALUES (1, ?, 1, ?)", (ME, JUNE))
     conn.execute(
         "INSERT INTO matches(match_id, start_time, duration_s, game_mode, winning_team,"
         " average_badge_team0, average_badge_team1, raw_json, ingested_at)"

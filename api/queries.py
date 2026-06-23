@@ -14,32 +14,46 @@ team-average filter.
 import sqlite3
 
 from api.scope import Scope
+from ingest.util import DEFAULT_USER_ID
 
 
-def resolve_self_account_id(conn: sqlite3.Connection) -> int | None:
-    """The default account: the one flagged is_self. None if none is tracked."""
+def resolve_self_account_id(conn: sqlite3.Connection,
+                            user_id: int = DEFAULT_USER_ID) -> int | None:
+    """The user's default account: the one they flagged is_self (on user_accounts).
+    None if they have none. user_id defaults to the local/dev user (Phase 1)."""
     row = conn.execute(
-        "SELECT account_id FROM tracked_accounts WHERE is_self = 1"
-        " ORDER BY account_id LIMIT 1"
+        "SELECT account_id FROM user_accounts WHERE user_id = ? AND is_self = 1"
+        " ORDER BY account_id LIMIT 1",
+        (user_id,),
     ).fetchone()
     return row["account_id"] if row else None
 
 
-def list_tracked_accounts(conn: sqlite3.Connection) -> list[dict]:
-    """Every tracked account (is_self first, then by id) for the account picker."""
+def list_tracked_accounts(conn: sqlite3.Connection,
+                          user_id: int = DEFAULT_USER_ID) -> list[dict]:
+    """The user's accounts (is_self first, then by id) for the account picker.
+    display_name comes from tracked_accounts; is_self from the per-user link."""
     rows = conn.execute(
-        "SELECT account_id, display_name, is_self FROM tracked_accounts"
-        " ORDER BY is_self DESC, account_id"
+        "SELECT ua.account_id, ta.display_name, ua.is_self"
+        " FROM user_accounts ua"
+        " JOIN tracked_accounts ta ON ta.account_id = ua.account_id"
+        " WHERE ua.user_id = ?"
+        " ORDER BY ua.is_self DESC, ua.account_id",
+        (user_id,),
     ).fetchall()
     return [dict(r) for r in rows]
 
 
-def get_tracked_account(conn: sqlite3.Connection, account_id: int) -> dict | None:
-    """One tracked account, or None if it isn't tracked (lets the namer 404)."""
+def get_tracked_account(conn: sqlite3.Connection, account_id: int,
+                        user_id: int = DEFAULT_USER_ID) -> dict | None:
+    """One of the user's accounts, or None if they don't track it (lets the namer
+    404). is_self comes from the per-user link, display_name from tracked_accounts."""
     row = conn.execute(
-        "SELECT account_id, display_name, is_self FROM tracked_accounts"
-        " WHERE account_id = ?",
-        (account_id,),
+        "SELECT ua.account_id, ta.display_name, ua.is_self"
+        " FROM user_accounts ua"
+        " JOIN tracked_accounts ta ON ta.account_id = ua.account_id"
+        " WHERE ua.account_id = ? AND ua.user_id = ?",
+        (account_id, user_id),
     ).fetchone()
     return dict(row) if row else None
 
@@ -47,6 +61,23 @@ def get_tracked_account(conn: sqlite3.Connection, account_id: int) -> dict | Non
 def latest_snapshot_id(conn: sqlite3.Connection) -> int | None:
     row = conn.execute("SELECT MAX(snapshot_id) AS s FROM baseline_snapshots").fetchone()
     return row["s"] if row and row["s"] is not None else None
+
+
+def baseline_version(conn: sqlite3.Connection) -> tuple:
+    """A cheap token that changes whenever the baseline data the read layer sees
+    could have changed. Used to invalidate the in-process baseline cache.
+
+    Two signals are needed, not one: a brand-new snapshot bumps MAX(snapshot_id),
+    but the nightly staggered refresh keeps the SAME snapshot_id and only rewrites
+    the due eras' rows in place (ingest.maintenance.refresh_baselines), recording
+    the fetch in baseline_refresh_state.last_refreshed_at. So a snapshot-id-only
+    token would miss a staggered refresh and serve stale baselines; pairing it
+    with MAX(last_refreshed_at) catches both. Both are single-row aggregates over
+    small tables -- cheap to read on every request."""
+    snap = conn.execute("SELECT MAX(snapshot_id) AS s FROM baseline_snapshots").fetchone()
+    refreshed = conn.execute(
+        "SELECT MAX(last_refreshed_at) AS r FROM baseline_refresh_state").fetchone()
+    return (snap["s"] if snap else None, refreshed["r"] if refreshed else None)
 
 
 def _era_clause(scope: Scope, column: str) -> tuple[str, list]:
@@ -152,6 +183,124 @@ def personal_kill_trades(conn: sqlite3.Connection, scope: Scope,
     )
     params = [scope.account_id, scope.game_mode] + era_params + badge_params + hero_params
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+# ── Death patterns (kill_events aggregated across the scoped match set) ───────
+
+def death_by_enemy_hero(conn: sqlite3.Connection, scope: Scope) -> list[dict]:
+    """Per enemy hero across the scoped matches: {enemy_hero, games_faced, deaths}
+    -- how often each enemy hero you faced was the one that killed you.
+
+    Modeled on personal_kill_trades' me/opponent self-join with the SAME scope
+    clauses, but a LEFT JOIN to kill_events on the (killer = opp, victim = me)
+    slot pair, so an enemy hero you faced but never died to still appears at 0
+    deaths. COUNT(DISTINCT me.match_id) is robust to the same enemy hero showing
+    up on two enemy players in one match. Killer/victim resolve to a hero through
+    match_players by (match_id, player_slot), so an anonymized opponent
+    (account_id = 0) still counts under the hero it piloted. A NULL killer_slot
+    (tower / creep) matches no opp.player_slot, so environment deaths are excluded
+    from the by-hero ranking -- there is no hero to attribute them to. Raw counts
+    only; no verdict (there is no stored per-matchup death baseline)."""
+    era_sql, era_params = _era_clause(scope, "m.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "me.team")
+    sql = (
+        "SELECT opp.hero_id AS enemy_hero,"
+        " COUNT(DISTINCT me.match_id) AS games_faced,"
+        " SUM(CASE WHEN ke.event_id IS NOT NULL THEN 1 ELSE 0 END) AS deaths"
+        " FROM match_players me"
+        " JOIN match_players opp"
+        "   ON opp.match_id = me.match_id AND opp.team != me.team"
+        " JOIN matches m ON m.match_id = me.match_id"
+        " LEFT JOIN kill_events ke ON ke.match_id = me.match_id"
+        "   AND ke.killer_slot = opp.player_slot AND ke.victim_slot = me.player_slot"
+        " WHERE me.account_id = ? AND m.game_mode = ?"
+        + era_sql + badge_sql +
+        " GROUP BY opp.hero_id"
+    )
+    params = [scope.account_id, scope.game_mode] + era_params + badge_params
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def scoped_match_count(conn: sqlite3.Connection, scope: Scope) -> int:
+    """How many scoped games the account played -- the zero-fill denominator for
+    the death timeline. Same era/badge/game-mode predicates and the duration_s > 0
+    guard as personal_performance, so it counts exactly the games the population
+    death baseline does."""
+    era_sql, era_params = _era_clause(scope, "m.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "mp.team")
+    sql = (
+        "SELECT COUNT(*) AS n"
+        " FROM match_players mp"
+        " JOIN matches m ON m.match_id = mp.match_id"
+        " WHERE mp.account_id = ? AND m.game_mode = ? AND m.duration_s > 0"
+        + era_sql + badge_sql
+    )
+    params = [scope.account_id, scope.game_mode] + era_params + badge_params
+    row = conn.execute(sql, params).fetchone()
+    return row["n"] if row else 0
+
+
+def personal_death_times(conn: sqlite3.Connection, scope: Scope) -> list[dict]:
+    """The account's deaths as {match_id, game_time_s}, one row per kill_event in
+    which the account was the victim. Untimed deaths (game_time_s IS NULL) are
+    dropped -- they can't be placed on the timeline. Same scope predicates and the
+    duration_s > 0 guard as scoped_match_count, so every returned match is one of
+    the counted games."""
+    era_sql, era_params = _era_clause(scope, "m.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "me.team")
+    sql = (
+        "SELECT me.match_id AS match_id, ke.game_time_s AS game_time_s"
+        " FROM match_players me"
+        " JOIN kill_events ke ON ke.match_id = me.match_id"
+        "   AND ke.victim_slot = me.player_slot"
+        " JOIN matches m ON m.match_id = me.match_id"
+        " WHERE me.account_id = ? AND m.game_mode = ? AND m.duration_s > 0"
+        "   AND ke.game_time_s IS NOT NULL"
+        + era_sql + badge_sql
+    )
+    params = [scope.account_id, scope.game_mode] + era_params + badge_params
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def population_death_timeline(conn: sqlite3.Connection,
+                             scope: Scope) -> tuple[int, dict[int, int]]:
+    """The live "field" death baseline, the timeline twin of baseline_performance:
+    (population_games, {minute: deaths}) computed straight from kill_events +
+    match_players over the same era/badge/game-mode scope. The scoped account is
+    excluded (v.account_id != ?) so the comparison is "you vs the field"; each
+    population row is badge-scoped by its OWN team average, exactly like the
+    personal side. `minute` is the uncapped game-minute (game_time_s / 60); the
+    pure stats.deaths layer folds the long tail into the trailing bin so the cap
+    lives in one place. population_games counts the same scoped player-games as
+    the deaths numerator, so deaths/games is an honest per-game death rate."""
+    era_sql, era_params = _era_clause(scope, "m.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "v.team")
+    params = [scope.account_id, scope.game_mode] + era_params + badge_params
+
+    games_sql = (
+        "SELECT COUNT(*) AS n"
+        " FROM match_players v"
+        " JOIN matches m ON m.match_id = v.match_id"
+        " WHERE v.account_id != ? AND m.game_mode = ? AND m.duration_s > 0"
+        + era_sql + badge_sql
+    )
+    games_row = conn.execute(games_sql, params).fetchone()
+    population_games = games_row["n"] if games_row else 0
+
+    deaths_sql = (
+        "SELECT (ke.game_time_s / 60) AS minute, COUNT(*) AS deaths"
+        " FROM kill_events ke"
+        " JOIN match_players v ON v.match_id = ke.match_id"
+        "   AND v.player_slot = ke.victim_slot"
+        " JOIN matches m ON m.match_id = ke.match_id"
+        " WHERE v.account_id != ? AND m.game_mode = ? AND m.duration_s > 0"
+        "   AND ke.game_time_s IS NOT NULL"
+        + era_sql + badge_sql +
+        " GROUP BY minute"
+    )
+    by_minute = {r["minute"]: r["deaths"]
+                 for r in conn.execute(deaths_sql, params).fetchall()}
+    return population_games, by_minute
 
 
 def personal_item_stats(conn: sqlite3.Connection, scope: Scope,
@@ -295,6 +444,208 @@ def baseline_item_stats(conn: sqlite3.Connection, scope: Scope, hero_id: int,
     return out
 
 
+# ── Continuous-metric performance ────────────────────────────────────────────
+#
+# The single source of truth for the continuous metrics surfaced on the
+# Performance screen. SQL exprs reference the `mp` (match_players) and `m`
+# (matches) aliases both queries below use, so one formula serves the personal
+# per-match values AND the population AVG -- they can never drift. `label` and
+# `higher_is_better` are presentation metadata, not statistics math: the verdict
+# itself is computed in stats/ (CLAUDE.md hard rule 1); higher_is_better only
+# tells the service which direction counts as "good" (see api.service).
+PERF_METRICS = [
+    {"key": "net_worth_per_min", "label": "Net worth / min",
+     "expr": "mp.net_worth * 60.0 / m.duration_s", "higher_is_better": True},
+    {"key": "kills", "label": "Kills", "expr": "mp.kills", "higher_is_better": True},
+    {"key": "deaths", "label": "Deaths", "expr": "mp.deaths", "higher_is_better": False},
+    {"key": "assists", "label": "Assists", "expr": "mp.assists", "higher_is_better": True},
+    {"key": "last_hits", "label": "Last hits", "expr": "mp.last_hits", "higher_is_better": True},
+    {"key": "denies", "label": "Denies", "expr": "mp.denies", "higher_is_better": True},
+    {"key": "player_damage", "label": "Player damage",
+     "expr": "mp.player_damage", "higher_is_better": True},
+    {"key": "obj_damage", "label": "Obj damage",
+     "expr": "mp.obj_damage", "higher_is_better": True},
+    {"key": "healing", "label": "Healing", "expr": "mp.healing", "higher_is_better": True},
+]
+
+
+def personal_performance(conn: sqlite3.Connection, scope: Scope) -> list[dict]:
+    """One row per scoped match the account played: hero_id plus each metric's
+    per-match value (PERF_METRICS). Raw rows, not aggregates -- the service buckets
+    them per hero and overall and hands the value lists to stats.mean_interval /
+    mean_verdict (which need the spread, not just a mean). Same era/badge/game-mode
+    predicates as personal_matchups, plus duration_s > 0 so net-worth-per-minute is
+    always defined."""
+    era_sql, era_params = _era_clause(scope, "m.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "mp.team")
+    select = ", ".join(f"({mdef['expr']}) AS {mdef['key']}" for mdef in PERF_METRICS)
+    sql = (
+        f"SELECT mp.hero_id AS hero_id, {select}"
+        " FROM match_players mp"
+        " JOIN matches m ON m.match_id = mp.match_id"
+        " WHERE mp.account_id = ? AND m.game_mode = ? AND m.duration_s > 0"
+        + era_sql + badge_sql
+    )
+    params = [scope.account_id, scope.game_mode] + era_params + badge_params
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def performance_series(conn: sqlite3.Connection, scope: Scope,
+                       my_hero_id: int | None = None) -> list[dict]:
+    """The time-ordered twin of personal_performance: one row per scoped match,
+    carrying start_time and won alongside each metric's per-match value, ordered
+    oldest-first. Trends buckets this single stream into rolling windows and
+    calendar buckets (stats.trends), so win rate and the continuous metrics are
+    always aligned to the same matches. Same era/badge/game-mode predicates and
+    the same duration_s > 0 guard as personal_performance; `my_hero_id` optionally
+    restricts to one hero, the trends analogue of the matchups perspective."""
+    era_sql, era_params = _era_clause(scope, "m.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "mp.team")
+    hero_sql, hero_params = ("", [])
+    if my_hero_id is not None:
+        hero_sql, hero_params = " AND mp.hero_id = ?", [my_hero_id]
+    select = ", ".join(f"({mdef['expr']}) AS {mdef['key']}" for mdef in PERF_METRICS)
+    sql = (
+        f"SELECT mp.match_id AS match_id, m.start_time AS start_time,"
+        f" mp.hero_id AS hero_id, mp.won AS won, {select}"
+        " FROM match_players mp"
+        " JOIN matches m ON m.match_id = mp.match_id"
+        " WHERE mp.account_id = ? AND m.game_mode = ? AND m.duration_s > 0"
+        + era_sql + badge_sql + hero_sql +
+        " ORDER BY m.start_time ASC, mp.match_id ASC"
+    )
+    params = [scope.account_id, scope.game_mode] + era_params + badge_params + hero_params
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def baseline_performance(conn: sqlite3.Connection, scope: Scope,
+                         my_hero_ids: list[int]) -> dict:
+    """Population mean of each continuous metric, computed live from match_players.
+
+    There is no stored continuous baseline (the baseline_* snapshot tables carry
+    only win/loss + item timing; see docs/data-model.md), but every player's
+    per-match stats are ingested, so "the typical player at this scope" is just an
+    AVG over the same era/badge/game-mode predicates. The scoped account itself is
+    excluded so the comparison is "you vs the field" -- the live analogue of the
+    snapshot baselines being external to you. Each population row is badge-scoped
+    by its OWN team average, exactly like the personal side.
+
+    Returns {hero_id: {"n": games, <metric_key>: mean_or_None, ...}} plus an
+    "overall" entry pooled across exactly the heroes you played (my_hero_ids) --
+    the continuous analogue of matchups()'s hero-mix-matched overall baseline.
+    A metric that is NULL for the whole population comes back as None, which the
+    service reads as "no baseline" and shows personal-only."""
+    era_sql, era_params = _era_clause(scope, "m.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "mp.team")
+    avg_select = ", ".join(f"AVG({mdef['expr']}) AS {mdef['key']}" for mdef in PERF_METRICS)
+    base_from = (
+        " FROM match_players mp"
+        " JOIN matches m ON m.match_id = mp.match_id"
+        " WHERE mp.account_id != ? AND m.game_mode = ? AND m.duration_s > 0"
+        + era_sql + badge_sql
+    )
+    base_params = [scope.account_id, scope.game_mode] + era_params + badge_params
+
+    out: dict = {}
+    per_hero_sql = (f"SELECT mp.hero_id AS hero_id, COUNT(*) AS n, {avg_select}"
+                    + base_from + " GROUP BY mp.hero_id")
+    for r in conn.execute(per_hero_sql, base_params).fetchall():
+        out[r["hero_id"]] = {k: r[k] for k in r.keys() if k != "hero_id"}
+
+    if my_hero_ids:
+        hero_ph = ",".join("?" for _ in my_hero_ids)
+        overall_sql = (f"SELECT COUNT(*) AS n, {avg_select}"
+                       + base_from + f" AND mp.hero_id IN ({hero_ph})")
+        row = conn.execute(overall_sql, base_params + list(my_hero_ids)).fetchone()
+        if row is not None:
+            out["overall"] = {k: row[k] for k in row.keys()}
+    return out
+
+
+# ── Laning (early-game continuous metrics at the lane-end mark) ───────────────
+
+# The laning analogue of PERF_METRICS: the early-game numbers the laning report
+# compares, read off the lane-end snapshot materialized in laning_stats (the `ls`
+# alias both queries below use). Unlike PERF_METRICS these are RAW cumulative
+# values, not per-minute -- every player is read at ~the same fixed mark
+# (LANE_END_S), so the values are directly comparable without normalizing by time.
+# net worth at end of laning is the headline; last hits (the snapshot's
+# creep_kills) and denies are the supporting laning fundamentals. label /
+# higher_is_better are presentation metadata; the verdict math lives in stats/.
+LANING_METRICS = [
+    {"key": "net_worth", "label": "Net worth @ lane end",
+     "expr": "ls.net_worth", "higher_is_better": True},
+    {"key": "last_hits", "label": "Last hits @ lane end",
+     "expr": "ls.last_hits", "higher_is_better": True},
+    {"key": "denies", "label": "Denies @ lane end",
+     "expr": "ls.denies", "higher_is_better": True},
+]
+
+
+def personal_laning(conn: sqlite3.Connection, scope: Scope) -> list[dict]:
+    """One row per scoped match the account played, carrying hero_id plus each
+    laning metric's value at the lane-end snapshot (LANING_METRICS). The laning
+    twin of personal_performance: raw rows, not aggregates -- the service buckets
+    them per hero and overall and hands the value lists to stats.mean_interval /
+    mean_verdict. laning_stats holds only the snapshot values, so hero/account/
+    team come from match_players joined on (match_id, player_slot); same era/badge/
+    game-mode predicates as personal_performance. A match with no lane-end snapshot
+    simply has no laning_stats row, so it drops out honestly."""
+    era_sql, era_params = _era_clause(scope, "m.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "mp.team")
+    select = ", ".join(f"({mdef['expr']}) AS {mdef['key']}" for mdef in LANING_METRICS)
+    sql = (
+        f"SELECT mp.hero_id AS hero_id, {select}"
+        " FROM laning_stats ls"
+        " JOIN match_players mp ON mp.match_id = ls.match_id"
+        "   AND mp.player_slot = ls.player_slot"
+        " JOIN matches m ON m.match_id = ls.match_id"
+        " WHERE mp.account_id = ? AND m.game_mode = ? AND m.duration_s > 0"
+        + era_sql + badge_sql
+    )
+    params = [scope.account_id, scope.game_mode] + era_params + badge_params
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def baseline_laning(conn: sqlite3.Connection, scope: Scope,
+                    my_hero_ids: list[int]) -> dict:
+    """Population mean of each laning metric at the lane-end mark, computed live
+    from laning_stats -- the laning analogue of baseline_performance. There is no
+    stored continuous baseline; every player's lane-end snapshot is materialized,
+    so "the typical player at this scope" is an AVG over the same era/badge/
+    game-mode predicates, with the scoped account excluded ("you vs the field").
+    Each population row is badge-scoped by its OWN team average, like the personal
+    side. Returns {hero_id: {"n": games, <metric_key>: mean_or_None, ...}} plus an
+    "overall" entry pooled across exactly the heroes you played (my_hero_ids)."""
+    era_sql, era_params = _era_clause(scope, "m.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "mp.team")
+    avg_select = ", ".join(f"AVG({mdef['expr']}) AS {mdef['key']}" for mdef in LANING_METRICS)
+    base_from = (
+        " FROM laning_stats ls"
+        " JOIN match_players mp ON mp.match_id = ls.match_id"
+        "   AND mp.player_slot = ls.player_slot"
+        " JOIN matches m ON m.match_id = ls.match_id"
+        " WHERE mp.account_id != ? AND m.game_mode = ? AND m.duration_s > 0"
+        + era_sql + badge_sql
+    )
+    base_params = [scope.account_id, scope.game_mode] + era_params + badge_params
+
+    out: dict = {}
+    per_hero_sql = (f"SELECT mp.hero_id AS hero_id, COUNT(*) AS n, {avg_select}"
+                    + base_from + " GROUP BY mp.hero_id")
+    for r in conn.execute(per_hero_sql, base_params).fetchall():
+        out[r["hero_id"]] = {k: r[k] for k in r.keys() if k != "hero_id"}
+
+    if my_hero_ids:
+        hero_ph = ",".join("?" for _ in my_hero_ids)
+        overall_sql = (f"SELECT COUNT(*) AS n, {avg_select}"
+                       + base_from + f" AND mp.hero_id IN ({hero_ph})")
+        row = conn.execute(overall_sql, base_params + list(my_hero_ids)).fetchone()
+        if row is not None:
+            out["overall"] = {k: row[k] for k in row.keys()}
+    return out
+
+
 # ── Reference name lookups ───────────────────────────────────────────────────
 
 def hero_names(conn: sqlite3.Connection) -> dict[int, str]:
@@ -316,23 +667,22 @@ def item_names(conn: sqlite3.Connection) -> dict[int, str]:
 
 # ── Name resolution (manual label > Steam persona > bare account id) ─────────
 
-# owner_id 0 is the GLOBAL_OWNER sentinel: one shared namespace of manual labels
-# today, real user ids later with no schema change. resolve_names() and the rename
-# writes (api.service) both default to it -- the single per-user seam.
-GLOBAL_OWNER = 0
+# Manual labels are keyed by user_id (account_labels). resolve_names() and the
+# rename writes (api.service) default to DEFAULT_USER_ID, the local/dev user, until
+# real auth threads a session user through (Phase 2). Names are private to a user.
 
 
 def _labels_for(conn: sqlite3.Connection, account_ids: list[int],
-                owner_id: int) -> dict[int, str]:
-    """{account_id: display_name} from account_labels for one owner, restricted to
+                user_id: int) -> dict[int, str]:
+    """{account_id: display_name} from account_labels for one user, restricted to
     the requested ids."""
     if not account_ids:
         return {}
     placeholders = ",".join("?" for _ in account_ids)
     rows = conn.execute(
         f"SELECT account_id, display_name FROM account_labels"
-        f" WHERE owner_id = ? AND account_id IN ({placeholders})",
-        [owner_id, *account_ids],
+        f" WHERE user_id = ? AND account_id IN ({placeholders})",
+        [user_id, *account_ids],
     ).fetchall()
     return {r["account_id"]: r["display_name"] for r in rows}
 
@@ -351,20 +701,17 @@ def _persona_names(conn: sqlite3.Connection, account_ids: list[int]) -> dict[int
     return {r["account_id"]: r["persona_name"] for r in rows}
 
 
-def resolve_names(conn: sqlite3.Connection, account_ids, owner_id: int = GLOBAL_OWNER
-                  ) -> dict[int, str]:
-    """{account_id: name} for every requested id, with precedence: this owner's
-    manual label > the global-0 label > steam_personas.persona_name >
-    str(account_id). Every id resolves to a string (never None), so callers can
-    surface co-players and opponents -- mostly untracked -- by their best name."""
+def resolve_names(conn: sqlite3.Connection, account_ids,
+                  user_id: int = DEFAULT_USER_ID) -> dict[int, str]:
+    """{account_id: name} for every requested id, with precedence: this user's
+    manual label > steam_personas.persona_name > str(account_id). Every id resolves
+    to a string (never None), so callers can surface co-players and opponents --
+    mostly untracked -- by their best name."""
     ids = list(dict.fromkeys(account_ids))   # dedupe, preserve order
-    owner_labels = _labels_for(conn, ids, owner_id)
-    global_labels = (owner_labels if owner_id == GLOBAL_OWNER
-                     else _labels_for(conn, ids, GLOBAL_OWNER))
+    labels = _labels_for(conn, ids, user_id)
     personas = _persona_names(conn, ids)
     return {
-        aid: (owner_labels.get(aid) or global_labels.get(aid)
-              or personas.get(aid) or str(aid))
+        aid: (labels.get(aid) or personas.get(aid) or str(aid))
         for aid in ids
     }
 

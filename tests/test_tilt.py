@@ -45,6 +45,8 @@ def _seed_tilt(conn) -> None:
                  (HERO, BASE.isoformat()))
     conn.execute("INSERT INTO tracked_accounts(account_id, is_self, added_at)"
                  " VALUES (?, 1, ?)", (ME, BASE.isoformat()))
+    conn.execute("INSERT INTO user_accounts(user_id, account_id, is_self, added_at)"
+                 " VALUES (1, ?, 1, ?)", (ME, BASE.isoformat()))
 
     mid = 1000
     for i, c in enumerate(SESSION_A):

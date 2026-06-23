@@ -12,10 +12,12 @@ EXPECTED_TABLES = {
     "baseline_refresh_state",
     "tracked_accounts", "sync_state", "fetch_queue", "raw_api_responses",
     "era_candidates", "worker_meta", "kill_events", "steam_personas", "account_labels",
+    "laning_stats", "users", "user_accounts", "sessions",
 }
 EXPECTED_VIEWS   = {"v_my_matchups", "v_my_item_stats"}
 EXPECTED_INDEXES = {"idx_mp_account", "idx_mp_hero",
-                    "idx_ke_match_victim", "idx_ke_match_killer"}
+                    "idx_ke_match_victim", "idx_ke_match_killer",
+                    "idx_ls_match_slot"}
 
 
 def names_of_type(conn: sqlite3.Connection, obj_type: str) -> set[str]:
@@ -37,9 +39,9 @@ def test_all_indexes_created(db):
     assert EXPECTED_INDEXES <= names_of_type(db, "index")
 
 
-def test_user_version_is_9(db):
+def test_user_version_is_12(db):
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 9
+    assert version == 12
 
 
 def test_migrate_is_idempotent(tmp_path):
@@ -47,7 +49,7 @@ def test_migrate_is_idempotent(tmp_path):
     migrate(conn)
     migrate(conn)  # second call must not raise
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 9
+    assert version == 12
 
 
 def test_steam_personas_columns(db):
@@ -57,13 +59,14 @@ def test_steam_personas_columns(db):
 
 def test_account_labels_columns(db):
     cols = {row[1] for row in db.execute("PRAGMA table_info(account_labels)").fetchall()}
-    assert cols == {"owner_id", "account_id", "display_name", "updated_at"}
+    assert cols == {"user_id", "account_id", "display_name", "updated_at"}
 
 
 def test_v9_copies_tracked_display_names_into_labels(tmp_path):
-    """Upgrading to v9 must seed account_labels (owner 0) from every existing
+    """Upgrading to v9 must seed account_labels from every existing
     tracked_accounts.display_name, so no manual name is lost when the resolver
-    stops reading that column. Empty/NULL names are not copied."""
+    stops reading that column. Empty/NULL names are not copied. v11 then re-keys
+    the GLOBAL_OWNER 0 rows onto the seeded first user (user 1)."""
     from tracker.migrate import _STEPS
 
     conn = connect(tmp_path / "v8.db")
@@ -76,13 +79,78 @@ def test_v9_copies_tracked_display_names_into_labels(tmp_path):
                  " VALUES (6, NULL, 't')")          # no name -> not copied
     conn.commit()
 
-    migrate(conn)  # applies 009
+    migrate(conn)  # applies 009 (and onward to the latest version)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
     labels = {r["account_id"]: r["display_name"] for r in
               conn.execute("SELECT account_id, display_name FROM account_labels"
-                           " WHERE owner_id = 0")}
+                           " WHERE user_id = 1")}
     assert labels == {5: "Named"}
+
+
+def test_v12_adds_auth_schema(db):
+    """v12 adds the Steam identity column to users and the sessions table."""
+    user_cols = {row[1] for row in db.execute("PRAGMA table_info(users)").fetchall()}
+    assert {"user_id", "created_at", "steam_account_id"} <= user_cols
+    session_cols = {row[1] for row in db.execute("PRAGMA table_info(sessions)").fetchall()}
+    assert session_cols == {"token", "user_id", "created_at", "expires_at"}
+
+
+def test_v12_steam_account_id_unique(db):
+    """Two users can't claim the same Steam account (the login uniqueness guard)."""
+    db.execute("INSERT INTO users(steam_account_id, created_at) VALUES (42, 't')")
+    with pytest.raises(sqlite3.IntegrityError):
+        db.execute("INSERT INTO users(steam_account_id, created_at) VALUES (42, 't')")
+
+
+def test_v11_seeds_first_user(db):
+    """A fresh migrate seeds the default user (id 1) so local/dev has an identity
+    even before any account is tracked."""
+    user_ids = [r["user_id"] for r in db.execute("SELECT user_id FROM users")]
+    assert user_ids == [1]
+
+
+def test_v11_links_tracked_accounts_to_first_user(tmp_path):
+    """Upgrading to v11 must mirror every existing tracked account onto user 1 via
+    user_accounts, carrying the is_self flag so resolve_self keeps working."""
+    from tracker.migrate import _STEPS
+
+    conn = connect(tmp_path / "v10.db")
+    for sql_file in _STEPS[:10]:                # build the schema up to v10
+        conn.executescript(sql_file.read_text(encoding="utf-8"))
+    conn.execute("PRAGMA user_version = 10")
+    conn.execute("INSERT INTO tracked_accounts(account_id, is_self, added_at)"
+                 " VALUES (50, 1, 't')")        # the self account
+    conn.execute("INSERT INTO tracked_accounts(account_id, is_self, added_at)"
+                 " VALUES (60, 0, 't')")        # a non-self tracked account
+    conn.commit()
+
+    migrate(conn)  # applies 011
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+    links = {r["account_id"]: r["is_self"] for r in
+             conn.execute("SELECT account_id, is_self FROM user_accounts WHERE user_id = 1")}
+    assert links == {50: 1, 60: 0}
+
+
+def test_v11_rekeys_account_labels_owner_to_user(tmp_path):
+    """The GLOBAL_OWNER 0 label rows must move onto user 1 (no name lost)."""
+    from tracker.migrate import _STEPS
+
+    conn = connect(tmp_path / "v10.db")
+    for sql_file in _STEPS[:10]:
+        conn.executescript(sql_file.read_text(encoding="utf-8"))
+    conn.execute("PRAGMA user_version = 10")
+    conn.execute("INSERT INTO account_labels(owner_id, account_id, display_name, updated_at)"
+                 " VALUES (0, 77, 'Rival', 't')")
+    conn.commit()
+
+    migrate(conn)  # applies 011
+
+    rows = conn.execute(
+        "SELECT user_id, display_name FROM account_labels WHERE account_id = 77"
+    ).fetchall()
+    assert [(r["user_id"], r["display_name"]) for r in rows] == [(1, "Rival")]
 
 
 def test_fetch_queue_has_deferred_since(db):
@@ -105,7 +173,7 @@ def test_upgrade_from_v1_preserves_data(tmp_path):
 
     migrate(conn)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
     assert conn.execute("SELECT COUNT(*) FROM tracked_accounts").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM era_candidates").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM ranks").fetchone()[0] == 0
@@ -148,7 +216,7 @@ def test_v5_backfills_player_slot_from_raw_json(tmp_path):
 
     migrate(conn)  # applies 005 (and onward)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
     slots = {r["account_id"]: r["player_slot"] for r in
              conn.execute("SELECT account_id, player_slot FROM match_players WHERE match_id = 1")}
     assert slots == {500: 4, 0: 7, 600: 9}
