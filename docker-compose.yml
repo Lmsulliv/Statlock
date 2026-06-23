@@ -1,0 +1,39 @@
+# Single-origin deploy: the `api` service serves the JSON API and the built SPA
+# on :8000; the `worker` service runs the ingestion daemon alongside it. Both
+# run the same image and share one named volume holding the SQLite DB.
+#
+# Secrets/config come from a sibling `.env` file (Compose reads it automatically):
+#   DEADLOCK_BASE_URL=https://stats.example.com  # public origin; turns Steam login on
+#   STEAM_API_KEY=xxxxxxxx                        # optional; persona enrichment (no-op when unset)
+
+services:
+  api:
+    build: .
+    image: deadlock-stats
+    ports:
+      - "8000:8000"
+    volumes:
+      - deadlock-data:/data
+    environment:
+      DEADLOCK_DB: /data/tracker.db
+      # Set to the public origin to require Steam login on writes; unset -> the app
+      # runs as a single local user with writes open (see docs/deploy.md).
+      DEADLOCK_BASE_URL: ${DEADLOCK_BASE_URL:-}
+    restart: unless-stopped
+
+  worker:
+    image: deadlock-stats
+    # Reuse the image built by `api`; start the worker only after it exists.
+    depends_on:
+      - api
+    volumes:
+      - deadlock-data:/data
+    environment:
+      # The worker reads the DB via the --db flag (its CLI contract), not
+      # DEADLOCK_DB -- point it at the same file on the shared volume.
+      STEAM_API_KEY: ${STEAM_API_KEY:-}
+    command: ["python", "-m", "ingest", "--db", "/data/tracker.db", "run-daemon"]
+    restart: unless-stopped
+
+volumes:
+  deadlock-data: {}

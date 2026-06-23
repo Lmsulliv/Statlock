@@ -1,0 +1,28 @@
+# Keep the build context small and never ship the local DB or secrets.
+# NOTE: .dockerignore is global to the build, so don't exclude frontend/
+# wholesale -- the node stage needs its source. Only the heavy/generated bits.
+
+.git
+.gitignore
+
+# Frontend: node_modules is reinstalled (npm ci) and dist is rebuilt in-image.
+frontend/node_modules
+frontend/dist
+frontend/.env.local
+
+# Local SQLite DB and rate-limit state.
+data/
+
+# Python caches / virtualenvs.
+**/__pycache__
+**/*.pyc
+.venv
+venv
+.pytest_cache
+.hypothesis
+
+# Not needed at runtime.
+tests/
+spikes/
+scripts/
+.claude

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(python -m pytest tests/test_baseline_cache.py -v)",
+      "PowerShell(python -m pytest tests/test_baseline_cache.py -q)",
+      "PowerShell(python -m scripts.bench_baselines)"
+    ]
+  }
+}
