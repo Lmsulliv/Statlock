@@ -97,7 +97,34 @@ The other real players who keep sharing your matches (data-model.md, "Recurring 
 
 Both reuse the matchups columns minus the hero icon — sample size, Wilson interval bar, a "Your overall" baseline column, adjusted delta, verdict — and, like Tilt, the baseline each player is judged against is **your own win rate over the same matches** (overall, or on the selected hero when the "my hero" filter is set), not a global rate. A player is listed only once you've shared at least `MIN_CO_OCCURRENCE = 3` games; thinner co-occurrences are left off, and listed players under the 5-game verdict floor read *not enough data*. Other players are shown minimally — a tracked account's name, otherwise just `Account <id>` (names are a later source). Rows render most-shared first and aren't re-sortable. A blurb prints the baseline and the co-occurrence threshold so the numbers are never shown without their scope.
 
-### 7. Era manager (admin)
+### 7. Performance (continuous metrics)
+
+Per-hero and overall continuous-metric performance — the "what am I actually doing in the game" companion to win rate. One block per scope row (overall first, then each hero A→Z), each a small table with one row per metric: **net worth per minute** (`net_worth` over `duration_s`), kills, deaths, assists, last hits, denies, player damage, obj damage, healing. Net worth is per-minute; the rest are per-game averages.
+
+Each row reuses the matchups vocabulary — sample size, an interval bar (here a mean with its 95% **t**-interval, drawn on the metric's own scale rather than as a percentage), a baseline column, a raw delta in metric units, and a verdict. The baseline is the **live population mean** for that metric at the same scope — every other player's ingested games, the owner excluded — since there is no stored continuous baseline (data-model.md, "Continuous-metric baselines"). The overall row's baseline is restricted to exactly the heroes you played, mirroring the matchups overall baseline.
+
+Two honesty notes specific to this screen:
+
+- **Verdict is good/bad, not above/below.** For a metric where lower is better (deaths), beating the field reads as a *strength*. The statistics layer stays value-neutral; the assembly layer flips the tier (data-model.md), so the frontend still just renders the verdict it's given.
+- **No baseline, no comparison.** A metric nobody else has data for — a hero only you have played, or an all-NULL column — shows personal-only and reads *not enough data* rather than comparing against nothing.
+
+### 8. Laning (early game)
+
+Lane outcomes drive Deadlock games, so this screen reports the early game directly: **net worth, last hits, and denies at the lane-end mark** (~10 minutes, `stats.laning.LANE_END_S`), per hero and overall, each against the live population at the same mark. It is the Performance screen's early-game sibling and shares its layout exactly — one block per scope row (overall first, then heroes A→Z), one metric per row, with sample size, a 95% **t**-interval bar, a baseline column, a raw delta, and a verdict — reusing the same components and the same assembly path (`api.service._continuous_rows`), so the two can't drift.
+
+Two differences from Performance:
+
+- **Read at a fixed time, not per minute.** Every player's snapshot is taken at the same lane-end mark, so the values are raw cumulative numbers (net worth, last hits, denies), directly comparable without normalizing by duration. The values come from the per-player `stats[]` time series, materialized once into `laning_stats` (data-model.md, "Laning stats") — last hits is the snapshot's `creep_kills`, since the per-snapshot `last_hits` field is null (docs/api-findings.md).
+- **No laning snapshot, no row.** A match that ended before laning closed has no lane-end snapshot and simply drops out (NULL, never a fabricated 0), so it can't distort your mean or the baseline.
+
+### 8b. Deaths (coaching)
+
+Aggregates the per-kill `kill_events` table across the scoped match set into two coaching views — the cross-game companion to the per-match kill trades the match-detail view already shows. Both attribute via `match_players` on `(match_id, player_slot)`, so an anonymized opponent (`account_id = 0`) still counts under the hero it piloted.
+
+- **Who kills you.** A ranking of enemy heroes by how often they were the one that killed you, with the games you faced each for context. These are **raw counts with no verdict** — there is no stored per-matchup death baseline, so, exactly like the match-detail trades, the screen never fabricates one. Deaths off fewer than `VERDICT_FLOOR` games faced are muted (a count off one game means little). Tower/creep deaths (NULL killer) belong to no hero and are excluded from this ranking.
+- **When you die.** Your deaths bucketed into game-minute bins (`stats.deaths`, the long tail folded into a trailing `30m+` bin), shown as a small bar chart of **deaths per game** in each minute against the **live population baseline** for that minute (everyone else at this scope, computed straight from `kill_events` — see data-model.md, "Continuous-metric baselines"). Fewer deaths is better, so the assembly layer flips the verdict tier (like the `deaths` metric on Performance): a minute clearly below the field reads as a *strength*, clearly above as a *weakness*. A minute with no population to compare against stays neutral (*not enough data*). Untimed deaths can't be placed on the timeline and are dropped from it (they still count in the by-hero ranking).
+
+### 9. Era manager (admin)
 
 Small page backing the patch-notes detection discussed below:
 
@@ -141,6 +168,9 @@ All endpoints are GET, all take the scope params (`account_id`, `era_ids`, `badg
 GET /api/overview
 GET /api/matchups?hero_id=optional
 GET /api/items?hero_id=required
+GET /api/performance            (continuous metrics per hero + overall, population-baselined)
+GET /api/laning                 (net worth / last hits / denies at the lane-end mark, population-baselined)
+GET /api/death-patterns         (deaths by enemy hero [raw], + death timing per game-minute vs live population)
 GET /api/improvement
 GET /api/recurring-players?hero_id=optional   (teammates + opponents, self-baselined)
 GET /api/eras                  (+ POST confirm/dismiss for candidates)

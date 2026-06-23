@@ -295,6 +295,44 @@ Also present and worth knowing about (lives in `raw_json` for later):
 
 ---
 
+## Per-player `stats[]` time series — early-game net worth (verified 2026-06-21)
+
+Spike for the laning report: does per-match TIME-SERIES net worth exist (net
+worth at, say, the 10-minute mark), or only end-of-match totals? **It exists, and
+is already archived** — no new fetch is needed. Confirmed by re-inspecting two
+already-archived matches (`out/02_match_metadata_86714494.json`,
+`out/05_match_metadata_86707774.json`); no live call was made, so this finding
+spent zero rate-limit budget.
+
+Each `match_info.players[].stats[]` snapshot carries the cumulative state at a
+`time_stamp_s`. Verified facts about the series:
+
+- **Cadence:** a snapshot every **180 s** through 900 s, then every **300 s**
+  (180, 360, 540, 720, 900, 1200, 1500, …). The cadence is the same in both
+  matches; the count of snapshots is just `floor` of the match duration.
+- **Coverage:** all **12/12** players carry a non-empty `stats[]` in both
+  matches (including the anonymized `account_id == 0` players).
+- **Fields per snapshot used for laning:** `net_worth` (present), `denies`
+  (present), and **`creep_kills`** (present) — the cumulative last-hit count.
+  Note the per-snapshot **`last_hits` field is `null`**; `creep_kills` is the
+  in-series last-hit proxy. (The flat per-player `last_hits` total still exists;
+  it just isn't broken down inside `stats[]`.) Each snapshot also has the full
+  gold breakdown (`gold_lane_creep`, `gold_player`, `gold_neutral_creep`, …),
+  `level`, `kills`/`deaths`/`assists`, and the damage/healing totals finding 5
+  reads from the last entry.
+- **No exact 600 s sample.** Because samples land on the cadence above, there is
+  no snapshot at exactly 10:00 — the nearest are 540 s and 720 s. A consumer
+  wanting "net worth at the 10-minute mark" must pick a snapshot rather than read
+  one off: the laning report takes the **latest snapshot with
+  `time_stamp_s <= 600`** (so 540 s in a normal match), and treats a match that
+  never reached that mark as having no laning sample (NULL, never a fabricated 0).
+
+**Consequence:** the laning report derives its lane-end net worth / last hits /
+denies straight from `stats[]` in `raw_json`, backfilling historical matches via
+`reprocess-archive` with no API calls (the same pattern as `kill_events`).
+
+---
+
 ## Analytics endpoints: filters and rank granularity
 
 All analytics endpoints share these query params (full list per endpoint

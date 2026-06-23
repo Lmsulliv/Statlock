@@ -200,6 +200,78 @@ This is what makes the automated, steady-pace pulling you described work. The lo
 2. **Drain.** A worker pulls `pending` rows at a polite fixed rate (e.g. one metadata fetch every few seconds with jitter), writes to the match tables, and marks the row `fetched`.
 3. **Retry with backoff.** Failed rows increment `attempts`; give up after N tries and mark `unavailable`. This handles the exact situation you're in now where old matches aren't fetchable yet because of Valve's match report unlock throttle. A nightly job can flip stale `unavailable` rows back to `pending`, so when you unlock more old reports, the tracker picks them up automatically with zero manual work.
 
+## Per-user identity (schema v11)
+
+```sql
+CREATE TABLE users (
+    user_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT                     -- NULL for the seeded user; stamped on real signup
+);
+
+-- A join table (many-to-many): which accounts a user owns, with their primary one
+-- flagged is_self. This replaces the single global tracked_accounts.is_self flag.
+CREATE TABLE user_accounts (
+    user_id    INTEGER NOT NULL REFERENCES users(user_id),
+    account_id INTEGER NOT NULL,
+    is_self    INTEGER NOT NULL DEFAULT 0,
+    added_at   TEXT,
+    PRIMARY KEY (user_id, account_id)
+);
+```
+
+`tracked_accounts` stays the **global ingestion registry** (the worker fetches each
+tracked account once, regardless of how many users own it). Ownership and the
+"self" flag are per-user, so they live on `user_accounts`. `tracked_accounts.is_self`
+is retained as a now-vestigial column (nothing reads it after v11).
+
+Manual name labels are likewise per-user: `account_labels` is keyed by `user_id`
+(renamed from the old `owner_id` / `GLOBAL_OWNER = 0` sentinel in v11). A user's
+labels are private to that user.
+
+**Why a join table (many-to-many) instead of a single `self_account_id` on `users`:**
+a user can own several accounts (mains, smurfs) and we want the account switcher to
+list exactly their accounts, with one flagged self — that is naturally a
+user↔account link table, and it is what the Phase 3 per-user switcher reads with no
+further migration.
+
+**The default-user seam:** until real auth exists (Phase 2), there is no session to
+identify the requester, so every resolver defaults to `DEFAULT_USER_ID = 1` (the
+first user, seeded by the migration). The app therefore behaves exactly as it did
+when "self" was global. Phase 2 introduces a session-backed dependency that supplies
+the real user id per request; the resolver signatures already take `user_id`, so
+that swap doesn't change the read queries.
+
+## Authentication (schema v12)
+
+```sql
+ALTER TABLE users ADD COLUMN steam_account_id INTEGER;  -- 32-bit; NULL for the local/dev user
+CREATE UNIQUE INDEX idx_users_steam ON users(steam_account_id);
+
+CREATE TABLE sessions (
+    token      TEXT PRIMARY KEY,                          -- opaque random; the cookie value
+    user_id    INTEGER NOT NULL REFERENCES users(user_id),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+```
+
+Login is **Steam OpenID 2.0** (`api/auth.py`): a user signs in at Steam, we verify
+the signed reply, and the returned SteamID64 is normalized to the same 32-bit
+`steam_account_id` the importer uses — so a logged-in user is automatically linked
+to their own Deadlock account (their self account in `user_accounts`).
+
+Sessions are **server-side** (the `sessions` table) rather than a stateless signed
+cookie, so logout truly revokes (delete the row) and sessions expire. The httpOnly
+`session` cookie carries only the opaque token. Writes are CSRF-protected by a
+**double-submit token**: a readable `csrf` cookie set at login, echoed by the SPA in
+the `X-CSRF-Token` header and compared for equality server-side.
+
+**Auth is opt-in** (`DEADLOCK_BASE_URL`). When unset (local/dev) the app runs as the
+single default user with writes open — the original single-user workflow. When set,
+`require_user` enforces a valid session (+ CSRF) on every write, and a user can only
+write within their own identity because the write's `user_id` comes from the session,
+never from client input.
+
 ## Derived views
 
 ```sql
@@ -218,7 +290,7 @@ JOIN match_players opp
     AND opp.team    != me.team
 JOIN matches m ON m.match_id = me.match_id
 JOIN patches p ON p.patch_id = m.patch_id
-WHERE me.account_id IN (SELECT account_id FROM tracked_accounts WHERE is_self = 1)
+WHERE me.account_id IN (SELECT account_id FROM user_accounts WHERE is_self = 1)
 GROUP BY me.account_id, me.hero_id, opp.hero_id, p.era_id;
 
 -- Personal item record per hero
@@ -267,6 +339,22 @@ delta = p_adjusted − p_global
 
 With 3 games your adjusted rate barely moves off the global average; with 40 games your own data dominates. The UI surfaces `delta` ranked by magnitude, filtered to matchups/items where the Wilson interval excludes the global rate, and that filtered list is your "solid direction of improvement" screen.
 
+**Continuous-metric mean and interval** for the metrics that aren't win/loss. Net worth, last hits, denies, player damage, obj damage, healing, and the kills/deaths/assists behind KDA are *continuous*, so Wilson and the Beta prior above — both binomial, with variance fixed by the rate — do not apply to them. A mean instead gets a **Student-t interval** (`stats.mean_interval`). With a sample of `n` values, mean `x̄`, and sample standard deviation `s` (the `n−1` denominator) at confidence `c`:
+
+```
+SE = s / √n
+halfwidth = t(df = n−1, c) · SE
+interval = x̄ ± halfwidth
+```
+
+A t-interval is the small-sample form of `x̄ ± z·SE`; the wider `t` multiplier pays for estimating `s` from the same data. It assumes the sampling distribution of the *mean* is approximately normal — the Central Limit Theorem delivers this for these metrics at screen sample sizes — and finite variance. It is deterministic and fast, which is why it is preferred over a bootstrap CI. The critical value `t(df, c)` comes from a small hard-coded two-sided table for `df` 1–30 and falls back to the normal `z` (the same `Z_CLEAR` / `Z_LEAN` as above) for `df ≥ 31`, where `t ≈ z`. With `n ≤ 1` the spread is unknown and the interval is all of `(−∞, +∞)`, the continuous mirror of the Wilson `(0, 1)` at `n = 0`.
+
+**Continuous verdict** (`stats.mean_verdict`) mirrors the proportion verdict tier-for-tier against a baseline mean (the global or, like tilt, the account's own average): below `VERDICT_FLOOR` games → *not enough data*; the 95% t-interval excluding the baseline → *clear*; only the looser 80% band excluding it → *leaning*; otherwise *not enough data*. "strength" just means the personal mean sits above the baseline and "weakness" below — a value-neutral direction, since higher is good for net worth but bad for deaths. That polarity is a presentation choice, not a statistics one, so it lives in the assembly layer (`api.service`, which flips the tier for a "lower is better" metric like deaths), not here — keeping one tested verdict function that never learns which way a metric points, and the frontend rendering only.
+
+**Continuous-metric baselines** are computed live, not stored. The `baseline_*` snapshot tables carry only win/loss counts and item purchase timing (the Analytics API exposes no per-hero mean net worth, damage, etc.), so the "global" mean for a continuous metric is taken straight from `match_players`: every ingested player's per-match value, `AVG`-ed over the *same* era/badge/game-mode predicates as the personal side, with each population row badge-scoped by its own team average. The scoped account is excluded (`account_id != self`), so the comparison is "you vs the field" — the live analogue of the snapshot baselines being external to you. The per-hero baseline is that hero's population mean; the **overall** baseline pools only the heroes you actually played (`hero_id IN (your heroes)`), mirroring how `matchups()` re-sums its overall baseline over exactly your played pairs so hero mix can't skew the comparison. A metric that is NULL across the whole population (e.g. a hero only you have played, or a column the API never filled) has no baseline and is shown personal-only — `mean_verdict` is never invoked against nothing. Unlike the snapshot baselines, this one needs no extra ingestion; it is a read over data already stored. The **death-timeline baseline** (the Deaths screen's "when you die" view) works the same way: the field's deaths-per-game in each game-minute is `kill_events` deaths over `match_players` games at the scope, the scoped account again excluded, so a minute below the field reads as a strength through the same flipped-`deaths` verdict — no stored death baseline, no extra fetch.
+
+There is deliberately **no shrinkage for means**. A principled normal-normal pull toward the baseline needs a prior-variance knob that is arbitrary and different per metric — complexity without clear benefit. And the one simple pull that would mirror the Beta shrinkage, `(n·x̄ + k·μ) / (n + k)`, is just a weighted average of `x̄` and the baseline `μ`, so it always lands on `x̄`'s side of `μ`; the "shrinkage agrees on direction" guard that earns the proportion verdict its *leaning* tier would be vacuous here and change no verdict. Shrinkage stays with win rate.
+
 ### Session / tilt analysis
 
 A separate, time-aware slice (the Tilt screen). The API exposes no session id, so a **session** is inferred from the gaps between an account's consecutive matches: a gap of `SESSION_GAP_S` seconds or more starts a new session. `SESSION_GAP_S = 3 hours` is the one knob, defined in `stats/sessions.py` (a pure module, like the rest of `stats/`).
@@ -289,6 +377,18 @@ Two thresholds, deliberately different numbers:
 
 Each survivor's `(wins, games)` runs through the same Wilson/shrinkage/verdict machinery, baselined — like tilt — against the account's **own win rate over the same match set**: its overall in-scope rate, or, when the "my hero" filter is active, its rate *on that hero* (the co-occurrence counts are hero-filtered to match, so baseline and subject stay comparable). Names exist only for tracked accounts; every other player is surfaced by `account_id`, with display names left to a later source.
 
+### Laning stats (early-game snapshot)
+
+Backs the Laning screen. The per-player `stats[]` time series in `raw_json` carries the cumulative state every ~180 s (docs/api-findings.md, "Per-player `stats[]` time series"). For the early game we only need one point — the end of laning — so `laning_stats(match_id, player_slot, net_worth, last_hits, denies, sampled_at_s)` materializes the snapshot **`stats.laning.laning_mark`** picks: the latest snapshot at or before **`LANE_END_S = 600`** (so ~540 s in a normal match). `sampled_at_s` records which snapshot, so reads are honest about the mark.
+
+Three deliberate choices, all mirroring `kill_events`:
+
+- **Derived, not denormalized.** A row carries only the three snapshot metrics; hero / account / team / lane come from joining `match_players` on `(match_id, player_slot)` at read time, so `match_players` stays the single source of truth and can't drift.
+- **`last_hits` is the snapshot's `creep_kills`.** The per-snapshot `last_hits` field is null in the payload; `creep_kills` is the cumulative last-hit proxy.
+- **No mark, no row.** A match that never reached the lane-end mark yields no row (NULL, never a fabricated 0), so a short game can't poison the population baseline. The baseline itself is the **live population mean** at the mark, computed like the Performance baseline (there is no stored continuous baseline).
+
+Like `kill_events`, it derives during ingest and backfills historical matches from the archive via `reprocess-archive` with zero API calls.
+
 ## What's deliberately not here yet
 
-Death timestamps and positions, soul curves over time, ability builds, and per-lane stats. All of them slot in as new tables keyed on `(match_id, account_id)` without touching anything above, and `raw_json` means some can be backfilled without re-fetching. That's the test the schema needed to pass.
+Death timestamps and positions, full soul curves over time (we store only the lane-end point today; see "Laning stats" for that slice), and ability builds. All of them slot in as new tables keyed on `(match_id, player_slot)` without touching anything above, and `raw_json` means some can be backfilled without re-fetching. That's the test the schema needed to pass.
