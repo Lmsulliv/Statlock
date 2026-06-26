@@ -30,7 +30,9 @@ export function RecurringPlayers() {
         judged against <strong>your own win rate</strong> over the same matches, so
         a verdict means you do better or worse with (or against) that player than
         you usually do. Every rate shows its 95% interval, and players you've only
-        met a few times stay “not enough data.”
+        met a few times stay “not enough data.” Switching to <strong>in-lane</strong>{' '}
+        keeps only the teammates and opponents who shared your lane pairing, so a
+        co-player's shared-game count drops accordingly.
       </p>
       <QueryBoundary query={recurring}>
         {(data) =>

@@ -1,4 +1,4 @@
-import { usePerformance, useSyncStatus } from '../api/queries'
+import { usePerformance, usePlayedHeroes, useSyncStatus } from '../api/queries'
 import type { MetricField, PerformanceRow } from '../api/types'
 import { MetricBaselineCell, NumberDeltaCell } from '../components/cells'
 import { EmptyState } from '../components/EmptyState'
@@ -34,10 +34,21 @@ function domainFor(m: MetricField): { min: number; max: number } {
 export function Performance() {
   const { scope } = useScope()
   const performance = usePerformance(scope)
+  const heroes = usePlayedHeroes(scope)
+  // The "My hero" dropdown drives what this screen shows: a chosen hero narrows
+  // to that one block, "All my heroes" (heroId null) shows the overall row plus
+  // every hero. The name in the title keeps the active scope legible.
+  const heroLabel =
+    scope.heroId === null
+      ? 'All heroes'
+      : (heroes.data?.find((h) => h.hero_id === scope.heroId)?.name ??
+        `Hero ${scope.heroId}`)
 
   return (
     <section>
-      <h1 className="screen-title">Performance</h1>
+      <h1 className="screen-title">
+        Performance <span className="muted">· {heroLabel}</span>
+      </h1>
       <p className="screen-sub">
         Your per-game numbers — net worth per minute, KDA, damage, healing — for
         each hero and overall, next to the live baseline of everyone else at this
@@ -48,15 +59,21 @@ export function Performance() {
         else has data for show personal-only, never a comparison against nothing.
       </p>
       <QueryBoundary query={performance}>
-        {(rows) =>
-          rows.length === 0 ? (
+        {(rows) => {
+          // heroId null renders all rows; a set heroId keeps only that hero's
+          // block, which naturally drops the overall row (its hero_id is null).
+          const shown =
+            scope.heroId === null
+              ? rows
+              : rows.filter((row) => row.hero_id === scope.heroId)
+          return shown.length === 0 ? (
             <PerformanceEmpty />
           ) : (
-            rows.map((row) => (
+            shown.map((row) => (
               <ScopeBlock key={`${row.scope}-${row.hero_id ?? 'all'}`} row={row} />
             ))
           )
-        }
+        }}
       </QueryBoundary>
     </section>
   )

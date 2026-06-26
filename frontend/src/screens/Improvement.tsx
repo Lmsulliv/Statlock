@@ -1,4 +1,4 @@
-import { useImprovement, useSyncStatus } from '../api/queries'
+import { useImprovement, usePlayedHeroes, useSyncStatus } from '../api/queries'
 import type { Improvement as ImprovementData, ImprovementEntry } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
 import { HeroIcon } from '../components/HeroIcon'
@@ -21,25 +21,43 @@ const iconUrl = (e: ImprovementEntry) =>
 export function Improvement() {
   const { scope } = useScope()
   const improvement = useImprovement(scope)
+  // Reuse the played-heroes list the ScopeBar resolves names from (same query
+  // key, so this is cached, not a new request) to name the selected hero.
+  const heroesQuery = usePlayedHeroes(scope)
+  const heroName =
+    scope.heroId === null
+      ? null
+      : (heroesQuery.data?.find((h) => h.hero_id === scope.heroId)?.name ??
+        `Hero ${scope.heroId}`)
 
   return (
     <section>
       <h1 className="screen-title">Directions for improvement</h1>
       <p className="screen-sub">
-        A short, honest digest of just the calls the data actually supports.
-        Confirmed weaknesses and strengths have intervals that clear the global
-        baseline; the watch list collects large gaps that are still short of
-        confirmation, kept separate on purpose. Every rate is shown with its 95%
-        interval.
+        A short, honest digest of just the calls the data actually supports
+        {heroName ? `, scoped to ${heroName}` : ''}. Confirmed weaknesses and
+        strengths have intervals that clear the global baseline; the watch list
+        collects large gaps that are still short of confirmation, kept separate
+        on purpose. Every rate is shown with its 95% interval.
       </p>
       <QueryBoundary query={improvement}>
         {(data) =>
           isEmpty(data) ? (
-            <ImprovementEmpty />
+            <ImprovementEmpty heroName={heroName} />
           ) : (
             <div className="improve">
-              <KindDigest heading="Hero improvement" kind="matchup" data={data} />
-              <KindDigest heading="Item improvement" kind="item" data={data} />
+              <KindDigest
+                heading="Hero improvement"
+                kind="matchup"
+                data={data}
+                heroName={heroName}
+              />
+              <KindDigest
+                heading="Item improvement"
+                kind="item"
+                data={data}
+                heroName={heroName}
+              />
             </div>
           )
         }
@@ -56,10 +74,12 @@ function KindDigest({
   heading,
   kind,
   data,
+  heroName,
 }: {
   heading: string
   kind: ImprovementEntry['kind']
   data: ImprovementData
+  heroName: string | null
 }) {
   const pick = (list: ImprovementEntry[]) => list.filter((e) => e.kind === kind)
   return (
@@ -69,16 +89,19 @@ function KindDigest({
         title="Confirmed weaknesses"
         hint="Significant negative deltas, largest first; these are the priorities."
         entries={pick(data.confirmed_weaknesses)}
+        heroName={heroName}
       />
       <ImprovementSection
         title="Confirmed strengths"
         hint="Significant positive deltas to lean on."
         entries={pick(data.confirmed_strengths)}
+        heroName={heroName}
       />
       <ImprovementSection
         title="Watch list"
         hint="Large gaps whose intervals fall just short of clearing the baseline, worth keeping an eye on."
         entries={pick(data.watch_list)}
+        heroName={heroName}
         watch
       />
     </section>
@@ -89,11 +112,13 @@ function ImprovementSection({
   title,
   hint,
   entries,
+  heroName,
   watch = false,
 }: {
   title: string
   hint: string
   entries: ImprovementEntry[]
+  heroName: string | null
   watch?: boolean
 }) {
   return (
@@ -103,7 +128,11 @@ function ImprovementSection({
       </h3>
       <p className="muted improve-hint">{hint}</p>
       {entries.length === 0 ? (
-        <p className="muted">Nothing here at the current scope.</p>
+        <p className="muted">
+          {heroName
+            ? `No confirmed calls for ${heroName} yet at this scope.`
+            : 'Nothing here at the current scope.'}
+        </p>
       ) : (
         <ul className="improve-list">
           {entries.map((e) => (
@@ -130,10 +159,12 @@ const isEmpty = (d: ImprovementData) =>
 
 // Nothing confirmed yet: explain why with live sync counts rather than a blank
 // screen (presentation rule 5 / scenario 6).
-function ImprovementEmpty() {
+function ImprovementEmpty({ heroName }: { heroName: string | null }) {
   const sync = useSyncStatus()
   return (
-    <EmptyState title="Nothing to report yet.">
+    <EmptyState
+      title={heroName ? `Nothing to report for ${heroName} yet.` : 'Nothing to report yet.'}
+    >
       <QueryBoundary query={sync}>
         {(s) => (
           <>
@@ -150,9 +181,11 @@ function ImprovementEmpty() {
               </p>
             ) : (
               <p>
-                No matchup or item has enough evidence to call yet. Keep playing,
-                or lower <strong>Min games</strong> / widen the rank range to see
-                softer signals.
+                {heroName
+                  ? `No matchup or item on ${heroName} has enough evidence to call yet. `
+                  : 'No matchup or item has enough evidence to call yet. '}
+                Keep playing, or lower <strong>Min games</strong> / widen the rank
+                range to see softer signals.
               </p>
             )}
           </>

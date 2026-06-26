@@ -15,6 +15,7 @@ import sqlite3
 
 from api.scope import Scope
 from ingest.util import DEFAULT_USER_ID
+from stats.laning import LANE_END_S
 
 
 def resolve_self_account_id(conn: sqlite3.Connection,
@@ -366,6 +367,17 @@ def recurring_co_players(conn: sqlite3.Connection, scope: Scope,
     if my_hero_id is not None:
         hero_sql, hero_params = " AND me.hero_id = ?", [my_hero_id]
 
+    # In-lane: keep only co-players in the SAME lane pair as me. Same lane-pair
+    # predicate personal_matchups uses ({1,2}/{3,4}/{5,6}; (lane+1)/2 is the group
+    # id), but team-agnostic on purpose -- it keeps any co-player who shared my lane
+    # pairing whether teammate or opponent, so a shared-game count drops to just the
+    # lane-pair games. When in_lane is false this is empty and behaviour is as before.
+    # The self-baseline is deliberately NOT lane-filtered here: it's account_results
+    # (the service's overall win rate over the same matches), and in_lane changes only
+    # which co-players count inside those matches, not which matches I played -- so
+    # account_results stays scope-wide. Don't "fix" it to match this predicate.
+    lane_sql = (" AND (me.lane + 1) / 2 = (other.lane + 1) / 2") if scope.in_lane else ""
+
     # Exclude anonymized players (account_id = 0) on the OTHER side only. Two
     # reasons: an account_id = 0 co-player is not a real recurring person, and --
     # because account_id is no longer unique within a match -- all of a lobby's
@@ -383,7 +395,7 @@ def recurring_co_players(conn: sqlite3.Connection, scope: Scope,
         "   AND other.account_id != 0"
         " JOIN matches m ON m.match_id = me.match_id"
         " WHERE me.account_id = ? AND m.game_mode = ?"
-        + era_sql + badge_sql + hero_sql +
+        + era_sql + badge_sql + hero_sql + lane_sql +
         " GROUP BY other.account_id, same_team"
     )
     params = [scope.account_id, scope.game_mode] + era_params + badge_params + hero_params
@@ -572,6 +584,22 @@ def baseline_performance(conn: sqlite3.Connection, scope: Scope,
 # net worth at end of laning is the headline; last hits (the snapshot's
 # creep_kills) and denies are the supporting laning fundamentals. label /
 # higher_is_better are presentation metadata; the verdict math lives in stats/.
+#
+# lane_deaths is the combat half of "did you lose your lane" and the one metric not
+# read off the laning_stats snapshot: it counts kill_events where you were the
+# victim of a lane-pair opponent (opposite team, same (lane+1)/2 pairing -- the
+# app's "in lane" rule everywhere else) at or before LANE_END_S. Its expr is a
+# correlated subquery over the outer ls (match_id, player_slot) and mp (team, lane)
+# aliases that BOTH personal_laning and baseline_laning expose, so it rides the
+# same select-building loops with no special-casing. COUNT(*) is never NULL, so a
+# played match with no qualifying death contributes a real 0 (a player with no
+# laning_stats row stays absent); the baseline AVGs that same count over the field
+# for an honest per-game comparison -- never a fabricated 0. NULL killer_slot
+# (tower/creep) and untimed deaths (game_time_s IS NULL) fail the join/predicate
+# and are excluded -- neither can be attributed to a lane opponent. LANE_END_S is
+# inlined as an int literal (a trusted stats/ constant, not user input): the shared
+# loops concatenate exprs without per-metric bind params, so a placeholder here
+# would desync the parameter list.
 LANING_METRICS = [
     {"key": "net_worth", "label": "Net worth @ lane end",
      "expr": "ls.net_worth", "higher_is_better": True},
@@ -579,6 +607,17 @@ LANING_METRICS = [
      "expr": "ls.last_hits", "higher_is_better": True},
     {"key": "denies", "label": "Denies @ lane end",
      "expr": "ls.denies", "higher_is_better": True},
+    {"key": "lane_deaths", "label": "Lane deaths @ lane end",
+     "expr": (
+         "(SELECT COUNT(*) FROM kill_events ke"
+         "  JOIN match_players opp ON opp.match_id = ke.match_id"
+         "    AND opp.player_slot = ke.killer_slot"
+         "  WHERE ke.match_id = ls.match_id"
+         "    AND ke.victim_slot = ls.player_slot"
+         "    AND opp.team != mp.team"
+         "    AND (opp.lane + 1) / 2 = (mp.lane + 1) / 2"
+         f"    AND ke.game_time_s <= {LANE_END_S})"),
+     "higher_is_better": False},
 ]
 
 

@@ -548,20 +548,27 @@ def _raw_delta(row: dict) -> float | None:
     return row["winrate"] - row["global_rate"]
 
 
-def improvement(conn: sqlite3.Connection, scope: Scope) -> dict:
+def improvement(conn: sqlite3.Connection, scope: Scope,
+                hero_id: int | None = None) -> dict:
     """A short ranked digest across matchups and items: confirmed weaknesses,
     confirmed strengths, and a watch list of large-but-unconfirmed deltas.
-    An unconfirmed delta never appears outside the watch list (scenario 5)."""
+    An unconfirmed delta never appears outside the watch list (scenario 5).
+
+    When hero_id is given, the whole digest is scoped to that one hero: only its
+    matchups and item rows feed the digest. When it is None, the input is the
+    across-all-heroes set (matchups aggregated over every played hero, item rows
+    from each played hero)."""
     empty = {"confirmed_weaknesses": [], "confirmed_strengths": [], "watch_list": []}
     resolved = _resolved(conn, scope)
     if resolved is None:
         return empty
 
     entries = [dict(r, kind="matchup", subject=r["enemy_hero_name"])
-               for r in matchups(conn, resolved)]
-    for hero_id in _played_hero_ids(conn, resolved):
-        entries += [dict(r, kind="item", subject=r["item_name"], hero_id=hero_id)
-                    for r in items(conn, resolved, hero_id)]
+               for r in matchups(conn, resolved, hero_id=hero_id)]
+    item_hero_ids = [hero_id] if hero_id is not None else _played_hero_ids(conn, resolved)
+    for hid in item_hero_ids:
+        entries += [dict(r, kind="item", subject=r["item_name"], hero_id=hid)
+                    for r in items(conn, resolved, hid)]
 
     # matchups()/items() now return thin rows for the tables; the digest keeps
     # min_games as its own gate so "lower Min games to see softer signals" holds.
@@ -661,6 +668,9 @@ def recurring_players(conn: sqlite3.Connection, scope: Scope,
     if scope is None:
         return empty
 
+    # Self-baseline stays scope-wide even under in_lane: in_lane changes only which
+    # co-players count inside each match, not which matches I played, so this is
+    # judged against my overall win rate over the same set. Don't lane-filter it.
     results = queries.account_results(conn, scope, my_hero_id=hero_id)
     overall_games = len(results)
     overall_wins = sum(r["won"] for r in results)

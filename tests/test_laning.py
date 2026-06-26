@@ -15,12 +15,17 @@ from statistics import fmean
 import pytest
 from fastapi.testclient import TestClient
 
-from api import service
+from api import queries, service
 from api.app import app
 from api.scope import make_scope
 from ingest.parse import derive_laning_stats, insert_match, parse_metadata
 from ingest.reprocess import reprocess_archive
-from stats import VERDICT_CLEAR_STRENGTH, VERDICT_NOT_ENOUGH_DATA
+from stats import (
+    VERDICT_CLEAR_STRENGTH,
+    VERDICT_CLEAR_WEAKNESS,
+    VERDICT_LEANING_WEAKNESS,
+    VERDICT_NOT_ENOUGH_DATA,
+)
 from stats import __main__ as cli
 from tracker.db import connect
 from tracker.migrate import migrate
@@ -234,3 +239,148 @@ def test_api_and_cli_match_the_service(laning_db, capsys):
 
 def test_empty_database_returns_no_rows(empty_db_path):
     assert TestClient(app).get("/api/laning").json() == []
+
+
+# ── Lane deaths (kill_events derived, lane-pair-opponent rule) ────────────────
+#
+# A lane death = a kill_event where you are the victim, the killer is a lane-pair
+# opponent (opposite team, same (lane+1)/2 pairing), and game_time_s <= LANE_END_S.
+# These tests seed kill_events + match_players.lane directly (the rest of the
+# laning suite leaves both untouched, so the new metric is 0 there and the existing
+# assertions stay green).
+
+# ME laned at slot 1 / team 0 / lane 1, so (lane+1)/2 = 1. Slot 2 (team 1, lane 2)
+# is the lane-pair opponent; slot 3 (team 1, lane 3 -> pair 2) and slot 4 (team 0,
+# my own team) are NOT, and a NULL killer is a tower/creep.
+ME_SLOT = 1
+PAIR_OPP = 2          # lane-pair opponent: counts
+OTHER_LANE_OPP = 3    # opponent in a different lane pair: excluded (strict rule)
+TEAMMATE = 4          # same team: excluded
+
+
+def _matchrow(conn, match_id):
+    conn.execute(
+        "INSERT INTO matches(match_id, start_time, duration_s, game_mode,"
+        " winning_team, era_id, average_badge_team0, average_badge_team1,"
+        " raw_json, ingested_at) VALUES (?, ?, ?, '1', 0, NULL, ?, ?, '{}', ?)",
+        (match_id, WHEN, DUR, BADGE, BADGE, WHEN),
+    )
+
+
+def _player(conn, match_id, slot, account, hero, team, lane):
+    conn.execute(
+        "INSERT INTO match_players(match_id, player_slot, account_id, hero_id,"
+        " team, lane, won) VALUES (?, ?, ?, ?, ?, ?, 1)",
+        (match_id, slot, account, hero, team, lane),
+    )
+
+
+def _laning_row(conn, match_id, slot):
+    conn.execute(
+        "INSERT INTO laning_stats(match_id, player_slot, net_worth, last_hits,"
+        " denies, sampled_at_s) VALUES (?, ?, 4000, 30, 5, 540)",
+        (match_id, slot),
+    )
+
+
+def _kill(conn, match_id, victim, killer, t):
+    conn.execute(
+        "INSERT INTO kill_events(match_id, game_time_s, victim_slot, killer_slot)"
+        " VALUES (?, ?, ?, ?)",
+        (match_id, t, victim, killer),
+    )
+
+
+def _me_match(conn, match_id, kills):
+    """One match ME played on Wraith (slot 1), with the lane-pair opponent and the
+    two non-qualifying killers always present so any kill can be attributed. `kills`
+    is a list of (killer_slot, game_time_s) kill_events with ME as the victim."""
+    _matchrow(conn, match_id)
+    _player(conn, match_id, ME_SLOT, ME, WRAITH, 0, 1)
+    _player(conn, match_id, PAIR_OPP, 20, WRAITH, 1, 2)
+    _player(conn, match_id, OTHER_LANE_OPP, 30, WRAITH, 1, 3)
+    _player(conn, match_id, TEAMMATE, 40, WRAITH, 0, 2)
+    _laning_row(conn, match_id, ME_SLOT)            # ME has a lane-end snapshot
+    for killer, t in kills:
+        _kill(conn, match_id, ME_SLOT, killer, t)
+
+
+@pytest.fixture
+def lane_deaths_db(tmp_path, monkeypatch):
+    """ME plays 6 Wraith matches; per-match qualifying lane-death counts are
+    [2, 0, 1, 1, 1, 1] (sum 6 -> mean 1.0). The 0-match carries only EXCLUDED
+    events (post-laning, non-lane-pair killer, teammate, tower) to prove a played
+    match with no qualifying death contributes a real 0, not NULL. A small,
+    low-death population gives an honest baseline ME clearly exceeds."""
+    path = tmp_path / "lanedeaths.db"
+    conn = connect(path)
+    migrate(conn)
+    conn.execute("INSERT INTO heroes(hero_id, name, fetched_at) VALUES (?, 'Wraith', ?)",
+                 (WRAITH, WHEN))
+    conn.execute("INSERT INTO tracked_accounts(account_id, is_self, added_at)"
+                 " VALUES (?, 1, ?)", (ME, WHEN))
+    conn.execute("INSERT INTO user_accounts(user_id, account_id, is_self, added_at)"
+                 " VALUES (1, ?, 1, ?)", (ME, WHEN))
+
+    _me_match(conn, 7001, [(PAIR_OPP, 200), (PAIR_OPP, 590)])      # 2 qualifying
+    _me_match(conn, 7002, [                                         # 0 qualifying:
+        (PAIR_OPP, 700),          # post-laning (> LANE_END_S)
+        (OTHER_LANE_OPP, 200),    # opponent in a different lane pair
+        (TEAMMATE, 200),          # same team
+        (None, 100),              # tower / creep (NULL killer_slot)
+    ])
+    _me_match(conn, 7003, [(PAIR_OPP, 540)])                        # 1
+    _me_match(conn, 7004, [(PAIR_OPP, 300)])                        # 1
+    _me_match(conn, 7005, [(PAIR_OPP, 450)])                        # 1
+    _me_match(conn, 7006, [(PAIR_OPP, 120)])                        # 1
+
+    # Population (excluded from ME's rows, included in the baseline): 5 Wraith
+    # laning rows, only the first with a qualifying lane death -> baseline 0.2.
+    for i, deaths in enumerate([1, 0, 0, 0, 0]):
+        mid = 8000 + i
+        _matchrow(conn, mid)
+        _player(conn, mid, 1, 100 + i, WRAITH, 0, 1)               # a population player
+        _player(conn, mid, 2, 200 + i, WRAITH, 1, 2)               # their lane-pair opp
+        _laning_row(conn, mid, 1)
+        if deaths:
+            _kill(conn, mid, 1, 2, 300)
+
+    conn.commit()
+    monkeypatch.setenv("DEADLOCK_DB", str(path))
+    return conn
+
+
+def test_personal_lane_deaths_counts_only_qualifying(lane_deaths_db):
+    # personal_laning returns one row per ME match; lane_deaths is the per-match
+    # qualifying count. Post-laning, non-lane-pair, teammate and tower kills are all
+    # excluded, so the 0-match reads a real 0 (present, not dropped).
+    rows = queries.personal_laning(lane_deaths_db, make_scope(account_id=ME))
+    assert sorted(r["lane_deaths"] for r in rows) == [0, 1, 1, 1, 1, 2]
+
+
+def test_lane_deaths_per_game_average_and_direction(lane_deaths_db):
+    wraith = _metrics(next(r for r in service.laning(lane_deaths_db, make_scope())
+                           if r["hero_name"] == "Wraith"))
+    ld = wraith["lane_deaths"]
+    assert ld["games"] == 6
+    assert ld["mean"] == 1.0                       # (2 + 0 + 1 + 1 + 1 + 1) / 6
+    assert ld["higher_is_better"] is False         # fewer lane deaths is better
+
+
+def test_lane_deaths_baseline_is_population_and_flips_to_weakness(lane_deaths_db):
+    wraith = _metrics(next(r for r in service.laning(lane_deaths_db, make_scope())
+                           if r["hero_name"] == "Wraith"))
+    ld = wraith["lane_deaths"]
+    # Honest population baseline computed the same way, owner excluded.
+    assert ld["baseline_mean"] == 0.2              # 1 lane death over 5 pop games
+    assert ld["baseline_games"] == 5
+    assert ld["delta"] == 0.8                      # 1.0 - 0.2, dying more than the field
+    # higher_is_better is False, so more deaths than the field is a WEAKNESS.
+    assert ld["verdict"] in (VERDICT_CLEAR_WEAKNESS, VERDICT_LEANING_WEAKNESS)
+
+
+def test_lane_deaths_overall_pools_played_heroes(lane_deaths_db):
+    overall = _metrics(next(r for r in service.laning(lane_deaths_db, make_scope())
+                            if r["scope"] == "overall"))
+    # ME only played Wraith, so the overall lane-death mean matches the hero row.
+    assert overall["lane_deaths"]["mean"] == 1.0

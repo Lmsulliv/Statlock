@@ -184,6 +184,50 @@ def test_anonymized_coplayers_excluded_real_ones_kept(db):
     assert 0 not in ids
 
 
+def test_in_lane_keeps_only_lane_pair_shared_games(db):
+    """A co-player who shares some games in my lane pairing and some outside it:
+    in_lane=true counts only the lane-pair games (team-agnostic, so a teammate is
+    kept just like an opponent would be); in_lane=false counts all shared games.
+    The self-baseline (account_results) is scope-wide either way -- in_lane changes
+    only which co-players count inside each match, not which matches I played -- so
+    my overall record is identical in both calls."""
+    db.execute("INSERT INTO heroes(hero_id, name, fetched_at) VALUES (7, 'Wraith', 't')")
+    db.execute("INSERT INTO tracked_accounts(account_id, is_self, added_at) VALUES (1, 1, 't')")
+    db.execute("INSERT INTO user_accounts(user_id, account_id, is_self, added_at) VALUES (1, 1, 1, 't')")
+    COP = 100
+
+    def add(mid: int, cop_lane: int) -> None:
+        start = (BASE + timedelta(minutes=mid)).isoformat()
+        db.execute(
+            "INSERT INTO matches(match_id, start_time, duration_s, game_mode,"
+            " winning_team, raw_json, ingested_at) VALUES (?, ?, 1800, '1', 0, '{}', ?)",
+            (mid, start, start))
+        # ME in lane 1, lane-pair group (1+1)/2 = 1, always a win (team 0 wins).
+        db.execute("INSERT INTO match_players(match_id, player_slot, account_id,"
+                   " hero_id, team, lane, won) VALUES (?, 1, 1, 7, 0, 1, 1)", (mid,))
+        # COP on my team in the given lane.
+        db.execute("INSERT INTO match_players(match_id, player_slot, account_id,"
+                   " hero_id, team, lane, won) VALUES (?, 2, ?, 7, 0, ?, 1)",
+                   (mid, COP, cop_lane))
+
+    # 4 shared games in my lane pairing (lane 2 -> group (2+1)/2 = 1, matches my 1),
+    # 3 outside it (lane 3 -> group (3+1)/2 = 2).
+    for mid in (701, 702, 703, 704):
+        add(mid, 2)
+    for mid in (705, 706, 707):
+        add(mid, 3)
+    db.commit()
+
+    overall = service.recurring_players(db, make_scope(account_id=1, in_lane=False))
+    lane = service.recurring_players(db, make_scope(account_id=1, in_lane=True))
+
+    assert _by_id(overall["teammates"])[COP]["games"] == 7   # all shared games
+    assert _by_id(lane["teammates"])[COP]["games"] == 4      # only the lane-pair games
+    # Self-baseline unchanged: I played the same 7 matches under either toggle.
+    assert overall["overall"]["games"] == 7
+    assert lane["overall"]["games"] == 7
+
+
 def test_empty_scope_returns_empty_shape(db):
     # Migrated but no tracked account -> resolves to nothing -> empty shape.
     result = service.recurring_players(db, make_scope())

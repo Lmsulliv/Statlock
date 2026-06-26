@@ -219,9 +219,9 @@ def delete_account_name(account_id: int,
 
 
 @app.get("/api/improvement")
-def get_improvement(scope: Scope = Depends(get_scope),
+def get_improvement(hero_id: int | None = None, scope: Scope = Depends(get_scope),
                     conn: sqlite3.Connection = Depends(get_conn)) -> dict:
-    return service.improvement(conn, scope)
+    return service.improvement(conn, scope, hero_id=hero_id)
 
 
 @app.get("/api/tilt")

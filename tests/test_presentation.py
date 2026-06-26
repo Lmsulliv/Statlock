@@ -6,7 +6,7 @@ app and the CLI both read it via the DEADLOCK_DB env var the fixture sets.
 """
 from fastapi.testclient import TestClient
 
-from api import queries, service
+from api import cache, queries, service
 from api.app import app
 from api.scope import make_scope
 from ingest.maintenance import DECADE_BRACKETS
@@ -19,14 +19,18 @@ from stats import (
 )
 from stats import __main__ as cli
 from tests.conftest import (
+    BADGE_MID,
     E_BRACKET,
     E_BRAWL,
     E_ERA,
     E_TWO,
     E_WEAK,
     E_WATCH,
+    ENEMY,
     ERA2,
+    HERO_BRAWL,
     HERO_ME,
+    JUNE,
     ME,
     SNAPSHOT,
 )
@@ -168,6 +172,78 @@ def test_improvement_digest_stays_gated_by_min_games(api_db):
     # Sanity: at a low gate the same subject IS a confirmed weakness.
     imp_low = service.improvement(api_db, make_scope(min_games=3))
     assert E_WEAK in {e.get("enemy_hero_id") for e in imp_low["confirmed_weaknesses"]}
+
+
+# ── Hero scope: the digest narrows to the selected "my hero" ──────────────────
+
+# A fresh enemy hero for a second Normal-mode matchup; not used elsewhere in the
+# seed, so it can only appear via the second played hero we add below.
+HERO_OTHER_ENEMY = 40
+
+
+def _seed_second_normal_hero(conn):
+    """Give the self account a SECOND Normal-mode played hero (HERO_BRAWL) with
+    its own confirmed weakness, so a hero-scoped digest has two distinct heroes
+    to switch between. Mirrors the Lash shape (6W/30 vs a ~0.5 baseline)."""
+    conn.execute("INSERT INTO heroes(hero_id, name, fetched_at) VALUES (?, 'Seven', ?)",
+                 (HERO_OTHER_ENEMY, JUNE))
+    for i in range(30):
+        mid = 6000 + i
+        won = i < 6
+        winning_team = 0 if won else 1
+        conn.execute(
+            "INSERT INTO matches(match_id, start_time, duration_s, game_mode,"
+            " winning_team, era_id, average_badge_team0, average_badge_team1,"
+            " raw_json, ingested_at) VALUES (?, ?, 1800, '1', ?, ?, ?, ?, '{}', ?)",
+            (mid, JUNE, winning_team, ERA2, BADGE_MID, BADGE_MID, JUNE),
+        )
+        conn.execute("INSERT INTO match_players(match_id, player_slot, account_id, hero_id, team, won)"
+                     " VALUES (?, 1, ?, ?, 0, ?)", (mid, ME, HERO_BRAWL, int(won)))
+        conn.execute("INSERT INTO match_players(match_id, player_slot, account_id, hero_id, team, won)"
+                     " VALUES (?, 2, ?, ?, 1, ?)", (mid, ENEMY, HERO_OTHER_ENEMY, int(not won)))
+    conn.execute(
+        "INSERT INTO baseline_hero_matchups(snapshot_id, hero_id, enemy_hero_id,"
+        " era_id, badge_min, badge_max, wins, matches, fetched_at)"
+        " VALUES (?, ?, ?, 0, 0, 116, 250, 500, ?)",
+        (SNAPSHOT, HERO_BRAWL, HERO_OTHER_ENEMY, JUNE),
+    )
+    conn.commit()
+    # We injected baseline rows without moving the version token; clear the
+    # process-wide baseline cache so the new row isn't masked by a sibling test's
+    # cached load at the same scope/snapshot (a real refresh would move the token).
+    cache.BASELINE_CACHE.clear()
+
+
+def _matchup_enemies(imp):
+    return {e.get("enemy_hero_id") for lst in imp.values() for e in lst
+            if e["kind"] == "matchup"}
+
+
+def _item_hero_ids(imp):
+    return {e["hero_id"] for lst in imp.values() for e in lst if e["kind"] == "item"}
+
+
+def test_improvement_scopes_to_selected_hero(api_db):
+    _seed_second_normal_hero(api_db)
+    scope = make_scope(min_games=3)
+
+    # Scoped to HERO_ME: only HERO_ME's matchups and items feed the digest.
+    imp_me = service.improvement(api_db, scope, hero_id=HERO_ME)
+    assert E_WEAK in _matchup_enemies(imp_me)             # HERO_ME's confirmed weakness
+    assert HERO_OTHER_ENEMY not in _matchup_enemies(imp_me)  # the other hero's enemy is gone
+    assert _item_hero_ids(imp_me) == {HERO_ME}            # only HERO_ME's item rows
+
+    # Switching the hero changes the set: HERO_BRAWL's own enemy, none of HERO_ME's.
+    imp_other = service.improvement(api_db, scope, hero_id=HERO_BRAWL)
+    assert HERO_OTHER_ENEMY in _matchup_enemies(imp_other)
+    assert E_WEAK not in _matchup_enemies(imp_other)
+    # HERO_BRAWL bought no items in Normal, so its digest carries no item entries.
+    assert _item_hero_ids(imp_other) == set()
+
+    # hero_id=None keeps the across-all-heroes digest: both heroes' calls appear.
+    imp_all = service.improvement(api_db, scope)
+    assert {E_WEAK, HERO_OTHER_ENEMY} <= _matchup_enemies(imp_all)
+    assert HERO_ME in _item_hero_ids(imp_all)
 
 
 def test_item_rows_expose_image_url(api_db):
