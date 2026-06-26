@@ -28,6 +28,9 @@ def full_client() -> FakeClient:
 
 def test_run_once_does_maintenance_discovery_drain(db):
     now = ManualNow()
+    # Migration 013 pre-seeds 12 curated eras; clear them so ingested matches bind
+    # to this single epoch era.
+    db.execute("DELETE FROM patch_eras")
     db.execute("INSERT INTO patch_eras(label, started_at) VALUES('all', '1970-01-01T00:00:00+00:00')")
     db.commit()
     add_account(db, ME, display_name="me", is_self=True, now=now)

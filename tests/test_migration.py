@@ -39,9 +39,9 @@ def test_all_indexes_created(db):
     assert EXPECTED_INDEXES <= names_of_type(db, "index")
 
 
-def test_user_version_is_12(db):
+def test_user_version_is_13(db):
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 12
+    assert version == 13
 
 
 def test_migrate_is_idempotent(tmp_path):
@@ -49,7 +49,7 @@ def test_migrate_is_idempotent(tmp_path):
     migrate(conn)
     migrate(conn)  # second call must not raise
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 12
+    assert version == 13
 
 
 def test_steam_personas_columns(db):
@@ -81,7 +81,7 @@ def test_v9_copies_tracked_display_names_into_labels(tmp_path):
 
     migrate(conn)  # applies 009 (and onward to the latest version)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
     labels = {r["account_id"]: r["display_name"] for r in
               conn.execute("SELECT account_id, display_name FROM account_labels"
                            " WHERE user_id = 1")}
@@ -127,7 +127,7 @@ def test_v11_links_tracked_accounts_to_first_user(tmp_path):
 
     migrate(conn)  # applies 011
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
     links = {r["account_id"]: r["is_self"] for r in
              conn.execute("SELECT account_id, is_self FROM user_accounts WHERE user_id = 1")}
     assert links == {50: 1, 60: 0}
@@ -173,7 +173,7 @@ def test_upgrade_from_v1_preserves_data(tmp_path):
 
     migrate(conn)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
     assert conn.execute("SELECT COUNT(*) FROM tracked_accounts").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM era_candidates").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM ranks").fetchone()[0] == 0
@@ -216,7 +216,7 @@ def test_v5_backfills_player_slot_from_raw_json(tmp_path):
 
     migrate(conn)  # applies 005 (and onward)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
     slots = {r["account_id"]: r["player_slot"] for r in
              conn.execute("SELECT account_id, player_slot FROM match_players WHERE match_id = 1")}
     assert slots == {500: 4, 0: 7, 600: 9}
@@ -267,3 +267,64 @@ def test_match_item_purchases_has_sold_time_s(db):
     cols = {row[1] for row in db.execute("PRAGMA table_info(match_item_purchases)").fetchall()}
     assert "sold_time_s" in cols
     assert "sold" not in cols
+
+
+def test_v13_reseeds_curated_eras(tmp_path):
+    """v13 replaces all eras with the 12 curated ones, re-bins matches against the
+    new boundaries (pre-first-era matches go NULL), and drops orphaned per-era
+    fetched baselines while preserving the all-time sentinel (era_id = 0)."""
+    from tracker.migrate import _STEPS
+
+    conn = connect(tmp_path / "v12.db")
+    for sql_file in _STEPS[:12]:               # build the schema up to v12
+        conn.executescript(sql_file.read_text(encoding="utf-8"))
+    conn.execute("PRAGMA user_version = 12")
+
+    # Matches spanning the new boundaries (era_id starts NULL; v13 re-bins them).
+    def add_match(mid, start):
+        conn.execute(
+            "INSERT INTO matches(match_id, start_time, duration_s, winning_team,"
+            " era_id, raw_json, ingested_at) VALUES (?, ?, 1800, 0, NULL, '{}', 't')",
+            (mid, start),
+        )
+    add_match(1, "2024-12-01T00:00:00Z")        # before Major Map Rework -> NULL
+    add_match(2, "2026-05-26T12:00:00Z")        # inside Urn Update 2 (2026-05-25)
+
+    # A surviving all-time sentinel row and an orphaned per-era row in each table.
+    conn.execute(
+        "INSERT INTO baseline_hero_matchups(snapshot_id, hero_id, enemy_hero_id,"
+        " era_id, badge_min, badge_max, same_lane, wins, matches, fetched_at)"
+        " VALUES (1, 1, 2, 0, 0, 116, 0, 5, 10, 't'),"
+        "        (1, 1, 2, 999, 0, 116, 0, 5, 10, 't')")
+    conn.execute(
+        "INSERT INTO baseline_refresh_state(era_id, last_refreshed_at)"
+        " VALUES (0, 't'), (999, 't')")
+    conn.commit()
+
+    migrate(conn)  # applies 013
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+
+    eras = conn.execute(
+        "SELECT label, started_at FROM patch_eras ORDER BY started_at"
+    ).fetchall()
+    assert len(eras) == 12
+    assert eras[0]["label"] == "Major Map Rework"
+    assert eras[0]["started_at"] == "2025-02-25T00:00:00Z"
+    assert eras[-1]["label"] == "Minor Update (Jun 11)"
+    assert eras[-1]["started_at"] == "2026-06-11T00:00:00Z"
+
+    # Re-binning: pre-first-era match stays NULL; the other binds to Urn Update 2.
+    assert conn.execute("SELECT era_id FROM matches WHERE match_id = 1").fetchone()[0] is None
+    urn2_id = conn.execute(
+        "SELECT era_id FROM patch_eras WHERE label = 'Urn Update 2'"
+    ).fetchone()[0]
+    assert conn.execute("SELECT era_id FROM matches WHERE match_id = 2").fetchone()[0] == urn2_id
+
+    # All-time sentinel survives; the orphaned era_id=999 rows are swept.
+    matchup_eras = {r["era_id"] for r in
+                    conn.execute("SELECT era_id FROM baseline_hero_matchups")}
+    assert matchup_eras == {0}
+    refresh_eras = {r["era_id"] for r in
+                    conn.execute("SELECT era_id FROM baseline_refresh_state")}
+    assert refresh_eras == {0}

@@ -166,6 +166,9 @@ def agg_db(db):
                " VALUES (?, 1, ?)", (SELF_ACC, JUNE))
     db.execute("INSERT INTO user_accounts(user_id, account_id, is_self, added_at)"
                " VALUES (1, ?, 1, ?)", (SELF_ACC, JUNE))
+    # Migration 013 pre-seeds 12 curated eras (ids 1-12); clear them so the
+    # explicit era_id=1,2 inserts below don't collide on the primary key.
+    db.execute("DELETE FROM patch_eras")
     db.execute("INSERT INTO patch_eras(era_id, label, started_at)"
                " VALUES (1, 'E1', '2026-01-01T00:00:00Z')")
     db.execute("INSERT INTO patch_eras(era_id, label, started_at)"

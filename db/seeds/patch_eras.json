@@ -1,6 +1,14 @@
 [
-  {
-    "label": "Initial era (all matches before first curated boundary)",
-    "started_at": "1970-01-01T00:00:00Z"
-  }
+  { "label": "Major Map Rework", "started_at": "2025-02-25T00:00:00Z" },
+  { "label": "Major Item Rework", "started_at": "2025-05-08T00:00:00Z" },
+  { "label": "Six New Heroes", "started_at": "2025-09-06T00:00:00Z" },
+  { "label": "Old Gods, New Blood", "started_at": "2026-01-21T00:00:00Z" },
+  { "label": "Gameplay Update (Apr 10)", "started_at": "2026-04-10T00:00:00Z" },
+  { "label": "Gameplay Update (Apr 30)", "started_at": "2026-04-30T00:00:00Z" },
+  { "label": "Urn Update 1", "started_at": "2026-05-22T00:00:00Z" },
+  { "label": "Urn Update 2", "started_at": "2026-05-25T00:00:00Z" },
+  { "label": "Urn Update 3", "started_at": "2026-05-28T00:00:00Z" },
+  { "label": "Gameplay Update (May 31)", "started_at": "2026-05-31T00:00:00Z" },
+  { "label": "Urn Update 4", "started_at": "2026-06-04T00:00:00Z" },
+  { "label": "Minor Update (Jun 11)", "started_at": "2026-06-11T00:00:00Z" }
 ]

@@ -67,6 +67,9 @@ def seeded_db(db):
         _insert_hero(db, hid)
 
     # ── patch eras ───────────────────────────────────────────────────────────
+    # Migration 013 pre-seeds 12 curated eras (ids 1-12); clear them so the
+    # explicit era_id=1,2 inserts below don't collide on the primary key.
+    db.execute("DELETE FROM patch_eras")
     db.execute(
         "INSERT INTO patch_eras(era_id,label,started_at) VALUES(1,'Era1','2026-01-01T00:00:00Z')"
     )

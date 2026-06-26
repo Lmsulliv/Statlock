@@ -158,6 +158,9 @@ def test_unix_to_iso():
 
 
 def test_era_id_for_picks_latest_era_started_before_match(db):
+    # Migration 013 pre-seeds 12 curated eras; clear them so this test isolates
+    # its own old/new pair (the "no era before the match -> None" case below).
+    db.execute("DELETE FROM patch_eras")
     db.execute("INSERT INTO patch_eras(label, started_at) VALUES('old', '2026-01-01T00:00:00+00:00')")
     db.execute("INSERT INTO patch_eras(label, started_at) VALUES('new', '2026-06-01T00:00:00+00:00')")
     db.commit()

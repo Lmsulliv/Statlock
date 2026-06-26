@@ -41,6 +41,9 @@ def populated_db(db, now):
     """DB with reference data, one epoch era, and the primary tracked account."""
     load_heroes(db, load_fixture("assets_heroes_match.json"), "2026-06-11T00:00:00+00:00")
     load_items(db, load_fixture("assets_items_match.json"), "2026-06-11T00:00:00+00:00")
+    # Migration 013 pre-seeds 12 curated eras; clear them so every ingested match
+    # binds to this single epoch era instead of a curated one.
+    db.execute("DELETE FROM patch_eras")
     db.execute(
         "INSERT INTO patch_eras(label, started_at) VALUES('all', '1970-01-01T00:00:00+00:00')"
     )

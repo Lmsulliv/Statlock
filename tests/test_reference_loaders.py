@@ -83,24 +83,40 @@ def test_load_items_idempotent(db, items_json):
 
 # ── patch_eras seed ──────────────────────────────────────────────────────────
 
-_SEED = [{"label": "Initial era", "started_at": "1970-01-01T00:00:00Z"}]
+# The real seed that drives fresh installs (and that migration 013 mirrors).
+_SEED_PATH = Path(__file__).parent.parent / "db" / "seeds" / "patch_eras.json"
+_SEED = json.loads(_SEED_PATH.read_text(encoding="utf-8"))
 
 
-def test_seed_patch_eras_inserts_one_row(db):
+def _fresh_eras(db):
+    """The db fixture is already migrated (migration 013 seeds the same 12 eras),
+    so clear them first to test seed_patch_eras' own insert behavior."""
+    db.execute("DELETE FROM patch_eras")
+    db.commit()
+
+
+def test_seed_patch_eras_inserts_curated_set(db):
+    _fresh_eras(db)
     seed_patch_eras(db, _SEED)
     count = db.execute("SELECT COUNT(*) FROM patch_eras").fetchone()[0]
-    assert count == 1
+    assert count == len(_SEED) == 12
 
 
-def test_seed_patch_eras_correct_label(db):
+def test_seed_patch_eras_first_and_last_in_order(db):
+    _fresh_eras(db)
     seed_patch_eras(db, _SEED)
-    row = db.execute("SELECT label FROM patch_eras WHERE started_at = '1970-01-01T00:00:00Z'").fetchone()
-    assert row is not None
-    assert row["label"] == "Initial era"
+    rows = db.execute(
+        "SELECT label, started_at FROM patch_eras ORDER BY started_at"
+    ).fetchall()
+    assert rows[0]["label"] == "Major Map Rework"
+    assert rows[0]["started_at"] == "2025-02-25T00:00:00Z"
+    assert rows[-1]["label"] == "Minor Update (Jun 11)"
+    assert rows[-1]["started_at"] == "2026-06-11T00:00:00Z"
 
 
 def test_seed_patch_eras_idempotent(db):
+    _fresh_eras(db)
     seed_patch_eras(db, _SEED)
     seed_patch_eras(db, _SEED)
     count = db.execute("SELECT COUNT(*) FROM patch_eras").fetchone()[0]
-    assert count == 1
+    assert count == len(_SEED)

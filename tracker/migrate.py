@@ -30,6 +30,7 @@ _STEPS = [
     _DB_DIR / "migrations" / "010_laning_stats.sql",  # 9 -> 10: end-of-laning snapshot table
     _DB_DIR / "migrations" / "011_per_user_identity.sql",  # 10 -> 11: users, user_accounts, account_labels.user_id
     _DB_DIR / "migrations" / "012_auth.sql",  # 11 -> 12: users.steam_account_id, sessions
+    _DB_DIR / "migrations" / "013_curated_eras.sql",  # 12 -> 13: reseed patch_eras to 12 curated eras
 ]
 
 

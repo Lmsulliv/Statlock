@@ -87,6 +87,10 @@ def _seed(conn: sqlite3.Connection) -> None:
     # is_self lives on the per-user link now (migration 011); user 1 is seeded.
     conn.execute("INSERT INTO user_accounts(user_id, account_id, is_self, added_at)"
                  " VALUES (1, ?, 1, ?)", (ME, JUNE))
+    # Migration 013 pre-seeds 12 curated eras; this fixture builds its own E1/E2
+    # world and relies on autoincrement giving them ids 1 and 2 (see ERA1, ERA2).
+    conn.execute("DELETE FROM patch_eras")
+    conn.execute("DELETE FROM sqlite_sequence WHERE name = 'patch_eras'")
     conn.execute("INSERT INTO patch_eras(label, started_at) VALUES ('E1', '2020-01-01T00:00:00+00:00')")
     conn.execute("INSERT INTO patch_eras(label, started_at) VALUES ('E2', '2026-06-01T00:00:00+00:00')")
 

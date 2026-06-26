@@ -122,7 +122,11 @@ def test_empty_database_renders_empty_states(empty_db_path):
     assert overview.json()["account_id"] is None
 
     assert client.get("/api/sync-status").status_code == 200
-    assert client.get("/api/eras").json()["eras"] == []
+    # Eras are reference data seeded by migration 013, so even an empty DB lists
+    # the 12 curated eras (with no pending candidates and no matches to bin).
+    eras = client.get("/api/eras").json()
+    assert len(eras["eras"]) == 12
+    assert eras["pending_candidates"] == []
 
 
 # ── Game-mode separation: Street Brawl never mixes with Normal ────────────────

@@ -26,6 +26,9 @@ def unix(iso: str) -> int:
 
 
 def seed_eras(db) -> tuple[int, int]:
+    # Migration 013 pre-seeds 12 curated eras; clear them so the span-count
+    # assertions below see only this test's two eras (+ the all-time sentinel).
+    db.execute("DELETE FROM patch_eras")
     db.execute("INSERT INTO patch_eras(label, started_at) VALUES('jan', '2026-01-01T00:00:00+00:00')")
     db.execute("INSERT INTO patch_eras(label, started_at) VALUES('jun', '2026-06-01T00:00:00+00:00')")
     db.commit()

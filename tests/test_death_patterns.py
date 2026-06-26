@@ -143,6 +143,9 @@ def timeline_db(tmp_path, monkeypatch):
                  " VALUES (?, 1, ?)", (SELF, WHEN))
     conn.execute("INSERT INTO user_accounts(user_id, account_id, is_self, added_at)"
                  " VALUES (1, ?, 1, ?)", (SELF, WHEN))
+    # Migration 013 pre-seeds 12 curated eras; reset so E1/E2 get ids 1 and 2.
+    conn.execute("DELETE FROM patch_eras")
+    conn.execute("DELETE FROM sqlite_sequence WHERE name = 'patch_eras'")
     conn.execute("INSERT INTO patch_eras(label, started_at)"
                  " VALUES ('E1', '2026-01-01T00:00:00+00:00')")
     conn.execute("INSERT INTO patch_eras(label, started_at)"
