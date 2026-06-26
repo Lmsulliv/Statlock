@@ -18,7 +18,8 @@ data/*
 
 # Secrets and local config
 .env
-CLAUDE.local.md
+*.local.md
+*.local.json
 
 # Frontend (Phase 5)
 frontend/node_modules/

@@ -3,7 +3,16 @@
     "allow": [
       "PowerShell(python -m pytest tests/test_baseline_cache.py -v)",
       "PowerShell(python -m pytest tests/test_baseline_cache.py -q)",
-      "PowerShell(python -m scripts.bench_baselines)"
+      "PowerShell(python -m scripts.bench_baselines)",
+      "PowerShell(python -m pytest tests/test_presentation.py -q -k \"improvement or scope\" 2>&1)",
+      "PowerShell(python -m pytest tests/test_presentation.py -q 2>&1)",
+      "PowerShell(npx --prefix frontend tsc -p frontend/tsconfig.json --noEmit 2>&1)",
+      "PowerShell(python -m pytest tests/test_recurring_players.py -q)",
+      "PowerShell(Get-ChildItem -Path . | Where-Object { $_.Name -match 'venv|pyproject|requirements|setup' } | Select-Object Name; \"---\"; Get-ChildItem -Recurse -Depth 1 -Filter \"python.exe\" -ErrorAction SilentlyContinue | Select-Object FullName -First 5)",
+      "PowerShell(py -3.14 -m pytest tests/test_migration.py tests/test_reference_loaders.py tests/test_maintenance.py tests/test_parse.py tests/test_matchup_view.py tests/test_kill_trades.py tests/test_death_patterns.py tests/test_ingestion.py tests/test_runner_cli.py tests/test_presentation.py tests/test_baseline_cache.py -q)",
+      "PowerShell(py -3.14 -m pytest tests/test_presentation.py -q)",
+      "Bash(git commit *)",
+      "Bash(git add *)"
     ]
   }
 }
