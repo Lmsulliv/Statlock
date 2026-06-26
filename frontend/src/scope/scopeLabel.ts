@@ -35,11 +35,14 @@ export function scopeLabel(
   if (scope.eraIds.length === 0) {
     parts.push('All eras')
   } else {
-    parts.push(
-      scope.eraIds
-        .map((id) => eras.find((e) => e.era_id === id)?.label ?? `Era ${id}`)
-        .join(', '),
-    )
+    // The span is rendered by its endpoints. eras is started_at-ordered, so the
+    // window's bounds are the min/max index among the selected era ids.
+    const idxs = scope.eraIds
+      .map((id) => eras.findIndex((e) => e.era_id === id))
+      .filter((i) => i >= 0)
+    const startLabel = eras[Math.min(...idxs)]?.label ?? 'era'
+    const endLabel = eras[Math.max(...idxs)]?.label ?? 'era'
+    parts.push(startLabel === endLabel ? startLabel : `${startLabel} to ${endLabel}`)
   }
 
   const fullRange = scope.badgeMin <= FULL_BADGE_MIN && scope.badgeMax >= FULL_BADGE_MAX

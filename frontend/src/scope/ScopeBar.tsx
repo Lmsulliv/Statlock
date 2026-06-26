@@ -23,6 +23,27 @@ export function ScopeBar() {
   const selfAccount = accountList.find((a) => a.is_self)
   const selectedAccountId = scope.accountId ?? selfAccount?.account_id ?? ''
 
+  // The era span is two dropdowns (Start/End) over the same started_at-ordered
+  // list. We work in list indices because a contiguous span is naturally an
+  // index range; the empty-eraIds default maps to the full window.
+  const lastIdx = eraList.length - 1
+  const selectedIdxs = scope.eraIds
+    .map((id) => eraList.findIndex((e) => e.era_id === id))
+    .filter((i) => i >= 0)
+  const startIdx = scope.eraIds.length === 0 ? 0 : Math.min(...selectedIdxs)
+  const endIdx = scope.eraIds.length === 0 ? lastIdx : Math.max(...selectedIdxs)
+
+  // The whole timeline (earliest..latest) collapses to [] so the backend uses
+  // the all-time baseline snapshot, keeping the default identical to "All eras".
+  const setSpan = (s: number, e: number) => {
+    if (eraList.length === 0) return
+    if (s === 0 && e === lastIdx) {
+      update({ eraIds: [] })
+    } else {
+      update({ eraIds: eraList.slice(s, e + 1).map((era) => era.era_id) })
+    }
+  }
+
   return (
     <div className="scope-bar">
       <div className="scope-controls">
@@ -73,17 +94,31 @@ export function ScopeBar() {
         </div>
 
         <div className="scope-control">
-          <span className="scope-label">Era</span>
+          <span className="scope-label">Start era</span>
           <select
             className="select-input"
-            value={scope.eraIds[0] ?? ''}
-            onChange={(e) =>
-              update({ eraIds: e.target.value === '' ? [] : [Number(e.target.value)] })
-            }
+            value={startIdx}
+            // Clamp so start never lands after end (drag end forward if needed).
+            onChange={(e) => setSpan(Number(e.target.value), Math.max(Number(e.target.value), endIdx))}
           >
-            <option value="">All eras</option>
-            {eraList.map((era) => (
-              <option key={era.era_id} value={era.era_id}>
+            {eraList.map((era, i) => (
+              <option key={era.era_id} value={i}>
+                {era.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="scope-control">
+          <span className="scope-label">End era</span>
+          <select
+            className="select-input"
+            value={endIdx}
+            // Clamp so end never lands before start (drag start back if needed).
+            onChange={(e) => setSpan(Math.min(startIdx, Number(e.target.value)), Number(e.target.value))}
+          >
+            {eraList.map((era, i) => (
+              <option key={era.era_id} value={i}>
                 {era.label}
               </option>
             ))}
