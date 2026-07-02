@@ -1,5 +1,9 @@
 import { useImprovement, usePlayedHeroes, useSyncStatus } from '../api/queries'
-import type { Improvement as ImprovementData, ImprovementEntry } from '../api/types'
+import type {
+  Improvement as ImprovementData,
+  ImprovementEntry,
+  WinCondition,
+} from '../api/types'
 import { EmptyState } from '../components/EmptyState'
 import { HeroIcon } from '../components/HeroIcon'
 import { QueryBoundary } from '../components/QueryBoundary'
@@ -7,6 +11,9 @@ import { VerdictBadge } from '../components/VerdictBadge'
 import { useScope } from '../scope/useScope'
 
 const pct = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100)}%`)
+
+// Signed percentage for the gap readout, e.g. +32% / -8%.
+const signedPct = (x: number) => `${x >= 0 ? '+' : ''}${Math.round(x * 100)}%`
 
 // "Against Haze" for a matchup, "With Soul Shredder" for an item — the entry's
 // kind picks the preposition; `subject` is the display name the server chose.
@@ -45,20 +52,23 @@ export function Improvement() {
           isEmpty(data) ? (
             <ImprovementEmpty heroName={heroName} />
           ) : (
-            <div className="improve">
-              <KindDigest
-                heading="Hero improvement"
-                kind="matchup"
-                data={data}
-                heroName={heroName}
-              />
-              <KindDigest
-                heading="Item improvement"
-                kind="item"
-                data={data}
-                heroName={heroName}
-              />
-            </div>
+            <>
+              <WinConditions conditions={data.win_conditions} heroName={heroName} />
+              <div className="improve">
+                <KindDigest
+                  heading="Hero improvement"
+                  kind="matchup"
+                  data={data}
+                  heroName={heroName}
+                />
+                <KindDigest
+                  heading="Item improvement"
+                  kind="item"
+                  data={data}
+                  heroName={heroName}
+                />
+              </div>
+            </>
           )
         }
       </QueryBoundary>
@@ -108,6 +118,62 @@ function KindDigest({
   )
 }
 
+// "What wins your games": each surfaced condition splits the scoped matches in
+// two and shows the win rate (with its 95% interval) on each side, plus the gap
+// — the lever. The server only sends conditions where both sides clear the
+// honesty floor and the intervals separate, so a thin or noisy split is simply
+// absent rather than shown with a caveat. Honors the hero scope automatically
+// (the API narrowed the splits to the selected hero's games).
+function WinConditions({
+  conditions,
+  heroName,
+}: {
+  conditions: WinCondition[]
+  heroName: string | null
+}) {
+  return (
+    <section className="card improve-wins">
+      <h2 className="improve-heading">What wins your games</h2>
+      <p className="muted improve-hint">
+        Early-game conditions that, when they hold, lift your win rate — the
+        biggest lever first. Each splits your{heroName ? ` ${heroName}` : ''}{' '}
+        games and compares the two sides; only gaps the data supports are shown.
+      </p>
+      {conditions.length === 0 ? (
+        <p className="muted">
+          No condition has enough games on both sides to call yet. Keep playing,
+          or widen the scope.
+        </p>
+      ) : (
+        <ul className="improve-list">
+          {conditions.map((c) => (
+            <li key={c.key} className="improve-item improve-win">
+              <span>
+                <strong>{c.label}</strong> <span className="muted">— {c.description}.</span>
+                <br />
+                You win <strong>{pct(c.met.rate)}</strong> ({pct(c.met.ci_low)}–
+                {pct(c.met.ci_high)}) when it holds vs <strong>{pct(c.not_met.rate)}</strong>{' '}
+                ({pct(c.not_met.ci_low)}–{pct(c.not_met.ci_high)}) when it doesn’t —{' '}
+                <strong>{signedPct(c.gap)}</strong> swing.
+              </span>{' '}
+              <span className={`badge tone-${tierTone(c)}`}>
+                {c.tier === 'clear' ? 'Clear' : 'Leaning'}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+// Tone mirrors the verdict badges: vivid for a "clear" split, muted for
+// "leaning"; green when meeting the condition helps (gap ≥ 0), red if it hurts.
+function tierTone(c: WinCondition): string {
+  const dir = c.gap >= 0 ? 'pos' : 'neg'
+  return c.tier === 'clear' ? dir : `${dir}-weak`
+}
+
 function ImprovementSection({
   title,
   hint,
@@ -155,7 +221,8 @@ function ImprovementSection({
 const isEmpty = (d: ImprovementData) =>
   d.confirmed_weaknesses.length === 0 &&
   d.confirmed_strengths.length === 0 &&
-  d.watch_list.length === 0
+  d.watch_list.length === 0 &&
+  d.win_conditions.length === 0
 
 // Nothing confirmed yet: explain why with live sync counts rather than a blank
 // screen (presentation rule 5 / scenario 6).

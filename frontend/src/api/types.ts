@@ -290,10 +290,35 @@ export interface ImprovementEntry extends StatFields {
   purchase_timing_delta_s?: number | null
 }
 
+// "What wins your games": one side of a condition split -- the win rate and
+// Wilson interval over the matches where the condition did (met) or did not
+// (not_met) hold.
+export interface WinConditionSide {
+  n: number
+  wins: number
+  rate: number | null // wins/n, or null when n == 0
+  ci_low: number // Wilson 95% lower bound
+  ci_high: number // Wilson 95% upper bound
+}
+
+// A surfaced win condition: both sides cleared VERDICT_FLOOR and the intervals
+// separate. `gap` = met.rate - not_met.rate (the lever); `tier` is how cleanly
+// the two intervals split.
+export interface WinCondition {
+  key: string
+  label: string
+  description: string
+  met: WinConditionSide
+  not_met: WinConditionSide
+  gap: number
+  tier: 'clear' | 'leaning'
+}
+
 export interface Improvement {
   confirmed_weaknesses: ImprovementEntry[]
   confirmed_strengths: ImprovementEntry[]
   watch_list: ImprovementEntry[]
+  win_conditions: WinCondition[]
 }
 
 export interface QueueCounts {

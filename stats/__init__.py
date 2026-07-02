@@ -89,6 +89,40 @@ def verdict(wins: int, n: int, global_rate: float) -> str:
     return VERDICT_NOT_ENOUGH_DATA
 
 
+def split_tier(wins_met: int, n_met: int,
+               wins_notmet: int, n_notmet: int) -> str | None:
+    """Tier a two-group win-rate split by how cleanly the two Wilson intervals
+    separate -- the win-condition analogue of verdict().
+
+    verdict() asks "does one rate differ from a fixed baseline number?" (an
+    interval vs. a point). Here both sides are estimated from data, so we ask
+    "do these two groups of games really differ?" by comparing interval to
+    interval. Two intervals are disjoint when one side's low bound sits at or
+    above the other side's high bound.
+
+    Returns "clear" (the 95% Wilson bands are disjoint), "leaning" (only the
+    looser 80% bands are disjoint), or None (the bands overlap, or either side
+    is below VERDICT_FLOOR -- too little to claim a real gap). Direction-
+    agnostic: which side is higher is the caller's read off the gap sign.
+    """
+    if min(n_met, n_notmet) < VERDICT_FLOOR:
+        return None
+
+    if _intervals_disjoint(wins_met, n_met, wins_notmet, n_notmet, Z_CLEAR):
+        return "clear"
+    if _intervals_disjoint(wins_met, n_met, wins_notmet, n_notmet, Z_LEAN):
+        return "leaning"
+    return None
+
+
+def _intervals_disjoint(wins_a: int, n_a: int, wins_b: int, n_b: int,
+                        z: float) -> bool:
+    """True when the two Wilson intervals at band z do not overlap."""
+    low_a, high_a = wilson_interval(wins_a, n_a, z)
+    low_b, high_b = wilson_interval(wins_b, n_b, z)
+    return low_a >= high_b or low_b >= high_a
+
+
 # ── Continuous metrics ────────────────────────────────────────────────────────
 # Win rate is a proportion (a 0/1 outcome), so Wilson + Beta shrinkage fit it.
 # The other per-match metrics -- net worth, last hits, denies, player/obj damage,

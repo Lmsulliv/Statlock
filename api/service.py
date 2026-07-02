@@ -23,6 +23,7 @@ from stats import (
     mean_interval,
     mean_verdict,
     shrunk_rate,
+    split_tier,
     verdict,
     wilson_interval,
 )
@@ -571,6 +572,105 @@ def _raw_delta(row: dict) -> float | None:
     return row["winrate"] - row["global_rate"]
 
 
+# ── Win conditions ("what wins your games") ──────────────────────────────────
+# Binary, EARLY-GAME conditions that split the scoped matches in two and ask
+# whether the win rate is meaningfully higher when the condition holds. We pick
+# lane-phase levers on purpose: full-game stats (final net worth, final KDA) are
+# downstream of winning, so splitting on them mostly re-measures the outcome;
+# lane-end numbers happen before the game is decided, so a gap there is a lever
+# you can actually pull. Each condition reuses LANING_METRICS values
+# (queries.personal_laning_outcomes) and, where it needs one, the live field
+# baseline (queries.baseline_laning) for that match's hero.
+
+CLEAN_LANE_MAX_DEATHS = 1   # "clean laning" threshold; tunable
+
+# predict(row, hero_baseline) -> True (met) / False (not met) / None
+# (unclassifiable -- e.g. no field baseline for this hero, so the match is
+# dropped from this split rather than fabricated into one side).
+def _won_lane(row: dict, base: dict | None) -> bool | None:
+    if not base or base.get("net_worth") is None:
+        return None
+    return row["net_worth"] >= base["net_worth"]
+
+
+def _clean_laning(row: dict, base: dict | None) -> bool | None:
+    return row["lane_deaths"] <= CLEAN_LANE_MAX_DEATHS
+
+
+def _last_hit_lead(row: dict, base: dict | None) -> bool | None:
+    if not base or base.get("last_hits") is None:
+        return None
+    return row["last_hits"] > base["last_hits"]
+
+
+WIN_CONDITIONS = [
+    {"key": "won_lane", "label": "Won the lane",
+     "description": "Net worth at lane end at or above the field baseline",
+     "predict": _won_lane},
+    {"key": "clean_laning", "label": "Clean laning",
+     "description": f"At most {CLEAN_LANE_MAX_DEATHS} lane death(s) before lane end",
+     "predict": _clean_laning},
+    {"key": "last_hit_lead", "label": "Last-hit lead",
+     "description": "Last hits at lane end above the field baseline",
+     "predict": _last_hit_lead},
+]
+
+
+def _condition_side(rows: list[dict]) -> dict:
+    """Win rate + Wilson interval over one side (met or not-met) of a split."""
+    n = len(rows)
+    wins = sum(r["won"] for r in rows)
+    low, high = wilson_interval(wins, n)
+    return {"n": n, "wins": wins, "rate": _round(wins / n) if n else None,
+            "ci_low": _round(low), "ci_high": _round(high)}
+
+
+def win_conditions(conn: sqlite3.Connection, scope: Scope,
+                   hero_id: int | None = None) -> list[dict]:
+    """"What wins your games": for each WIN_CONDITION, split the scoped matches
+    into met / not-met, compute each side's win rate + Wilson interval, and
+    surface the condition only when both sides clear VERDICT_FLOOR and the
+    intervals separate (stats.split_tier). The gap (rate_met - rate_notmet) is
+    the signal; surfaced conditions sort by gap, biggest lever first.
+
+    Honors hero_id by narrowing the rows to that hero's games, so a selected
+    hero re-splits on just its matches against just its field baseline."""
+    rows = queries.personal_laning_outcomes(conn, scope)
+    if hero_id is not None:
+        rows = [r for r in rows if r["hero_id"] == hero_id]
+    if not rows:
+        return []
+
+    my_hero_ids = [hero_id] if hero_id is not None else sorted({r["hero_id"] for r in rows})
+    baselines = queries.baseline_laning(conn, scope, my_hero_ids)
+
+    out = []
+    for cond in WIN_CONDITIONS:
+        met, notmet = [], []
+        for r in rows:
+            verdict_ = cond["predict"](r, baselines.get(r["hero_id"]))
+            if verdict_ is True:
+                met.append(r)
+            elif verdict_ is False:
+                notmet.append(r)
+            # None -> unclassifiable for this condition, drop the row honestly
+        tier = split_tier(sum(r["won"] for r in met), len(met),
+                          sum(r["won"] for r in notmet), len(notmet))
+        if tier is None:
+            continue
+        met_side, notmet_side = _condition_side(met), _condition_side(notmet)
+        out.append({
+            "key": cond["key"], "label": cond["label"],
+            "description": cond["description"],
+            "met": met_side, "not_met": notmet_side,
+            "gap": _round(met_side["rate"] - notmet_side["rate"]),
+            "tier": tier,
+        })
+
+    out.sort(key=lambda c: c["gap"], reverse=True)   # biggest lever first
+    return out
+
+
 def improvement(conn: sqlite3.Connection, scope: Scope,
                 hero_id: int | None = None) -> dict:
     """A short ranked digest across matchups and items: confirmed weaknesses,
@@ -581,7 +681,8 @@ def improvement(conn: sqlite3.Connection, scope: Scope,
     matchups and item rows feed the digest. When it is None, the input is the
     across-all-heroes set (matchups aggregated over every played hero, item rows
     from each played hero)."""
-    empty = {"confirmed_weaknesses": [], "confirmed_strengths": [], "watch_list": []}
+    empty = {"confirmed_weaknesses": [], "confirmed_strengths": [],
+             "watch_list": [], "win_conditions": []}
     resolved = _resolved(conn, scope)
     if resolved is None:
         return empty
@@ -612,7 +713,8 @@ def improvement(conn: sqlite3.Connection, scope: Scope,
     watch.sort(key=lambda e: -abs(_raw_delta(e) or 0.0))    # biggest raw gap first
     return {"confirmed_weaknesses": weaknesses,
             "confirmed_strengths": strengths,
-            "watch_list": watch}
+            "watch_list": watch,
+            "win_conditions": win_conditions(conn, resolved, hero_id)}
 
 
 # ── Tilt (session-index and loss-streak performance) ─────────────────────────

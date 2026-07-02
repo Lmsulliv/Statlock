@@ -28,7 +28,10 @@ from stats import (
     VERDICT_LEANING_STRENGTH,
     VERDICT_LEANING_WEAKNESS,
     VERDICT_NOT_ENOUGH_DATA,
+    Z_CLEAR,
+    Z_LEAN,
     shrunk_rate,
+    split_tier,
     verdict,
     wilson_interval,
 )
@@ -246,3 +249,41 @@ def test_property_verdict_direction_agrees_with_raw_rate(wins_n, g):
         assert wins / n > g
     elif v in (VERDICT_CLEAR_WEAKNESS, VERDICT_LEANING_WEAKNESS):
         assert wins / n < g
+
+
+# ── split_tier (two-group win-rate split) ─────────────────────────────────────
+
+def test_split_tier_clear_when_95_bands_disjoint():
+    # 90% vs 10% over 100 games each: the 95% Wilson bands are far apart.
+    assert split_tier(90, 100, 10, 100) == "clear"
+
+
+def test_split_tier_leaning_when_only_80_bands_disjoint():
+    # 8/10 vs 3/10: the 95% bands still overlap (not clear), but the looser 80%
+    # bands separate -> leaning. Pin the premise so the tier follows from it.
+    assert not _disjoint(8, 10, 3, 10, Z_CLEAR)
+    assert _disjoint(8, 10, 3, 10, Z_LEAN)
+    assert split_tier(8, 10, 3, 10) == "leaning"
+
+
+def test_split_tier_none_when_bands_overlap():
+    # 6/10 vs 5/10: indistinguishable, even at 80%.
+    assert split_tier(6, 10, 5, 10) is None
+
+
+def test_split_tier_none_below_floor_on_either_side():
+    # A lopsided split is still dropped when one side is below VERDICT_FLOOR,
+    # however extreme the other side (the honesty floor, mirroring verdict()).
+    assert split_tier(4, 4, 0, 100) is None      # met side has 4 < 5 games
+    assert split_tier(100, 100, 0, 3) is None     # not-met side has 3 < 5 games
+
+
+def test_split_tier_is_direction_agnostic():
+    # Which side is higher does not matter; the gap sign is the caller's read.
+    assert split_tier(10, 100, 90, 100) == "clear"
+
+
+def _disjoint(wins_a, n_a, wins_b, n_b, z):
+    low_a, high_a = wilson_interval(wins_a, n_a, z)
+    low_b, high_b = wilson_interval(wins_b, n_b, z)
+    return low_a >= high_b or low_b >= high_a

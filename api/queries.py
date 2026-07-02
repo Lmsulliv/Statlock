@@ -685,6 +685,27 @@ def personal_laning(conn: sqlite3.Connection, scope: Scope) -> list[dict]:
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
+def personal_laning_outcomes(conn: sqlite3.Connection, scope: Scope) -> list[dict]:
+    """One row per scoped match: hero_id, won, and each LANING_METRICS value at
+    the lane-end snapshot. The win-condition twin of personal_laning -- same
+    joins/predicates, plus mp.won so the service can split a match into met /
+    not-met by a laning condition and read off each side's win rate."""
+    era_sql, era_params = _era_clause(scope, "m.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "mp.team")
+    select = ", ".join(f"({mdef['expr']}) AS {mdef['key']}" for mdef in LANING_METRICS)
+    sql = (
+        f"SELECT mp.hero_id AS hero_id, mp.won AS won, {select}"
+        " FROM laning_stats ls"
+        " JOIN match_players mp ON mp.match_id = ls.match_id"
+        "   AND mp.player_slot = ls.player_slot"
+        " JOIN matches m ON m.match_id = ls.match_id"
+        " WHERE mp.account_id = ? AND m.game_mode = ? AND m.duration_s > 0"
+        + era_sql + badge_sql
+    )
+    params = [scope.account_id, scope.game_mode] + era_params + badge_params
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
 def baseline_laning(conn: sqlite3.Connection, scope: Scope,
                     my_hero_ids: list[int]) -> dict:
     """Population mean of each laning metric at the lane-end mark, computed live

@@ -1253,6 +1253,17 @@ a.btn {
   line-height: 1.5;
 }
 
+/* "What wins your games" sits above the two-column digest; give it room. */
+.improve-wins {
+  margin-bottom: 18px;
+}
+
+/* The win-condition rows carry two lines (label + readout), so align the badge
+   to the top rather than centering it on a wrapped block. */
+.improve-win {
+  align-items: flex-start;
+}
+
 /* ── Tilt screen ──────────────────────────────────────────────────────────── */
 
 .tilt-summary {
