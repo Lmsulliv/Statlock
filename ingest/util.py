@@ -21,4 +21,9 @@ def unix_to_iso(ts: int) -> str:
 
 
 def iso_to_unix(iso: str) -> int:
+    # Python < 3.11's fromisoformat can't parse the "Z" UTC designator, but
+    # our stored timestamps (e.g. patch_eras.started_at) use it. Normalize it
+    # to the equivalent "+00:00" offset so parsing works on every version.
+    if iso.endswith("Z"):
+        iso = iso[:-1] + "+00:00"
     return int(datetime.fromisoformat(iso).timestamp())
