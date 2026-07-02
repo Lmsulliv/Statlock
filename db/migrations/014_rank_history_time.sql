@@ -1,0 +1,21 @@
+-- Schema v14: give account_rank_history its own per-row timestamp.
+--
+-- Rank ingestion sources the per-match rank series from
+-- GET /v1/players/{account_id}/mmr-history, whose every row carries its OWN
+-- start_time (unix seconds, 100% populated) alongside match_id and rank
+-- (= division*10 + division_tier, our tier*10+subtier badge). See
+-- docs/api-findings.md "Player rank / MMR history (spike 12)".
+--
+-- Why a column instead of joining matches: the Overview "Rank over time" chart
+-- previously ordered the series by matches.start_time via an INNER JOIN, which
+-- silently dropped every rank point whose match we never ingested. Storing the
+-- endpoint's own timestamp lets mmr_series order by it and drop the join, so the
+-- series is complete regardless of ingestion. recorded_at holds that timestamp
+-- as ISO-8601 text (matching every other *_at column in the schema).
+--
+-- Current rank needs no extra column: it is simply the most-recent row by
+-- recorded_at (the Batch MMR endpoint confirmed that row equals the live rank).
+--
+-- Purely additive: ADD COLUMN, no table rebuild, no foreign_keys toggling.
+
+ALTER TABLE account_rank_history ADD COLUMN recorded_at TEXT;

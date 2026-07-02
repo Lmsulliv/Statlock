@@ -39,9 +39,9 @@ def test_all_indexes_created(db):
     assert EXPECTED_INDEXES <= names_of_type(db, "index")
 
 
-def test_user_version_is_13(db):
+def test_user_version_is_15(db):
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 13
+    assert version == 15
 
 
 def test_migrate_is_idempotent(tmp_path):
@@ -49,7 +49,7 @@ def test_migrate_is_idempotent(tmp_path):
     migrate(conn)
     migrate(conn)  # second call must not raise
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 13
+    assert version == 15
 
 
 def test_steam_personas_columns(db):
@@ -60,6 +60,12 @@ def test_steam_personas_columns(db):
 def test_account_labels_columns(db):
     cols = {row[1] for row in db.execute("PRAGMA table_info(account_labels)").fetchall()}
     assert cols == {"user_id", "account_id", "display_name", "updated_at"}
+
+
+def test_v14_account_rank_history_has_recorded_at(db):
+    """v14 adds the per-row timestamp the rank-over-time series orders by."""
+    cols = {row[1] for row in db.execute("PRAGMA table_info(account_rank_history)").fetchall()}
+    assert cols == {"account_id", "match_id", "badge", "recorded_at"}
 
 
 def test_v9_copies_tracked_display_names_into_labels(tmp_path):
@@ -81,7 +87,7 @@ def test_v9_copies_tracked_display_names_into_labels(tmp_path):
 
     migrate(conn)  # applies 009 (and onward to the latest version)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
     labels = {r["account_id"]: r["display_name"] for r in
               conn.execute("SELECT account_id, display_name FROM account_labels"
                            " WHERE user_id = 1")}
@@ -127,7 +133,7 @@ def test_v11_links_tracked_accounts_to_first_user(tmp_path):
 
     migrate(conn)  # applies 011
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
     links = {r["account_id"]: r["is_self"] for r in
              conn.execute("SELECT account_id, is_self FROM user_accounts WHERE user_id = 1")}
     assert links == {50: 1, 60: 0}
@@ -173,7 +179,7 @@ def test_upgrade_from_v1_preserves_data(tmp_path):
 
     migrate(conn)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
     assert conn.execute("SELECT COUNT(*) FROM tracked_accounts").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM era_candidates").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM ranks").fetchone()[0] == 0
@@ -216,7 +222,7 @@ def test_v5_backfills_player_slot_from_raw_json(tmp_path):
 
     migrate(conn)  # applies 005 (and onward)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
     slots = {r["account_id"]: r["player_slot"] for r in
              conn.execute("SELECT account_id, player_slot FROM match_players WHERE match_id = 1")}
     assert slots == {500: 4, 0: 7, 600: 9}
@@ -244,9 +250,10 @@ def test_foreign_keys_enforced(db):
     )
     db.commit()
     with pytest.raises(sqlite3.IntegrityError):
-        # Columns: match_id, player_slot, account_id, hero_id, team, lane..healing (10 NULLs), won.
+        # Columns: match_id, player_slot, account_id, hero_id, team,
+        # lane..healing + player_damage_taken (11 NULLs), won.
         db.execute(
-            "INSERT INTO match_players VALUES (1,1,100,9999,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1)"
+            "INSERT INTO match_players VALUES (1,1,100,9999,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1)"
         )
         db.commit()
 
@@ -303,7 +310,7 @@ def test_v13_reseeds_curated_eras(tmp_path):
 
     migrate(conn)  # applies 013
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
 
     eras = conn.execute(
         "SELECT label, started_at FROM patch_eras ORDER BY started_at"

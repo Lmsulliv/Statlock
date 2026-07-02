@@ -31,6 +31,8 @@ _STEPS = [
     _DB_DIR / "migrations" / "011_per_user_identity.sql",  # 10 -> 11: users, user_accounts, account_labels.user_id
     _DB_DIR / "migrations" / "012_auth.sql",  # 11 -> 12: users.steam_account_id, sessions
     _DB_DIR / "migrations" / "013_curated_eras.sql",  # 12 -> 13: reseed patch_eras to 12 curated eras
+    _DB_DIR / "migrations" / "014_rank_history_time.sql",  # 13 -> 14: account_rank_history.recorded_at
+    _DB_DIR / "migrations" / "015_damage_taken.sql",  # 14 -> 15: match_players.player_damage_taken + damage_taken_sources
 ]
 
 
