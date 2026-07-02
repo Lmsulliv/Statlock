@@ -12,7 +12,12 @@
       "PowerShell(py -3.14 -m pytest tests/test_migration.py tests/test_reference_loaders.py tests/test_maintenance.py tests/test_parse.py tests/test_matchup_view.py tests/test_kill_trades.py tests/test_death_patterns.py tests/test_ingestion.py tests/test_runner_cli.py tests/test_presentation.py tests/test_baseline_cache.py -q)",
       "PowerShell(py -3.14 -m pytest tests/test_presentation.py -q)",
       "Bash(git commit *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "PowerShell(py -3.14 -m pytest tests/test_migration.py tests/test_reference_loaders.py tests/test_maintenance.py tests/test_parse.py tests/test_matchup_view.py tests/test_kill_trades.py tests/test_death_patterns.py tests/test_ingestion.py tests/test_runner_cli.py tests/test_presentation.py tests/test_laning.py tests/test_recurring_players.py -q 2>&1)",
+      "PowerShell(& \"C:\\\\Users\\\\magyc\\\\AppData\\\\Local\\\\Python\\\\pythoncore-3.14-64\\\\python.exe\" -c \"import fastapi, uvicorn, sys; print\\('OK', sys.version.split\\(\\)[0], fastapi.__version__\\)\" 2>&1)",
+      "Bash(python -c \"import json; d=json.load\\(open\\('tests/fixtures/assets_ranks.json'\\)\\); print\\(type\\(d\\), len\\(d\\)\\); print\\(d[0]\\); print\\(d[-1]\\); print\\('tiers:', [r.get\\('tier'\\) for r in d]\\)\")",
+      "PowerShell(py -3.14 -m pytest tests/test_rank_ingestion.py -q 2>&1)",
+      "PowerShell(py -3.14 -m pytest -q 2>&1)"
     ]
   }
 }
