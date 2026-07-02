@@ -13,6 +13,7 @@ ME = 891231519
 def full_client() -> FakeClient:
     client = FakeClient()
     client.add(f"/v1/players/{ME}/match-history", ok(fixture_text(f"match_history_{ME}.json")))
+    client.add(f"/v1/players/{ME}/mmr-history", ok(fixture_text("mmr_history_891231519.json")))
     meta = load_fixture("match_metadata_86714494.json")
     for match_id in (86704689, 86707774, 86714494):
         meta["match_info"]["match_id"] = match_id
@@ -46,10 +47,16 @@ def test_run_once_does_maintenance_discovery_drain(db):
     assert db.execute(
         "SELECT value FROM worker_meta WHERE key='last_maintenance_at'"
     ).fetchone() is not None
+    # Discovery found new matches, so rank ingestion fired and populated the
+    # rank-over-time series.
+    assert db.execute("SELECT COUNT(*) FROM account_rank_history").fetchone()[0] > 0
+    assert len(client.calls_matching("mmr-history")) == 1
 
-    # Second run within 24h: maintenance skipped (still one news poll).
+    # Second run within 24h: maintenance skipped (still one news poll). Discovery
+    # finds nothing new, so the rank fetch is gated off (still just one call).
     run_once(db, client, now=now, sleep=FakeSleep(now))
     assert len(client.calls_matching("GetNewsForApp")) == 1
+    assert len(client.calls_matching("mmr-history")) == 1
 
 
 def test_maintenance_due(db):

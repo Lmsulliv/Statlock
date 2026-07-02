@@ -1,6 +1,7 @@
+import { useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useOverview, useRanks } from '../api/queries'
-import type { MmrPoint, Overview as OverviewData, RecentMatch, SyncStatus } from '../api/types'
+import type { CurrentRank, MmrPoint, Overview as OverviewData, RecentMatch, SyncStatus } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
 import { HeroIcon } from '../components/HeroIcon'
 import { QueryBoundary } from '../components/QueryBoundary'
@@ -44,7 +45,10 @@ function OverviewBody({ data }: { data: OverviewData }) {
       )}
 
       <section className="card">
-        <h2 className="card-title">Rank over time</h2>
+        <div className="card-head">
+          <h2 className="card-title">Rank over time</h2>
+          {data.current_rank && <CurrentRankBadge rank={data.current_rank} />}
+        </div>
         <MmrChart series={data.mmr_series} />
       </section>
 
@@ -76,6 +80,23 @@ function EraCandidateBanner({ count }: { count: number }) {
         Review in Era manager →
       </Link>
     </div>
+  )
+}
+
+// The account's current rank, shown beside the chart title. This is the latest
+// point of the series (server-resolved to a tier name + accent color), so it's
+// the value you can check against what the game shows in-client.
+function CurrentRankBadge({ rank }: { rank: CurrentRank }) {
+  const label = rank.name
+    ? `${rank.name}${rank.subtier ? ` ${rank.subtier}` : ''}`
+    : `Badge ${rank.badge}`
+  return (
+    <span className="current-rank" title={`Current rank · badge ${rank.badge}`}>
+      <img className="current-rank-art" src={rank.badge_url} alt="" />
+      <span className="current-rank-label" style={rank.color ? { color: rank.color } : undefined}>
+        {label}
+      </span>
+    </span>
   )
 }
 
@@ -111,22 +132,89 @@ function MmrChart({ series }: { series: MmrPoint[] }) {
   const tierName = (badge: number) =>
     ranks.data?.find((r) => r.tier === Math.floor(badge / 10))?.name
 
+  // A badge is tier*10 + subtier, so "Ritualist 5" reads off as the tier name
+  // plus its subtier (subtier 0 / unresolved tiers fall back to the raw badge).
+  const rankLabel = (badge: number) => {
+    const name = tierName(badge)
+    if (!name) return `badge ${badge}`
+    const subtier = badge % 10
+    return subtier ? `${name} ${subtier}` : name
+  }
+
   const hiLabel = tierName(max) ?? `badge ${max}`
   const loLabel = tierName(min) ?? `badge ${min}`
 
+  // Interactive hover: map the cursor's x to the nearest data point and show the
+  // rank you were at that time. getScreenCTM().inverse() converts the mouse's
+  // screen coordinates into the SVG's own coordinate space, so the math is right
+  // regardless of how the responsive SVG is scaled on screen.
+  const svgRef = useRef<SVGSVGElement>(null)
+  const [hover, setHover] = useState<number | null>(null)
+
+  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = svgRef.current
+    const ctm = svg?.getScreenCTM()
+    if (!svg || !ctm) return
+    const pt = svg.createSVGPoint()
+    pt.x = e.clientX
+    pt.y = e.clientY
+    const cursorX = pt.matrixTransform(ctm.inverse()).x
+    const frac = n === 1 ? 0 : (cursorX - padX) / (W - 2 * padX)
+    const i = Math.min(n - 1, Math.max(0, Math.round(frac * (n - 1))))
+    setHover(i)
+  }
+
+  const active = hover === null ? null : series[hover]
+  // Keep the tooltip box inside the chart: flip it to the left of the guide line
+  // once the point is in the right third.
+  const tipW = 132
+  const tipAnchor = active ? x(hover!) : 0
+  const tipX = active ? (tipAnchor > W - tipW - padX ? tipAnchor - tipW - 8 : tipAnchor + 8) : 0
+  const tipY = active ? Math.min(Math.max(y(active.badge) - 26, padY), H - 44) : 0
+
   return (
     <div>
-      <svg className="mmr-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Rank badge over time">
+      <svg
+        ref={svgRef}
+        className="mmr-chart"
+        viewBox={`0 0 ${W} ${H}`}
+        role="img"
+        aria-label="Rank badge over time"
+        onMouseMove={onMove}
+        onMouseLeave={() => setHover(null)}
+      >
         <line className="mmr-axis" x1={padX} y1={padY} x2={padX} y2={H - padY} />
         <line className="mmr-axis" x1={padX} y1={H - padY} x2={W - padX} y2={H - padY} />
         <polyline className="mmr-line" points={points} />
         {series.map((p, i) => (
-          <circle key={p.match_id} className="mmr-dot" cx={x(i)} cy={y(p.badge)} r={2.5}>
-            <title>
-              {fmtDate(p.start_time)} · {tierName(p.badge) ?? `badge ${p.badge}`}
-            </title>
-          </circle>
+          <circle key={p.match_id} className="mmr-dot" cx={x(i)} cy={y(p.badge)} r={2.5} />
         ))}
+
+        {active && (
+          <g className="mmr-hover" pointerEvents="none">
+            <line className="mmr-hover-line" x1={tipAnchor} y1={padY} x2={tipAnchor} y2={H - padY} />
+            <circle className="mmr-hover-dot" cx={tipAnchor} cy={y(active.badge)} r={4} />
+            <g transform={`translate(${tipX}, ${tipY})`}>
+              <rect className="mmr-tooltip-box" width={tipW} height={36} rx={4} />
+              <text className="mmr-tooltip-rank" x={8} y={15}>
+                {rankLabel(active.badge)}
+              </text>
+              <text className="mmr-tooltip-date" x={8} y={29}>
+                {fmtDate(active.start_time)}
+              </text>
+            </g>
+          </g>
+        )}
+
+        {/* A transparent rect over the plot area widens the hover target so the
+            cursor doesn't have to land exactly on the 2px line. */}
+        <rect
+          x={padX}
+          y={padY}
+          width={W - 2 * padX}
+          height={H - 2 * padY}
+          fill="transparent"
+        />
       </svg>
       <div className="mmr-axis-labels">
         <span>Low: {loLabel}</span>

@@ -771,12 +771,15 @@ def list_ranks(conn: sqlite3.Connection) -> list[dict]:
 # ── Overview / sync / eras ───────────────────────────────────────────────────
 
 def mmr_series(conn: sqlite3.Connection, account_id: int) -> list[dict]:
+    """The full rank-over-time series for an account, ordered by the rank rows'
+    OWN timestamp (account_rank_history.recorded_at, from the mmr-history
+    endpoint). Deliberately no join to matches: the old INNER JOIN dropped every
+    rank point whose match we never ingested (api-findings, spike 12)."""
     rows = conn.execute(
-        "SELECT arh.match_id, arh.badge, m.start_time"
-        " FROM account_rank_history arh"
-        " JOIN matches m ON m.match_id = arh.match_id"
-        " WHERE arh.account_id = ?"
-        " ORDER BY m.start_time",
+        "SELECT match_id, badge, recorded_at AS start_time"
+        " FROM account_rank_history"
+        " WHERE account_id = ? AND recorded_at IS NOT NULL"
+        " ORDER BY recorded_at",
         (account_id,),
     ).fetchall()
     return [dict(r) for r in rows]

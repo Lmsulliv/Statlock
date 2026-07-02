@@ -329,6 +329,16 @@ export interface MmrPoint {
   start_time: string
 }
 
+// The account's current (most-recent) rank, resolved to display name + color.
+export interface CurrentRank {
+  badge: number // tier*10 + subtier, 0..116
+  tier: number
+  subtier: number
+  name: string | null
+  color: string | null
+  badge_url: string
+}
+
 export interface RecentMatch {
   match_id: number
   hero_id: number
@@ -346,6 +356,7 @@ export interface RecentMatch {
 export interface Overview {
   account_id: number | null
   mmr_series: MmrPoint[]
+  current_rank: CurrentRank | null
   last_matches: RecentMatch[]
   sync: SyncStatus
   message?: string

@@ -776,6 +776,36 @@ a.btn {
   font-weight: 600;
 }
 
+/* Card header row: title on the left, an accessory (e.g. current rank) right. */
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.card-head .card-title {
+  margin: 0;
+}
+
+.current-rank {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.current-rank-art {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+
+.current-rank-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
 /* ── Accounts screen (importer + namer) ───────────────────────────────────── */
 
 .accounts {
@@ -917,6 +947,41 @@ a.btn {
 
 .mmr-dot {
   fill: var(--baseline);
+}
+
+.mmr-chart {
+  cursor: crosshair;
+}
+
+/* Hover readout: vertical guide + highlighted point + a small tooltip showing
+   the rank you were at that time. */
+.mmr-hover-line {
+  stroke: var(--border);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.mmr-hover-dot {
+  fill: var(--baseline);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.mmr-tooltip-box {
+  fill: var(--surface);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.mmr-tooltip-rank {
+  fill: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mmr-tooltip-date {
+  fill: var(--text-muted);
+  font-size: 11px;
 }
 
 .mmr-axis-labels {

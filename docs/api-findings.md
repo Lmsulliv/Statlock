@@ -201,6 +201,8 @@ GET https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/
 | `GET /v1/analytics/item-stats` | item baselines | `out/03d_item_stats_hero7.json` |
 | `GET /v1/analytics/hero-stats` | per-badge hero baselines | `out/03d_hero_stats_badge_bucket.json` |
 | `GET /v1/assets/ranks` | badge → name mapping | `out/03c_ranks.json` |
+| `GET /v1/players/{account_id}/mmr-history` | per-match rank series | `out/12_mmr_history.json` |
+| `GET /v1/players/mmr?account_ids=...` | current rank (batch) | `out/12_batch_mmr.json` |
 | `GET /v1/patches/big-days` | big-patch dates | `out/03c_big_days.json` |
 | `GET https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid=1422450` | era candidates | `out/04_steam_news.json` |
 
@@ -209,6 +211,53 @@ relevant later: `/v1/players/{account_id}/mmr-history` (rank per match —
 the Overview screen's MMR graph), `/v1/players/{account_id}/enemy-stats`
 and `/mate-stats`, `/v1/assets/heroes`, `/v1/assets/items`, `/v1/patches`
 (Valve forum RSS as JSON), `/v2/patches`, `/v1/matches/{match_id}/metadata/raw`.
+
+---
+
+## Player rank / MMR history (verified 2026-06-27, spike 12)
+
+Confirms and supersedes the assumptions in contradiction 1 about how per-player
+rank is fetched. Probed for the tracked self account 891231519
+(`spikes/12_rank_history.py`).
+
+**`GET /v1/players/{account_id}/mmr-history` (`out/12_mmr_history.json`)** —
+returns a JSON array, one row per **ranked** match, ascending by `start_time`.
+184 rows for the self account spanning 2024-10-10 → 2026-06-26. Each row:
+
+```json
+{"account_id": 891231519, "match_id": 90758660, "start_time": 1782447104,
+ "player_score": 29.33, "rank": 55, "division": 5, "division_tier": 5}
+```
+
+- **Each row carries its OWN timestamp.** `start_time` is a unix-seconds int,
+  present on 100% of rows (184/184), as is `match_id` (184/184, all distinct).
+  So the series does NOT need to be joined to `matches` to be ordered or dated —
+  store `start_time` and order by it directly.
+- **Rank encoding.** `rank == division*10 + division_tier` for **every** row
+  (verified all 184). `division` is the tier (0..11; 0..7 observed),
+  `division_tier` is the subtier (0..6). So `rank` IS the badge in our existing
+  `tier*10 + subtier` convention — `tier = rank // 10`, `subtier = rank % 10` —
+  and maps straight onto the `ranks` table (badge 55 = tier 5 subtier 5). Store
+  `rank` as `account_rank_history.badge`.
+- **Completeness vs. ingestion.** The series is independent of which matches we
+  ingested: 2 of the 184 match_ids are absent from our `matches` table today and
+  would be silently dropped by `mmr_series`'s current INNER JOIN to `matches`
+  (the gap is larger for non-self tracked accounts, whose full ranked history we
+  never ingest). Decouple the query from `matches`.
+
+**Current rank — two candidates probed:**
+
+- `GET /v1/players/{account_id}/card` → **HTTP 403, Patreon-only**
+  (`out/12_card.json`: `"This endpoint is only available to Patreon
+  subscribers."`). `ranked_badge_level`/`ranked_rank`/`ranked_subrank` exist in
+  the schema but are NOT accessible. Do not use.
+- `GET /v1/players/mmr?account_ids=<id>` (Batch MMR, `out/12_batch_mmr.json`) →
+  **HTTP 200**, returns exactly the single latest `MMRHistory` row per account
+  (here match 90758660, rank 55 — identical to the last `mmr-history` row).
+  Accepts a comma-separated `account_ids` list (+ optional `max_match_id`), so
+  one call covers all tracked accounts. This is the clean current-rank source;
+  note it equals the most-recent `mmr-history` row, so current rank can also be
+  derived as `MAX(start_time)` from the stored series without an extra call.
 
 ---
 

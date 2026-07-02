@@ -730,6 +730,26 @@ def _rank_badge_url(tier: int) -> str:
     return f"{_RANK_ART_BASE}/rank{tier}/badge_lg.png"
 
 
+def resolve_badge(badge: int | None, rank_tiers: list[dict]) -> dict | None:
+    """Map a numeric badge (tier*10 + subtier, 0..116; api-findings spike 12) to a
+    display rank: the tier name + accent color from the ranks table, the subtier,
+    and the derived tier badge art. None for a missing badge, so "current rank" is
+    simply absent rather than faked. rank_tiers is queries.list_ranks(conn)."""
+    if badge is None:
+        return None
+    tier = badge // 10
+    by_tier = {r["tier"]: r for r in rank_tiers}
+    row = by_tier.get(tier)
+    return {
+        "badge": badge,
+        "tier": tier,
+        "subtier": badge % 10,
+        "name": row["name"] if row else None,
+        "color": row["color"] if row else None,
+        "badge_url": _rank_badge_url(tier),
+    }
+
+
 def ranks(conn: sqlite3.Connection) -> list[dict]:
     """Rank tiers (name + color from the DB) plus a derived badge-art URL. One
     entry per tier: the analytics badge filter only partitions cleanly at decade
@@ -858,7 +878,8 @@ def overview(conn: sqlite3.Connection, scope: Scope) -> dict:
     resolved = _resolved(conn, scope)
     if resolved is None:
         return {
-            "account_id": None, "mmr_series": [], "last_matches": [], "sync": sync,
+            "account_id": None, "mmr_series": [], "current_rank": None,
+            "last_matches": [], "sync": sync,
             "message": "No tracked account yet. Add one with:"
                        " python -m ingest add-account <id> --self",
         }
@@ -870,9 +891,15 @@ def overview(conn: sqlite3.Connection, scope: Scope) -> dict:
         m["hero_name"] = names.get(m["hero_id"], str(m["hero_id"]))
         m["image_url"] = images.get(m["hero_id"])
         m["won"] = bool(m["won"])
+    # The series is ordered ascending by recorded_at, so its last point is the
+    # current rank -- which the Batch MMR endpoint confirmed equals the live rank
+    # (api-findings spike 12), so no extra request is needed.
+    series = queries.mmr_series(conn, resolved.account_id)
+    current_rank = resolve_badge(series[-1]["badge"], queries.list_ranks(conn)) if series else None
     result = {
         "account_id": resolved.account_id,
-        "mmr_series": queries.mmr_series(conn, resolved.account_id),
+        "mmr_series": series,
+        "current_rank": current_rank,
         "last_matches": recent,
         "sync": sync,
     }

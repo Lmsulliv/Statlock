@@ -1,0 +1,47 @@
+[
+  {
+    "account_id": 891231519,
+    "match_id": 21495743,
+    "start_time": 1728527969,
+    "player_score": 0.0,
+    "rank": 0,
+    "division": 0,
+    "division_tier": 0
+  },
+  {
+    "account_id": 891231519,
+    "match_id": 28745439,
+    "start_time": 1732327048,
+    "player_score": 26.99792257956336,
+    "rank": 53,
+    "division": 5,
+    "division_tier": 3
+  },
+  {
+    "account_id": 891231519,
+    "match_id": 29081174,
+    "start_time": 1732592270,
+    "player_score": 24.000084958737833,
+    "rank": 46,
+    "division": 4,
+    "division_tier": 6
+  },
+  {
+    "account_id": 891231519,
+    "match_id": 29083831,
+    "start_time": 1732594788,
+    "player_score": 24.555586301818828,
+    "rank": 51,
+    "division": 5,
+    "division_tier": 1
+  },
+  {
+    "account_id": 891231519,
+    "match_id": 90758660,
+    "start_time": 1782447104,
+    "player_score": 29.333333333528504,
+    "rank": 55,
+    "division": 5,
+    "division_tier": 5
+  }
+]

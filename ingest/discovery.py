@@ -56,8 +56,16 @@ def discover_account(conn, client, account_id: int, *, now=utcnow) -> int:
     return len(new_ids)
 
 
-def run_discovery(conn, client, *, now=utcnow) -> int:
-    """Run discovery for every tracked account. Returns total newly queued."""
+def discover_all(conn, client, *, now=utcnow) -> dict[int, int]:
+    """Run discovery for every tracked account. Returns {account_id: newly queued
+    count}. The per-account counts let the runner gate rank ingestion on the
+    accounts that actually got new matches this cycle."""
     accounts = [r["account_id"] for r in
                 conn.execute("SELECT account_id FROM tracked_accounts").fetchall()]
-    return sum(discover_account(conn, client, account_id, now=now) for account_id in accounts)
+    return {account_id: discover_account(conn, client, account_id, now=now)
+            for account_id in accounts}
+
+
+def run_discovery(conn, client, *, now=utcnow) -> int:
+    """Run discovery for every tracked account. Returns total newly queued."""
+    return sum(discover_all(conn, client, now=now).values())
