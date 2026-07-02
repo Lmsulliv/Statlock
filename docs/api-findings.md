@@ -382,6 +382,57 @@ denies straight from `stats[]` in `raw_json`, backfilling historical matches via
 
 ---
 
+## Damage taken: `damage_matrix` and `stats[].player_damage_taken` (verified 2026-06-28, damage-taken spike)
+
+Spike for the damage-taken report: can we recover (a) how much damage you take
+per game and (b) which enemy heroes deal it, from already-archived raw_json with
+no new fetch? **Yes for both** — re-inspecting two archived matches
+(`out/02_match_metadata_86714494.json`, `out/05_match_metadata_86707774.json`);
+no live call, zero rate-limit budget.
+
+- **`match_info.damage_matrix`** shape (end-of-match, per-source time series):
+  - `damage_dealers[]`: one entry per source player, keyed by
+    `dealer_player_slot` (a `player_slot`, 0–12; **slot 0 = environment /
+    non-roster**, e.g. creeps/towers/boss), holding `damage_sources[]`.
+  - each source: `damage_to_players[]` (one entry per victim, keyed by
+    `target_player_slot`, with a **cumulative** `damage[]` series) and a
+    `source_details_index` into `source_details`.
+  - top-level `sample_time_s[]` gives the timestamp of each `damage[]` index;
+    arrays vary in length (a source that went active late has fewer samples).
+  - `source_details.stat_type[]` (0 Bullet … noisy: also Ability/Melee/Unknown/
+    Misc/UnknownAbility) and `source_details.source_name[]`.
+  - **"Damage dealt TO you"** = read your slot as `target_player_slot`, take
+    **each source's final (cumulative) `damage[]` value**, sum per
+    `dealer_player_slot`, then map the dealer slot → hero via
+    `match_info.players[].player_slot`/`hero_id`.
+
+- **Reconciliation caveat (important):** `damage_matrix` is **gross,
+  pre-mitigation** output damage. It does **not** equal net
+  `player_damage_taken`: for one player the enemy-team `damage_matrix` total was
+  ~157k vs a net `player_damage_taken` of 48k. So `damage_matrix` is sound for a
+  *relative* per-enemy ranking, but is **not** an absolute damage-taken total.
+
+- **No reliable by-type split of damage taken.** The only type signal is
+  `source_details.stat_type`, which is noisy and lives only on the gross scale;
+  there is no weapon/spirit split of net damage taken anywhere. The damage-taken
+  *total* therefore comes from `stats[]`, not a type breakdown.
+
+- **`stats[].player_damage_taken`** is present for all 12 players, a per-tick
+  cumulative series whose **last** entry is the net total — the same `stats[]`
+  the `player_damage`/`healing` totals already read (contradiction 5). This is
+  the clean source for the per-game damage-taken metric and its live population
+  baseline.
+
+**Consequence:** total damage taken is materialized into
+`match_players.player_damage_taken` (from `stats[]`) and surfaced as a
+continuous Performance metric (lower-is-better) against a live population
+baseline; the per-enemy-hero ranking is materialized into `damage_taken_sources`
+(from `damage_matrix`) and surfaced on the Deaths screen as a raw relative
+ranking (no verdict). Both backfill via `reprocess-archive` with no API calls,
+the same pattern as `kill_events` and `laning_stats`.
+
+---
+
 ## Analytics endpoints: filters and rank granularity
 
 All analytics endpoints share these query params (full list per endpoint

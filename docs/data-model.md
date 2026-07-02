@@ -76,6 +76,7 @@ CREATE TABLE match_players (
     player_damage   INTEGER,
     obj_damage      INTEGER,
     healing         INTEGER,
+    player_damage_taken INTEGER,        -- net damage taken, last stats[] entry (schema v15)
     won             INTEGER NOT NULL,   -- denormalized: team == winning_team
     PRIMARY KEY (match_id, player_slot)
 );
@@ -388,6 +389,13 @@ Three deliberate choices, all mirroring `kill_events`:
 - **No mark, no row.** A match that never reached the lane-end mark yields no row (NULL, never a fabricated 0), so a short game can't poison the population baseline. The baseline itself is the **live population mean** at the mark, computed like the Performance baseline (there is no stored continuous baseline).
 
 Like `kill_events`, it derives during ingest and backfills historical matches from the archive via `reprocess-archive` with zero API calls.
+
+### Damage taken (schema v15)
+
+Two views, both from `raw_json` (docs/api-findings.md, "Damage taken"), both backfilled by `reprocess-archive` with zero API calls.
+
+- **`match_players.player_damage_taken`** — the **net**, post-mitigation total you took, read from the last `stats[]` entry exactly like `player_damage` / `healing`. It is a continuous Performance metric (lower-is-better) compared to a **live population baseline** derived from the column itself, no stored baseline — the same machinery as `deaths`. Historical rows stay NULL until `reprocess-archive` UPDATEs them (a new column can't be back-filled by the `replace_*` helpers, which only touch the derived tables).
+- **`damage_taken_sources(match_id, victim_slot, source_slot, damage_taken)`** — which enemy dealt how much damage **to** you per match, from `match_info.damage_matrix`. Each `(dealer → victim)` chain carries a cumulative `damage[]` series; we keep the final value, summed per `(victim, source)` pair. `source_slot` is NULL for environment / non-roster dealers (creeps, towers, boss), exactly like `kill_events.killer_slot`; hero / team are resolved by joining `match_players` on `(match_id, source_slot)` at read time. This is **gross, pre-mitigation** damage — it does **not** reconcile with the net `player_damage_taken` total — so it backs only a **relative** per-enemy-hero ranking on the Deaths screen (average gross damage per game, no verdict, no baseline), never an absolute total.
 
 ## What's deliberately not here yet
 

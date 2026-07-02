@@ -171,7 +171,8 @@ def test_metrics_lead_with_win_rate_then_perf_metrics(trends_db):
     keys = [m["key"] for m in result["metrics"]]
     assert keys[0] == "win_rate"
     assert keys[1:] == ["net_worth_per_min", "kills", "deaths", "assists",
-                        "last_hits", "denies", "player_damage", "obj_damage", "healing"]
+                        "last_hits", "denies", "player_damage", "obj_damage", "healing",
+                        "player_damage_taken"]
 
 
 # ── Service: calendar buckets + honesty floor ────────────────────────────────

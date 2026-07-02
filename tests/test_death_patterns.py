@@ -55,6 +55,12 @@ def _kill(conn, match_id, killer_slot, victim_slot, game_time_s):
                  " VALUES (?, ?, ?, ?)", (match_id, game_time_s, victim_slot, killer_slot))
 
 
+def _damage(conn, match_id, victim_slot, source_slot, damage_taken):
+    conn.execute("INSERT INTO damage_taken_sources(match_id, victim_slot, source_slot,"
+                 " damage_taken) VALUES (?, ?, ?, ?)",
+                 (match_id, victim_slot, source_slot, damage_taken))
+
+
 # ── By enemy hero (raw counts + games faced, no verdict) ─────────────────────
 
 @pytest.fixture
@@ -76,12 +82,17 @@ def by_hero_db(db):
     _kill(db, 1, 3, 1, 130)             # anon E2 -> me, minute 2
     _kill(db, 1, None, 1, 200)          # tower -> me (NULL killer, no hero)
     _kill(db, 1, 1, 2, 300)             # me -> E1 (population death, not mine)
+    _damage(db, 1, 1, 2, 1000)          # E1 -> me, 1000 gross
+    _damage(db, 1, 1, 3, 500)           # anon E2 -> me, 500 (still attributed to Lash)
+    _damage(db, 1, 1, None, 9999)       # environment -> me (NULL source, excluded)
+    _damage(db, 1, 2, 1, 700)           # me -> E1 (population's victim, not mine)
     # Match 2 (no E2)
     _match(db, 2)
     _player(db, 2, 1, SELF, H_SELF, 0)
     _player(db, 2, 2, 200, E1, 1)
     _player(db, 2, 4, 201, E3, 1)
     _kill(db, 2, 2, 1, 300)             # E1 -> me, minute 5
+    _damage(db, 2, 1, 2, 2000)          # E1 -> me, 2000 gross (E3 never damages me)
     db.commit()
     return db
 
@@ -121,6 +132,45 @@ def test_by_hero_excludes_tower_and_creep_deaths(by_hero_db):
 def test_by_hero_is_ordered_worst_killer_first(by_hero_db):
     rows = service.death_patterns(by_hero_db, make_scope(account_id=SELF))["by_enemy_hero"]
     assert [r["enemy_hero_id"] for r in rows] == [E1, E2, E3]   # 4, 1, 0 deaths
+
+
+# ── Damage by enemy hero (gross avg/game, no verdict) ────────────────────────
+
+def _by_damage(result, hero_id):
+    return next(r for r in result["by_damage_source"] if r["enemy_hero_id"] == hero_id)
+
+
+def test_by_damage_averages_gross_damage_per_game(by_hero_db):
+    e1 = _by_damage(service.death_patterns(by_hero_db, make_scope(account_id=SELF)), E1)
+    assert e1["games_faced"] == 2            # faced in both matches
+    assert e1["total_damage"] == 3000        # 1000 in M1 + 2000 in M2
+    assert e1["avg_per_game"] == 1500.0      # 3000 / 2 games faced
+    assert e1["enemy_hero_name"] == "Bebop"
+    assert e1["enemy_hero_image_url"] == f"http://img/{E1}.png"
+
+
+def test_by_damage_attributes_an_anonymized_source_by_its_hero(by_hero_db):
+    e2 = _by_damage(service.death_patterns(by_hero_db, make_scope(account_id=SELF)), E2)
+    assert e2["total_damage"] == 500         # account_id 0, still counted under Lash
+    assert e2["games_faced"] == 1
+    assert e2["avg_per_game"] == 500.0
+
+
+def test_by_damage_keeps_a_faced_but_harmless_hero_at_zero(by_hero_db):
+    e3 = _by_damage(service.death_patterns(by_hero_db, make_scope(account_id=SELF)), E3)
+    assert e3["games_faced"] == 2 and e3["total_damage"] == 0 and e3["avg_per_game"] == 0.0
+
+
+def test_by_damage_excludes_environment_and_my_own_damage(by_hero_db):
+    rows = service.death_patterns(by_hero_db, make_scope(account_id=SELF))["by_damage_source"]
+    # The 9999 environment row (NULL source) and the 700 I dealt to E1 belong to
+    # no enemy facing me, so the hero totals sum to exactly 3000 + 500, not more.
+    assert sum(r["total_damage"] for r in rows) == 3500
+
+
+def test_by_damage_is_ordered_hardest_hitter_first(by_hero_db):
+    rows = service.death_patterns(by_hero_db, make_scope(account_id=SELF))["by_damage_source"]
+    assert [r["enemy_hero_id"] for r in rows] == [E1, E2, E3]   # 1500, 500, 0 avg
 
 
 # ── Timeline (game-minute bins vs a live population baseline) ─────────────────
@@ -220,7 +270,8 @@ def test_empty_scope_returns_an_empty_response(db):
     db.execute("INSERT INTO user_accounts(user_id, account_id, is_self, added_at)"
                " VALUES (1, ?, 1, ?)", (SELF, WHEN))
     result = service.death_patterns(db, make_scope(account_id=SELF))
-    assert result == {"by_enemy_hero": [], "timeline": [], "total_deaths": 0, "games": 0}
+    assert result == {"by_enemy_hero": [], "by_damage_source": [], "timeline": [],
+                      "total_deaths": 0, "games": 0}
 
 
 def test_api_and_cli_match_the_service(timeline_db, capsys):

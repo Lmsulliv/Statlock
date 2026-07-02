@@ -79,6 +79,39 @@ function DeathsBody({ data }: { data: DeathPatternsResponse }) {
         </table>
       )}
 
+      <h2 className="deaths-section-title">Who damages you</h2>
+      <p className="muted deaths-note">
+        Average damage taken from each enemy hero per game — gross, pre-mitigation
+        damage, so it's a relative ranking with no baseline or verdict.
+      </p>
+      {data.by_damage_source.length === 0 ? (
+        <EmptyState title="No damage-by-source data recorded in this scope." />
+      ) : (
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Enemy</th>
+              <th className="col-delta">Damage / game</th>
+              <th className="col-delta">Games faced</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.by_damage_source.map((r) => (
+              <tr key={r.enemy_hero_id}>
+                <td>
+                  <span className="enemy-cell">
+                    <HeroIcon name={r.enemy_hero_name} url={r.enemy_hero_image_url} />
+                    {r.enemy_hero_name}
+                  </span>
+                </td>
+                <td className="col-delta">{fmtNum(r.avg_per_game)}</td>
+                <td className="col-delta">{r.games_faced}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
       <h2 className="deaths-section-title">When you die</h2>
       <p className="muted deaths-note">
         Deaths per game by game-minute. Bars below the gold baseline (the field's

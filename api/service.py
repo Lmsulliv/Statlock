@@ -176,13 +176,19 @@ def death_patterns(conn: sqlite3.Connection, scope: Scope) -> dict:
       off a few). No verdict / interval: there is no stored per-matchup death
       baseline, so -- like the match-detail kill trades -- we never fabricate one.
       Any future death verdict would need a baseline and would live in stats/.
+    - `by_damage_source`: which enemy heroes deal you the most damage, as average
+      GROSS damage per game (damage_matrix, materialized into
+      damage_taken_sources). Like by_enemy_hero it is a raw relative ranking with
+      no verdict -- damage_matrix is pre-mitigation and does not reconcile with the
+      net damage-taken total (api-findings), so there is no honest baseline.
     - `timeline`: your deaths bucketed into game-minute bins, each compared to a
       LIVE population baseline (everyone else at this scope). Fewer deaths is good,
       so higher_is_better=False flips the verdict tier -- identical to the `deaths`
       metric on Performance -- and the same _metric_fields machinery attaches the
       t-interval + verdict. A bin with no population comes back not_enough_data.
     """
-    empty = {"by_enemy_hero": [], "timeline": [], "total_deaths": 0, "games": 0}
+    empty = {"by_enemy_hero": [], "by_damage_source": [], "timeline": [],
+             "total_deaths": 0, "games": 0}
     scope = _resolved(conn, scope)
     if scope is None:
         return empty
@@ -207,6 +213,23 @@ def death_patterns(conn: sqlite3.Connection, scope: Scope) -> dict:
     by_hero.sort(key=lambda r: (-r["deaths"], -r["games_faced"],
                                 r["enemy_hero_name"].lower()))
 
+    by_damage = []
+    for r in queries.damage_taken_by_enemy_hero(conn, scope):
+        enemy = r["enemy_hero"]
+        total = r["total_damage"] or 0
+        faced = r["games_faced"]
+        by_damage.append({
+            "enemy_hero_id": enemy,
+            "enemy_hero_name": names.get(enemy, str(enemy)),
+            "enemy_hero_image_url": images.get(enemy),
+            "total_damage": total,
+            "games_faced": faced,
+            "avg_per_game": _round(total / faced, 1) if faced else 0.0,
+        })
+    # Hardest-hitting enemy first; ties broken by games faced, then name.
+    by_damage.sort(key=lambda r: (-r["avg_per_game"], -r["games_faced"],
+                                  r["enemy_hero_name"].lower()))
+
     death_times = [(d["match_id"], d["game_time_s"])
                    for d in queries.personal_death_times(conn, scope)]
     pop_games, pop_by_minute = queries.population_death_timeline(conn, scope)
@@ -218,8 +241,8 @@ def death_patterns(conn: sqlite3.Connection, scope: Scope) -> dict:
                          "deaths": b["deaths"], **fields})
 
     total_deaths = sum(b["deaths"] for b in timeline)
-    return {"by_enemy_hero": by_hero, "timeline": timeline,
-            "total_deaths": total_deaths, "games": games}
+    return {"by_enemy_hero": by_hero, "by_damage_source": by_damage,
+            "timeline": timeline, "total_deaths": total_deaths, "games": games}
 
 
 # ── Items (per hero) ─────────────────────────────────────────────────────────

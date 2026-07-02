@@ -222,6 +222,43 @@ def death_by_enemy_hero(conn: sqlite3.Connection, scope: Scope) -> list[dict]:
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
+def damage_taken_by_enemy_hero(conn: sqlite3.Connection, scope: Scope) -> list[dict]:
+    """Per enemy hero across the scoped matches: {enemy_hero, games_faced,
+    total_damage} -- how much GROSS damage each enemy hero you faced dealt TO you
+    (damage_matrix, materialized into damage_taken_sources).
+
+    The twin of death_by_enemy_hero: the same me/opponent self-join and scope
+    clauses, but a LEFT JOIN to damage_taken_sources on the (source = opp,
+    victim = me) slot pair, so an enemy hero you faced but who never damaged you
+    still appears at 0. COUNT(DISTINCT me.match_id) counts games faced (robust to
+    the same hero on two enemy players in one match); SUM(dts.damage_taken) is the
+    gross total, which the service divides by games faced for an average. Source
+    resolves to a hero through match_players by (match_id, player_slot), so an
+    anonymized opponent (account_id = 0) still counts under the hero it piloted. A
+    NULL source_slot (environment) matches no opp.player_slot, so non-hero damage
+    is excluded. Raw, GROSS, RELATIVE totals only; no verdict and no baseline
+    (api-findings: damage_matrix is pre-mitigation and does not reconcile with the
+    net damage-taken total)."""
+    era_sql, era_params = _era_clause(scope, "m.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "me.team")
+    sql = (
+        "SELECT opp.hero_id AS enemy_hero,"
+        " COUNT(DISTINCT me.match_id) AS games_faced,"
+        " SUM(dts.damage_taken) AS total_damage"
+        " FROM match_players me"
+        " JOIN match_players opp"
+        "   ON opp.match_id = me.match_id AND opp.team != me.team"
+        " JOIN matches m ON m.match_id = me.match_id"
+        " LEFT JOIN damage_taken_sources dts ON dts.match_id = me.match_id"
+        "   AND dts.source_slot = opp.player_slot AND dts.victim_slot = me.player_slot"
+        " WHERE me.account_id = ? AND m.game_mode = ?"
+        + era_sql + badge_sql +
+        " GROUP BY opp.hero_id"
+    )
+    params = [scope.account_id, scope.game_mode] + era_params + badge_params
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
 def scoped_match_count(conn: sqlite3.Connection, scope: Scope) -> int:
     """How many scoped games the account played -- the zero-fill denominator for
     the death timeline. Same era/badge/game-mode predicates and the duration_s > 0
@@ -478,6 +515,8 @@ PERF_METRICS = [
     {"key": "obj_damage", "label": "Obj damage",
      "expr": "mp.obj_damage", "higher_is_better": True},
     {"key": "healing", "label": "Healing", "expr": "mp.healing", "higher_is_better": True},
+    {"key": "player_damage_taken", "label": "Damage taken",
+     "expr": "mp.player_damage_taken", "higher_is_better": False},
 ]
 
 

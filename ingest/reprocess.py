@@ -5,7 +5,8 @@ is the source of truth here, so backfilling costs zero requests and can't trip t
 rate limit. For every archived match body we idempotently:
 
   - if the match is already stored: (re)materialize its derived tables
-    (kill_events + laning_stats) from raw_json;
+    (kill_events + laning_stats + damage_taken_sources) from raw_json, and
+    backfill the match_players.player_damage_taken column a new schema added;
   - if it is NOT stored (e.g. a pre-player_slot 6x0 anonymized match that crashed
     ingest before the schema could accept it): parse and insert match + players +
     purchases + kill_events + laning_stats now, and flip its fetch_queue row to
@@ -21,11 +22,14 @@ import json
 import logging
 
 from ingest.parse import (
+    derive_damage_taken_sources,
     derive_kill_events,
     derive_laning_stats,
     era_id_for,
+    finals_from_stats,
     insert_match,
     parse_metadata,
+    replace_damage_taken_sources,
     replace_kill_events,
     replace_laning_stats,
 )
@@ -57,15 +61,33 @@ def _latest_match_bodies(conn) -> dict[int, str]:
     return bodies
 
 
+def _backfill_damage_taken_column(conn, meta: dict) -> None:
+    """Set match_players.player_damage_taken from raw_json for an already-stored
+    match. The derived tables get a replace_* call, but match_players is INSERTed
+    once (not replaced), so when a new column lands its historical rows stay NULL
+    until an explicit UPDATE fills them. Reads the same stats[] final as
+    parse_metadata, so a backfilled value equals a freshly-ingested one."""
+    info = meta.get("match_info") or {}
+    match_id = info.get("match_id")
+    for p in info.get("players") or []:
+        _, _, _, damage_taken = finals_from_stats(p.get("stats"))
+        conn.execute(
+            "UPDATE match_players SET player_damage_taken = ?"
+            " WHERE match_id = ? AND player_slot = ?",
+            (damage_taken, match_id, p.get("player_slot")),
+        )
+
+
 def reprocess_archive(conn, *, now=utcnow) -> dict:
-    """Backfill kill_events (and recover unstorable matches) from the archive.
-    Returns {"matches_recovered": n, "kill_events_rebuilt": m}."""
+    """Backfill the derived tables + the player_damage_taken column (and recover
+    unstorable matches) from the archive. Returns counts per rebuilt artifact."""
     bodies = _latest_match_bodies(conn)
     shop_item_ids = {r["item_id"] for r in
                      conn.execute("SELECT item_id FROM items").fetchall()}
     recovered = 0
     rebuilt = 0
     laning_rebuilt = 0
+    damage_rebuilt = 0
 
     for match_id, body in bodies.items():
         meta = json.loads(body)
@@ -78,6 +100,9 @@ def reprocess_archive(conn, *, now=utcnow) -> dict:
             if already_stored:
                 replace_kill_events(conn, match_id, derive_kill_events(meta))
                 replace_laning_stats(conn, match_id, derive_laning_stats(meta))
+                replace_damage_taken_sources(conn, match_id,
+                                             derive_damage_taken_sources(meta))
+                _backfill_damage_taken_column(conn, meta)
             else:
                 start_iso = unix_to_iso(meta["match_info"]["start_time"])
                 era_id = era_id_for(conn, start_iso)
@@ -99,8 +124,13 @@ def reprocess_archive(conn, *, now=utcnow) -> dict:
         laning_rebuilt += conn.execute(
             "SELECT COUNT(*) FROM laning_stats WHERE match_id = ?", (match_id,)
         ).fetchone()[0]
+        damage_rebuilt += conn.execute(
+            "SELECT COUNT(*) FROM damage_taken_sources WHERE match_id = ?", (match_id,)
+        ).fetchone()[0]
 
     log.info("reprocess-archive: %d match(es) recovered, %d kill event(s) rebuilt,"
-             " %d laning row(s) rebuilt", recovered, rebuilt, laning_rebuilt)
+             " %d laning row(s) rebuilt, %d damage-source row(s) rebuilt",
+             recovered, rebuilt, laning_rebuilt, damage_rebuilt)
     return {"matches_recovered": recovered, "kill_events_rebuilt": rebuilt,
-            "laning_rows_rebuilt": laning_rebuilt}
+            "laning_rows_rebuilt": laning_rebuilt,
+            "damage_source_rows_rebuilt": damage_rebuilt}

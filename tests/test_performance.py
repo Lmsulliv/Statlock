@@ -39,12 +39,18 @@ OWNER_NW = [3000, 3100, 2900, 3050, 2950, 3000]   # /10 -> [300, 310, 290, 305, 
 OWNER_DEATHS = [2, 3, 2, 3, 2, 3]                  # mean 2.5 (low)
 POP_NW = [2000, 2100, 1900, 2050, 1950, 2000]      # /10 -> mean 200
 POP_DEATHS = [6, 7, 5, 6, 6, 6]                    # mean 6.0 (high)
+# Owner takes LESS damage than the field; like deaths, lower is better, so the
+# verdict must flip to read as a strength.
+OWNER_DMG_TAKEN = [40000, 42000, 38000, 41000, 39000, 40000]   # mean 40000 (low)
+POP_DMG_TAKEN = [60000, 62000, 58000, 61000, 59000, 60000]     # mean 60000 (high)
 
 
-def _player(slot, account, hero, team, won, *, net_worth=None, deaths=None):
+def _player(slot, account, hero, team, won, *, net_worth=None, deaths=None,
+            damage_taken=None):
     return {
         "player_slot": slot, "account_id": account, "hero_id": hero,
         "team": team, "won": won, "net_worth": net_worth, "deaths": deaths,
+        "damage_taken": damage_taken,
     }
 
 
@@ -59,9 +65,10 @@ def _add_match(conn, match_id, players):
         conn.execute(
             "INSERT INTO match_players(match_id, player_slot, account_id, hero_id,"
             " team, kills, deaths, assists, net_worth, last_hits, denies,"
-            " player_damage, obj_damage, healing, won)"
+            " player_damage, obj_damage, healing, player_damage_taken, won)"
             " VALUES (:mid, :player_slot, :account_id, :hero_id, :team, NULL,"
-            " :deaths, NULL, :net_worth, NULL, NULL, NULL, NULL, NULL, :won)",
+            " :deaths, NULL, :net_worth, NULL, NULL, NULL, NULL, NULL,"
+            " :damage_taken, :won)",
             {"mid": match_id, **p},
         )
 
@@ -78,8 +85,10 @@ def _seed(conn):
     # Six Wraith matches: owner (team 0) + a population Wraith (team 1).
     for i in range(6):
         _add_match(conn, 1000 + i, [
-            _player(1, ME, WRAITH, 0, won=1, net_worth=OWNER_NW[i], deaths=OWNER_DEATHS[i]),
-            _player(2, POP, WRAITH, 1, won=0, net_worth=POP_NW[i], deaths=POP_DEATHS[i]),
+            _player(1, ME, WRAITH, 0, won=1, net_worth=OWNER_NW[i], deaths=OWNER_DEATHS[i],
+                    damage_taken=OWNER_DMG_TAKEN[i]),
+            _player(2, POP, WRAITH, 1, won=0, net_worth=POP_NW[i], deaths=POP_DEATHS[i],
+                    damage_taken=POP_DMG_TAKEN[i]),
         ])
     # Five owner-only Solo matches: no other player ever pilots Solo -> no baseline.
     for i in range(5):
@@ -141,6 +150,20 @@ def test_deaths_direction_is_flipped_so_fewer_reads_as_a_strength(perf_db):
     # it because for deaths lower is better, so the row reads as a strength.
     assert mean_verdict(OWNER_DEATHS, 6.0) == VERDICT_CLEAR_WEAKNESS
     assert deaths["verdict"] == VERDICT_CLEAR_STRENGTH
+
+
+def test_damage_taken_direction_is_flipped_so_less_reads_as_a_strength(perf_db):
+    rows = service.performance(perf_db, make_scope())
+    dmg = _metrics(next(r for r in rows if r["hero_name"] == "Wraith"))["player_damage_taken"]
+
+    assert dmg["games"] == 6
+    assert dmg["mean"] == 40000.0 and dmg["baseline_mean"] == 60000.0
+    assert dmg["higher_is_better"] is False
+    # Taking less damage than the field is value-neutrally a "weakness" (below
+    # baseline); the service flips it because lower is better, so it reads as a
+    # strength -- the same machinery as deaths.
+    assert mean_verdict(OWNER_DMG_TAKEN, 60000.0) == VERDICT_CLEAR_WEAKNESS
+    assert dmg["verdict"] == VERDICT_CLEAR_STRENGTH
 
 
 # ── Honest fallbacks: sparse metric and owner-only hero are personal-only ─────

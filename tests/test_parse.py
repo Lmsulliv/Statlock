@@ -81,13 +81,16 @@ def test_missing_or_empty_stats_yield_nulls_never_zeros(meta, shop_ids):
 
 
 def test_finals_from_stats_helper():
-    assert finals_from_stats([]) == (None, None, None)
-    assert finals_from_stats(None) == (None, None, None)
+    # (player_damage, obj_damage, healing, player_damage_taken) from the last entry.
+    assert finals_from_stats([]) == (None, None, None, None)
+    assert finals_from_stats(None) == (None, None, None, None)
     series = [
-        {"player_damage": 10, "boss_damage": 1, "player_healing": 0},
-        {"player_damage": 999, "boss_damage": 55, "player_healing": 42},
+        {"player_damage": 10, "boss_damage": 1, "player_healing": 0,
+         "player_damage_taken": 7},
+        {"player_damage": 999, "boss_damage": 55, "player_healing": 42,
+         "player_damage_taken": 314},
     ]
-    assert finals_from_stats(series) == (999, 55, 42)
+    assert finals_from_stats(series) == (999, 55, 42, 314)
 
 
 def test_purchases_filtered_to_shop_items(meta, shop_ids):

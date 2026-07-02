@@ -190,6 +190,7 @@ def render_deaths(result: dict, scope: Scope) -> str:
     lines = [f"Deaths - {mode}, {era}, {badge} ({result['games']} games)"]
 
     by_hero = result["by_enemy_hero"]
+    by_damage = result.get("by_damage_source", [])
     timeline = result["timeline"]
     if not by_hero and not timeline:
         lines.append("")
@@ -202,6 +203,13 @@ def render_deaths(result: dict, scope: Scope) -> str:
     lines.append(f"{'Enemy':<16}{'Faced':>7}{'Deaths':>8}")
     for r in by_hero:
         lines.append(f"{r['enemy_hero_name'][:15]:<16}{r['games_faced']:>7}{r['deaths']:>8}")
+
+    lines.append("")
+    lines.append("Damage taken by enemy hero (gross avg/game, no verdict):")
+    lines.append(f"{'Enemy':<16}{'Faced':>7}{'Avg/game':>12}")
+    for r in by_damage:
+        lines.append(f"{r['enemy_hero_name'][:15]:<16}{r['games_faced']:>7}"
+                     f"{_num(r['avg_per_game']):>12}")
 
     lines.append("")
     lines.append("Death timing vs the field (deaths per game by game-minute):")

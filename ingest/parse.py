@@ -23,14 +23,20 @@ class ParsedMatch:
     purchases: list[tuple]  # (match_id, player_slot, account_id, item_id, purchase_time_s, sold_time_s)
     kill_events: list[tuple]  # (match_id, game_time_s, victim_slot, killer_slot)
     laning_stats: list[tuple]  # (match_id, player_slot, net_worth, last_hits, denies, sampled_at_s)
+    damage_taken_sources: list[tuple]  # (match_id, victim_slot, source_slot, damage_taken)
 
 
-def finals_from_stats(stats: list[dict] | None) -> tuple[int | None, int | None, int | None]:
-    """(player_damage, obj_damage, healing) from the last stats entry, or NULLs."""
+def finals_from_stats(
+    stats: list[dict] | None,
+) -> tuple[int | None, int | None, int | None, int | None]:
+    """(player_damage, obj_damage, healing, player_damage_taken) from the last
+    stats entry, or NULLs. player_damage_taken is the net, post-mitigation total
+    you took (api-findings, "Damage taken"); a missing series stays NULL, never 0."""
     if not stats:
-        return (None, None, None)
+        return (None, None, None, None)
     last = stats[-1]
-    return (last.get("player_damage"), last.get("boss_damage"), last.get("player_healing"))
+    return (last.get("player_damage"), last.get("boss_damage"),
+            last.get("player_healing"), last.get("player_damage_taken"))
 
 
 def derive_kill_events(meta: dict) -> list[tuple]:
@@ -94,6 +100,46 @@ def derive_laning_stats(meta: dict) -> list[tuple]:
     return rows
 
 
+def derive_damage_taken_sources(meta: dict) -> list[tuple]:
+    """Per (victim, source) gross damage rows from match_info.damage_matrix. Pure,
+    no DB/HTTP -- the storage-facing reader of the damage-taken finding (api-findings).
+
+    The damage_matrix attributes damage from each dealer to each victim as a
+    CUMULATIVE time series (one value per sample_time_s), so a source's running
+    total is its damage[] array's LAST value; we sum those finals over a dealer's
+    many sources to get the gross damage that dealer dealt to that victim. A dealer
+    slot that maps to no roster player (slot 0 / environment: creeps, towers, boss)
+    is recorded as source_slot = NULL, exactly like derive_kill_events' non-roster
+    killer -- nothing is dropped, and slots collapse to one row per (victim, source).
+
+    This is GROSS, pre-mitigation damage: it does NOT reconcile with the net
+    player_damage_taken total (api-findings), so it only backs a RELATIVE per-enemy
+    ranking, never an absolute total. Every field is read with .get() so a body
+    without a damage_matrix (or an empty '{}' payload) yields an empty list instead
+    of raising. Each row: (match_id, victim_slot, source_slot, damage_taken)."""
+    info = meta.get("match_info") or {}
+    match_id = info.get("match_id")
+    roster_slots = {p.get("player_slot") for p in info.get("players") or []}
+    matrix = info.get("damage_matrix") or {}
+    totals: dict[tuple, int] = {}
+    for dealer in matrix.get("damage_dealers") or []:
+        source_slot = dealer.get("dealer_player_slot")
+        if source_slot not in roster_slots:
+            source_slot = None  # environment: no roster player to attribute to
+        for src in dealer.get("damage_sources") or []:
+            for tgt in src.get("damage_to_players") or []:
+                series = tgt.get("damage") or []
+                if not series:
+                    continue
+                key = (tgt.get("target_player_slot"), source_slot)
+                totals[key] = totals.get(key, 0) + series[-1]
+    rows = [(match_id, victim, source, dmg)
+            for (victim, source), dmg in totals.items()]
+    # Stable, readable order: by victim, then source (NULL/environment last).
+    rows.sort(key=lambda r: (r[1] is None, r[1], r[2] is None, r[2] or 0))
+    return rows
+
+
 def parse_metadata(meta: dict, raw_body: str, shop_item_ids: set[int],
                    era_id: int | None, ingested_at: str) -> ParsedMatch:
     info = meta["match_info"]
@@ -116,7 +162,7 @@ def parse_metadata(meta: dict, raw_body: str, shop_item_ids: set[int],
     players = []
     purchases = []
     for p in info["players"]:
-        damage, obj_damage, healing = finals_from_stats(p.get("stats"))
+        damage, obj_damage, healing, damage_taken = finals_from_stats(p.get("stats"))
         players.append({
             "match_id": match_id,
             "player_slot": p["player_slot"],
@@ -133,6 +179,7 @@ def parse_metadata(meta: dict, raw_body: str, shop_item_ids: set[int],
             "player_damage": damage,
             "obj_damage": obj_damage,
             "healing": healing,
+            "player_damage_taken": damage_taken,
             "won": int(p["team"] == winning_team),
         })
         # PK is (match_id, player_slot, item_id): if an item was sold and
@@ -146,7 +193,7 @@ def parse_metadata(meta: dict, raw_body: str, shop_item_ids: set[int],
                                   entry.get("game_time_s"), entry.get("sold_time_s", 0)))
 
     return ParsedMatch(match_row, players, purchases, derive_kill_events(meta),
-                       derive_laning_stats(meta))
+                       derive_laning_stats(meta), derive_damage_taken_sources(meta))
 
 
 def era_id_for(conn: sqlite3.Connection, start_time_iso: str) -> int | None:
@@ -174,10 +221,10 @@ def insert_match(conn: sqlite3.Connection, parsed: ParsedMatch) -> None:
     conn.executemany(
         "INSERT INTO match_players(match_id, player_slot, account_id, hero_id, team, lane,"
         " kills, deaths, assists, net_worth, last_hits, denies, player_damage, obj_damage,"
-        " healing, won)"
+        " healing, player_damage_taken, won)"
         " VALUES (:match_id, :player_slot, :account_id, :hero_id, :team, :lane, :kills,"
         " :deaths, :assists, :net_worth, :last_hits, :denies, :player_damage, :obj_damage,"
-        " :healing, :won)",
+        " :healing, :player_damage_taken, :won)",
         parsed.players,
     )
     conn.executemany(
@@ -188,6 +235,7 @@ def insert_match(conn: sqlite3.Connection, parsed: ParsedMatch) -> None:
     )
     replace_kill_events(conn, m["match_id"], parsed.kill_events)
     replace_laning_stats(conn, m["match_id"], parsed.laning_stats)
+    replace_damage_taken_sources(conn, m["match_id"], parsed.damage_taken_sources)
 
 
 def replace_kill_events(conn: sqlite3.Connection, match_id: int,
@@ -220,8 +268,24 @@ def replace_laning_stats(conn: sqlite3.Connection, match_id: int,
     )
 
 
+def replace_damage_taken_sources(conn: sqlite3.Connection, match_id: int,
+                                 rows: list[tuple]) -> None:
+    """Idempotently write a match's damage_taken_sources: clear this match's rows,
+    then insert the derived ones. Delete-then-insert, same shape as
+    replace_kill_events, so the archive backfill can re-run without piling up rows.
+    On first ingest the DELETE matches nothing. Caller owns the transaction (hard
+    rule 4)."""
+    conn.execute("DELETE FROM damage_taken_sources WHERE match_id = ?", (match_id,))
+    conn.executemany(
+        "INSERT INTO damage_taken_sources(match_id, victim_slot, source_slot,"
+        " damage_taken) VALUES (?, ?, ?, ?)",
+        rows,
+    )
+
+
 # Re-exported for convenience: tests and callers treat parse as the module
 # that knows how metadata timestamps become ISO strings.
 __all__ = ["ParsedMatch", "finals_from_stats", "derive_kill_events",
-           "derive_laning_stats", "parse_metadata", "era_id_for", "insert_match",
-           "replace_kill_events", "replace_laning_stats", "unix_to_iso"]
+           "derive_laning_stats", "derive_damage_taken_sources", "parse_metadata",
+           "era_id_for", "insert_match", "replace_kill_events", "replace_laning_stats",
+           "replace_damage_taken_sources", "unix_to_iso"]

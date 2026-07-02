@@ -107,8 +107,22 @@ export interface DeathTimelineBin {
   verdict: Verdict
 }
 
+// One enemy hero in the damage ranking: how much GROSS damage it dealt you,
+// averaged per game you faced it. From damage_matrix (pre-mitigation), so it's a
+// raw relative ranking with no verdict — there is no honest baseline because the
+// gross total doesn't reconcile with net damage taken (see api-findings).
+export interface DamageByEnemyHero {
+  enemy_hero_id: number
+  enemy_hero_name: string
+  enemy_hero_image_url: string | null
+  total_damage: number
+  games_faced: number
+  avg_per_game: number
+}
+
 export interface DeathPatternsResponse {
   by_enemy_hero: DeathByEnemyHero[]
+  by_damage_source: DamageByEnemyHero[]
   timeline: DeathTimelineBin[]
   total_deaths: number // timed deaths placed on the timeline (untimed excluded)
   games: number
