@@ -28,6 +28,7 @@ import random
 import sqlite3
 
 from ingest.client import BASE_URL, NetworkError, archive_response
+from ingest.maintenance import GAVE_UP_ERROR, refresh_assets
 from ingest.parse import era_id_for, insert_match, parse_metadata
 from ingest.util import iso_to_unix, unix_to_iso, utcnow
 
@@ -73,6 +74,12 @@ class DrainWorker:
         # extra probes before the breaker re-trips, so it is a justified
         # exception to the all-state-in-the-database rule.
         self.transient_strikes = 0
+        # assets_refreshed is the same kind of in-memory pacing flag: it caps the
+        # unknown-hero recovery to one asset refresh per daemon run (a patch-day
+        # burst of new-hero matches must not fire one refresh each). Losing it on
+        # a crash costs at most one extra refresh call, so it is the same
+        # justified exception to the all-state-in-the-database rule.
+        self.assets_refreshed = False
 
     # ── eligible-row selection ──────────────────────────────────────────────
 
@@ -137,35 +144,103 @@ class DrainWorker:
     # ── outcome handlers ────────────────────────────────────────────────────
 
     def _handle_success(self, row, body: str, fetched_at: str) -> str:
+        # HTTP 200 only means the request succeeded, NOT that the body is usable
+        # metadata: an empty, truncated, or unexpected body makes json.loads /
+        # parse_metadata / insert_match raise. Unguarded, that exception would
+        # propagate out of the drain loop and kill the daemon while this row stays
+        # 'pending' -- a restart refetches the same match and crashes again, so one
+        # poison message halts ingestion for everyone. We treat a bad payload as
+        # the match's FAULT (the raw body was already archived for forensics before
+        # we got here) and spend the attempt budget like a 404.
         match_id = row["match_id"]
-        meta = json.loads(body)
-        start_time_iso = unix_to_iso(meta["match_info"]["start_time"])
-        era_id = era_id_for(self.conn, start_time_iso)
-        shop_item_ids = {r["item_id"] for r in
-                         self.conn.execute("SELECT item_id FROM items").fetchall()}
-        parsed = parse_metadata(meta, body, shop_item_ids, era_id, fetched_at)
+        try:
+            meta = json.loads(body)
+            start_time_iso = unix_to_iso(meta["match_info"]["start_time"])
+            era_id = era_id_for(self.conn, start_time_iso)
+            shop_item_ids = {r["item_id"] for r in
+                             self.conn.execute("SELECT item_id FROM items").fetchall()}
+            parsed = parse_metadata(meta, body, shop_item_ids, era_id, fetched_at)
+            unknown = self._unknown_hero_ids(parsed)
 
-        # One transaction: the match rows and the queue flip commit together.
-        with self.conn:
-            insert_match(self.conn, parsed)
-            self.conn.execute(
-                "UPDATE fetch_queue SET status = 'fetched', last_attempt_at = ?,"
-                " next_retry_at = NULL, last_error = NULL WHERE match_id = ?",
-                (fetched_at, match_id),
-            )
+            # One transaction: the match rows, any hero placeholders, and the queue
+            # flip commit together (hard rule 4).
+            with self.conn:
+                self._insert_hero_placeholders(unknown, fetched_at)
+                insert_match(self.conn, parsed)
+                self.conn.execute(
+                    "UPDATE fetch_queue SET status = 'fetched', last_attempt_at = ?,"
+                    " next_retry_at = NULL, last_error = NULL WHERE match_id = ?",
+                    (fetched_at, match_id),
+                )
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError,
+                sqlite3.IntegrityError) as exc:
+            # `with self.conn` already rolled back its own writes on the exception;
+            # rollback() again is a safe no-op that also covers a failure before the
+            # block opened. The archived raw body is untouched (committed earlier).
+            self.conn.rollback()
+            error = f"bad payload: {type(exc).__name__}: {str(exc)[:200]}"
+            log.warning("match %s: %s -> fault", match_id, error)
+            return self._mark_match_fault(row, error, fetched_at)
 
-        self.transient_strikes = 0  # any 200 resets the streak
+        self.transient_strikes = 0  # any successful ingest resets the streak
         log.info("match %s pending -> fetched", match_id)
         return "fetched"
 
+    def _unknown_hero_ids(self, parsed) -> set[int]:
+        """The hero_ids in this match that are NOT in the heroes table. A hero
+        released after the last nightly asset refresh would otherwise fail the
+        match_players FK insert with IntegrityError -- the same crash loop as a
+        poison payload, but on patch days. We refresh assets ONCE per daemon run to
+        try to learn the hero; whatever stays unknown gets a placeholder row so the
+        FK holds (the nightly refresh fills the real name later)."""
+        hero_ids = {p["hero_id"] for p in parsed.players}
+        unknown = self._missing_heroes(hero_ids)
+        if unknown and not self.assets_refreshed:
+            # One refresh attempt per daemon run, regardless of outcome, so a burst
+            # of new-hero matches can't fire a refresh each. A network blip during
+            # the refresh just falls through to the placeholder path.
+            self.assets_refreshed = True
+            try:
+                refresh_assets(self.conn, self.client, now=self._now)
+            except NetworkError as e:
+                log.warning("unknown-hero asset refresh failed (%s); using placeholders", e)
+            unknown = self._missing_heroes(hero_ids)
+        return unknown
+
+    def _missing_heroes(self, hero_ids: set[int]) -> set[int]:
+        if not hero_ids:
+            return set()
+        placeholders = ",".join("?" for _ in hero_ids)
+        known = {r["hero_id"] for r in self.conn.execute(
+            f"SELECT hero_id FROM heroes WHERE hero_id IN ({placeholders})",
+            tuple(hero_ids))}
+        return hero_ids - known
+
+    def _insert_hero_placeholders(self, hero_ids: set[int], fetched_at: str) -> None:
+        """Write a placeholder heroes row for each still-unknown hero so the
+        match_players FK holds. INSERT OR IGNORE: a concurrent placeholder or a
+        hero the refresh just learned is harmless. Caller owns the transaction."""
+        for hero_id in hero_ids:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO heroes(hero_id, name, image_url, fetched_at)"
+                " VALUES (?, ?, NULL, ?)",
+                (hero_id, f"Unknown hero {hero_id}", fetched_at),
+            )
+
     def _handle_match_fault(self, row, status: int, fetched_at: str) -> str:
+        return self._mark_match_fault(row, f"HTTP {status}", fetched_at)
+
+    def _mark_match_fault(self, row, error: str, fetched_at: str) -> str:
+        """Spend one attempt on a match-fault outcome (a 404, a genuine 4xx, or a
+        bad payload). Gives up to 'unavailable' at MAX_ATTEMPTS, else 'failed' with
+        exponential backoff. Shared by every fault path so they age out identically."""
         match_id = row["match_id"]
         attempts = row["attempts"] + 1
         if attempts >= MAX_ATTEMPTS:
             self.conn.execute(
                 "UPDATE fetch_queue SET status = 'unavailable', attempts = ?,"
                 " last_attempt_at = ?, last_error = ? WHERE match_id = ?",
-                (attempts, fetched_at, f"HTTP {status}", match_id),
+                (attempts, fetched_at, error, match_id),
             )
             self.conn.commit()
             log.info("match %s -> unavailable (gave up after %d attempts)", match_id, attempts)
@@ -175,7 +250,7 @@ class DrainWorker:
         self.conn.execute(
             "UPDATE fetch_queue SET status = 'failed', attempts = ?, last_attempt_at = ?,"
             " next_retry_at = ?, last_error = ? WHERE match_id = ?",
-            (attempts, fetched_at, next_retry, f"HTTP {status}", match_id),
+            (attempts, fetched_at, next_retry, error, match_id),
         )
         self.conn.commit()
         log.info("match %s -> failed (attempt %d, retry at %s)", match_id, attempts, next_retry)
@@ -192,9 +267,9 @@ class DrainWorker:
         if iso_to_unix(fetched_at) - iso_to_unix(deferred_since) >= MAX_DEFER_AGE_S:
             self.conn.execute(
                 "UPDATE fetch_queue SET status = 'unavailable', deferred_since = ?,"
-                " last_attempt_at = ?, last_error = 'not parsed (gave up)'"
+                " last_attempt_at = ?, last_error = ?"
                 " WHERE match_id = ?",
-                (deferred_since, fetched_at, match_id),
+                (deferred_since, fetched_at, GAVE_UP_ERROR, match_id),
             )
             self.conn.commit()
             log.info("match %s -> unavailable (deferred past max age)", match_id)

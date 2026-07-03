@@ -432,3 +432,168 @@ def test_generic_400_without_salts_is_still_a_match_fault(populated_db, now):
     row = queue_rows(populated_db)[0]
     assert row["status"] == "failed"
     assert row["attempts"] == 1
+
+
+# ── Bad payload: a 200 whose body can't be parsed/inserted ───────────────────
+#
+# HTTP 200 says the request succeeded, not that the body is usable metadata. An
+# empty, truncated, or unexpected body makes json.loads / parse_metadata /
+# insert_match raise. Left unguarded that exception kills the daemon while the
+# row stays 'pending', so a restart refetches the same match and crashes again:
+# one poison message halts ingestion for everyone. We treat it as the match's
+# FAULT (raw body already archived), spending the attempt budget like a 404.
+
+
+@pytest.mark.parametrize("body", ["", "not json", "{}"])
+def test_bad_payload_marks_match_failed_and_drain_continues(populated_db, now, body):
+    HEALTHY = SHARED_MATCH
+    POISON = 55555
+    enqueue(populated_db, POISON, now)          # discovered first -> drained first
+    enqueue(populated_db, HEALTHY, now)
+    client = FakeClient()
+    client.add(f"/v1/matches/{POISON}/metadata", (200, {}, body))
+    client.add(f"/v1/matches/{HEALTHY}/metadata", ok(metadata_body_for(HEALTHY)))
+    worker = make_worker(populated_db, client, now)
+
+    steps = worker.drain()
+
+    assert steps == 2                            # both rows processed, no crash
+    poison = populated_db.execute(
+        "SELECT * FROM fetch_queue WHERE match_id=?", (POISON,)).fetchone()
+    assert poison["status"] == "failed"
+    assert poison["attempts"] == 1              # counts against the budget
+    assert poison["last_error"].startswith("bad payload: ")
+    # The healthy match behind the poison one still ingested.
+    healthy = populated_db.execute(
+        "SELECT * FROM fetch_queue WHERE match_id=?", (HEALTHY,)).fetchone()
+    assert healthy["status"] == "fetched"
+    assert populated_db.execute(
+        "SELECT 1 FROM match_players WHERE match_id=? AND account_id=?",
+        (HEALTHY, ME)).fetchone() is not None
+
+
+def test_five_bad_payloads_land_unavailable(populated_db, now):
+    enqueue(populated_db, SHARED_MATCH, now)
+    client = FakeClient()
+    client.add("/metadata", (200, {}, "not json"))
+    worker = make_worker(populated_db, client, now)
+
+    for attempt in range(1, 6):
+        worker.step()
+        row = queue_rows(populated_db)[0]
+        assert row["attempts"] == attempt
+        if attempt < 5:
+            assert row["status"] == "failed"
+            now.advance(2 * 86400)             # jump past the backoff window
+        else:
+            assert row["status"] == "unavailable"
+    assert worker.step() is None               # nothing eligible left
+
+
+# ── Unknown hero: a match with a hero released after the last asset refresh ───
+#
+# match_players.hero_id has an enforced FK to heroes, so a brand-new hero fails
+# the insert with IntegrityError -- the same crash loop as a poison payload, but
+# on patch days. Recovery: refresh assets ONCE per daemon run to try to learn the
+# hero, and if it's still unknown, write a placeholder heroes row so the FK holds
+# (the nightly asset refresh fills the real name later).
+
+UNKNOWN_HERO = 9999
+
+
+def metadata_with_unknown_hero(match_id: int, hero_id: int = UNKNOWN_HERO) -> str:
+    meta = load_fixture(f"match_metadata_{SHARED_MATCH}.json")
+    meta["match_info"]["match_id"] = match_id
+    meta["match_info"]["players"][0]["hero_id"] = hero_id
+    return json.dumps(meta)
+
+
+def heroes_fixture_plus(hero_id: int, name: str) -> str:
+    heroes = load_fixture("assets_heroes_match.json")
+    heroes.append({"id": hero_id, "name": name, "class_name": "hero_new",
+                   "images": {}, "disabled": False, "player_selectable": True})
+    return json.dumps(heroes)
+
+
+def add_asset_routes(client: FakeClient, heroes_body: str) -> None:
+    client.add("/v1/assets/heroes", (200, {}, heroes_body))
+    client.add("/v1/assets/items", ok(fixture_text("assets_items_match.json")))
+    client.add("/v1/assets/ranks", ok(fixture_text("assets_ranks.json")))
+
+
+def test_unknown_hero_learned_by_refresh_then_ingests(populated_db, now):
+    enqueue(populated_db, SHARED_MATCH, now)
+    client = FakeClient()
+    client.add("/metadata", ok(metadata_with_unknown_hero(SHARED_MATCH)))
+    # The refresh teaches us the new hero, so no placeholder is needed.
+    add_asset_routes(client, heroes_fixture_plus(UNKNOWN_HERO, "Freshly Released"))
+    worker = make_worker(populated_db, client, now)
+
+    assert worker.step() == "fetched"
+    assert len(client.calls_matching("assets/heroes")) == 1     # exactly one refresh
+    hero = populated_db.execute(
+        "SELECT name FROM heroes WHERE hero_id=?", (UNKNOWN_HERO,)).fetchone()
+    assert hero["name"] == "Freshly Released"                   # real name, not placeholder
+    assert populated_db.execute(
+        "SELECT 1 FROM match_players WHERE match_id=? AND hero_id=?",
+        (SHARED_MATCH, UNKNOWN_HERO)).fetchone() is not None
+
+
+def test_unknown_hero_falls_back_to_placeholder(populated_db, now):
+    enqueue(populated_db, SHARED_MATCH, now)
+    client = FakeClient()
+    client.add("/metadata", ok(metadata_with_unknown_hero(SHARED_MATCH)))
+    # The refresh returns the SAME stale assets: the hero stays unknown.
+    add_asset_routes(client, fixture_text("assets_heroes_match.json"))
+    worker = make_worker(populated_db, client, now)
+
+    assert worker.step() == "fetched"
+    assert len(client.calls_matching("assets/heroes")) == 1     # still refreshed once
+    hero = populated_db.execute(
+        "SELECT name FROM heroes WHERE hero_id=?", (UNKNOWN_HERO,)).fetchone()
+    assert hero["name"] == f"Unknown hero {UNKNOWN_HERO}"        # placeholder holds the FK
+    assert populated_db.execute(
+        "SELECT 1 FROM match_players WHERE match_id=? AND hero_id=?",
+        (SHARED_MATCH, UNKNOWN_HERO)).fetchone() is not None
+
+
+def test_refresh_assets_runs_at_most_once_per_daemon_run(populated_db, now):
+    # Two unknown-hero matches in one run: the refresh fires only for the first.
+    enqueue(populated_db, 61000, now)
+    enqueue(populated_db, 61001, now)
+    client = FakeClient()
+    client.add("/v1/matches/61000/metadata", ok(metadata_with_unknown_hero(61000)))
+    client.add("/v1/matches/61001/metadata", ok(metadata_with_unknown_hero(61001)))
+    add_asset_routes(client, fixture_text("assets_heroes_match.json"))
+    worker = make_worker(populated_db, client, now)
+
+    assert worker.drain() == 2
+    assert len(client.calls_matching("assets/heroes")) == 1     # once per daemon run
+    assert populated_db.execute(
+        "SELECT COUNT(*) FROM matches WHERE match_id IN (61000, 61001)"
+    ).fetchone()[0] == 2
+
+
+# ── Discovery tolerates a malformed / non-list 200 body ──────────────────────
+
+@pytest.mark.parametrize("body", ["", "not json", '{"error":"nope"}'])
+def test_discovery_tolerates_malformed_history_body(populated_db, now, body):
+    client = FakeClient()
+    client.add(f"/v1/players/{ME}/match-history", (200, {}, body))
+
+    assert run_discovery(populated_db, client, now=now) == 0    # no rows, no crash
+
+    # The queue is untouched and a later drain step still runs cleanly.
+    assert queue_rows(populated_db) == []
+    worker = make_worker(populated_db, client, now)
+    assert worker.step() is None
+
+
+def test_discovery_skips_history_rows_without_match_id(populated_db, now):
+    body = json.dumps([{"match_id": 42}, {"not_a_match": 1}, {"match_id": None}])
+    client = FakeClient()
+    client.add(f"/v1/players/{ME}/match-history", (200, {}, body))
+
+    assert run_discovery(populated_db, client, now=now) == 1    # only the valid row
+    rows = queue_rows(populated_db)
+    assert [r["match_id"] for r in rows] == [42]

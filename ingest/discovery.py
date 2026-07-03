@@ -19,6 +19,26 @@ def _history_url(account_id: int) -> str:
     return f"{BASE_URL}/v1/players/{account_id}/match-history"
 
 
+def _parse_history(body: str, account_id: int) -> list:
+    """Parse a match-history 200 body into a list of rows, tolerating a body that
+    carries no usable JSON array (empty/blank/unparseable/non-list). Same defensive
+    shape as maintenance._parse_baseline_rows: warn + return [] so one bad response
+    can't crash discovery for every tracked account."""
+    if not body or not body.strip():
+        log.warning("discovery: account %s empty history body", account_id)
+        return []
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError as exc:
+        log.warning("discovery: account %s malformed history body (%s)", account_id, exc)
+        return []
+    if not isinstance(parsed, list):
+        log.warning("discovery: account %s history body was %s, not a list",
+                    account_id, type(parsed).__name__)
+        return []
+    return parsed
+
+
 def discover_account(conn, client, account_id: int, *, now=utcnow) -> int:
     """Discover new matches for one account. Returns count of newly queued matches."""
     state = conn.execute(
@@ -35,8 +55,17 @@ def discover_account(conn, client, account_id: int, *, now=utcnow) -> int:
         log.warning("discovery: account %s history HTTP %s", account_id, status)
         return 0
 
-    history = json.loads(body)
-    new_ids = [row["match_id"] for row in history if row["match_id"] > high_water]
+    # HTTP 200 doesn't guarantee a JSON array: the endpoint sometimes answers 200
+    # with an empty, truncated, or error-shaped body, and json.loads("") raises.
+    # An unhandled raise here would crash the discovery loop, so treat any
+    # non-list body as "no history" (warn + skip) rather than letting it propagate.
+    history = _parse_history(body, account_id)
+
+    # Read match_id with .get() and skip rows that lack it: a sparse row must not
+    # crash the loop or poison the high-water mark with a None.
+    match_ids = [mid for row in history
+                 if (mid := row.get("match_id")) is not None]
+    new_ids = [mid for mid in match_ids if mid > high_water]
 
     for match_id in new_ids:
         conn.execute(
@@ -45,7 +74,7 @@ def discover_account(conn, client, account_id: int, *, now=utcnow) -> int:
             (match_id, fetched_at),
         )
 
-    max_seen = max((row["match_id"] for row in history), default=high_water)
+    max_seen = max(match_ids, default=high_water)
     conn.execute(
         "UPDATE sync_state SET last_match_id = ?, last_synced_at = ? WHERE account_id = ?",
         (max_seen, fetched_at, account_id),

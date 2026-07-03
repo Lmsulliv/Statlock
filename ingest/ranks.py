@@ -54,7 +54,19 @@ def fetch_account_rank(conn, client, account_id: int, *, now=utcnow) -> int:
         log.warning("ranks: account %s empty mmr-history body", account_id)
         return 0
 
-    rows = json.loads(body)
+    # A 200 doesn't guarantee a JSON array (empty/truncated/error-shaped bodies
+    # happen); an unhandled raise here would crash the rank sync. Treat any
+    # unparseable or non-list body as "no rows" rather than letting it propagate.
+    try:
+        rows = json.loads(body)
+    except json.JSONDecodeError as exc:
+        log.warning("ranks: account %s malformed mmr-history body (%s)", account_id, exc)
+        return 0
+    if not isinstance(rows, list):
+        log.warning("ranks: account %s mmr-history body was %s, not a list",
+                    account_id, type(rows).__name__)
+        return 0
+
     upserts = [
         (account_id, r["match_id"], r["rank"], unix_to_iso(r["start_time"]))
         for r in rows

@@ -2,15 +2,20 @@
 import logging
 from datetime import datetime, timezone
 
+from datetime import timedelta
+
 from ingest.maintenance import (
     ALL_TIME_ERA_ID,
     DAY_S,
     DECADE_BRACKETS,
+    GAVE_UP_ERROR,
+    MONTHLY_REVIVE_S,
     MONTHLY_S,
     WEEKLY_S,
     EraSpan,
     _refresh_due,
     refresh_baselines,
+    revive_gave_up,
     revive_unavailable,
     run_maintenance,
 )
@@ -57,6 +62,87 @@ def test_revive_only_touches_rows_older_than_24h(db):
     rows = {r["match_id"]: r for r in db.execute("SELECT * FROM fetch_queue")}
     assert rows[1]["status"] == "pending" and rows[1]["attempts"] == 0
     assert rows[2]["status"] == "unavailable" and rows[2]["attempts"] == 5
+
+
+# ── The nightly revive must NOT re-queue 'not parsed (gave up)' matches ───────
+#
+# Those rows aged out of the patient deferral path; re-queueing them nightly
+# burns one API call each per night forever, since their stale deferred_since
+# instantly flips them back to unavailable. The nightly pass skips them; a
+# monthly pass gives genuinely recovered old matches a real second chance.
+
+def queue_gave_up(db, match_id: int, last_attempt_iso: str, deferred_since_iso: str) -> None:
+    db.execute(
+        "INSERT INTO fetch_queue(match_id, discovered_at, status, attempts,"
+        " last_attempt_at, deferred_since, last_error)"
+        " VALUES (?, ?, 'unavailable', 0, ?, ?, ?)",
+        (match_id, last_attempt_iso, last_attempt_iso, deferred_since_iso, GAVE_UP_ERROR),
+    )
+    db.commit()
+
+
+def test_nightly_revive_skips_gave_up_rows(db):
+    now = ManualNow(NOW)
+    old = "2026-05-01T00:00:00+00:00"
+    queue_unavailable(db, 1, "2026-06-10T11:00:00+00:00")   # ordinary -> revived
+    queue_gave_up(db, 2, old, old)                          # gave-up -> left alone
+
+    assert revive_unavailable(db, now=now) == 1
+
+    rows = {r["match_id"]: r for r in db.execute("SELECT * FROM fetch_queue")}
+    assert rows[1]["status"] == "pending"
+    assert rows[2]["status"] == "unavailable"               # untouched by nightly
+
+
+def test_monthly_revive_resets_gave_up_rows_when_due(db):
+    now = ManualNow(NOW)
+    old = "2026-05-01T00:00:00+00:00"
+    queue_gave_up(db, 2, old, old)
+
+    # No prior monthly run recorded -> due immediately.
+    assert revive_gave_up(db, now=now) == 1
+
+    row = db.execute("SELECT * FROM fetch_queue WHERE match_id=2").fetchone()
+    assert row["status"] == "pending"
+    assert row["attempts"] == 0
+    assert row["deferred_since"] is None                    # stale clock cleared
+    assert row["last_error"] is None
+    stamp = db.execute(
+        "SELECT value FROM worker_meta WHERE key='last_gave_up_revive_at'"
+    ).fetchone()
+    assert stamp is not None and stamp["value"] == NOW.isoformat()
+
+
+def test_monthly_revive_is_noop_when_run_recently(db):
+    now = ManualNow(NOW)
+    old = "2026-05-01T00:00:00+00:00"
+    queue_gave_up(db, 2, old, old)
+    # Last monthly pass was yesterday: not due for ~a month.
+    recent = (NOW - timedelta(days=1)).isoformat()
+    db.execute(
+        "INSERT INTO worker_meta(key, value) VALUES('last_gave_up_revive_at', ?)",
+        (recent,),
+    )
+    db.commit()
+
+    assert revive_gave_up(db, now=now) == 0
+    assert db.execute(
+        "SELECT status FROM fetch_queue WHERE match_id=2"
+    ).fetchone()["status"] == "unavailable"
+
+
+def test_monthly_revive_due_after_a_month(db):
+    now = ManualNow(NOW)
+    old = "2026-01-01T00:00:00+00:00"
+    queue_gave_up(db, 2, old, old)
+    long_ago = (NOW - timedelta(seconds=MONTHLY_REVIVE_S + 1)).isoformat()
+    db.execute(
+        "INSERT INTO worker_meta(key, value) VALUES('last_gave_up_revive_at', ?)",
+        (long_ago,),
+    )
+    db.commit()
+
+    assert revive_gave_up(db, now=now) == 1
 
 
 # ── Baseline refresh: decade brackets ────────────────────────────────────────
@@ -327,3 +413,9 @@ def test_run_maintenance_does_all_jobs_and_stamps_meta(db):
     assert stamp is not None and stamp["value"] == NOW.isoformat()
     # Summary counts by queue status for the one-line log.
     assert "queue" in summary
+    # The monthly gave-up second chance ran (no prior stamp -> due) and recorded
+    # itself, so it won't fire again until a month passes.
+    assert "revived_gave_up" in summary
+    assert db.execute(
+        "SELECT COUNT(*) FROM worker_meta WHERE key='last_gave_up_revive_at'"
+    ).fetchone()[0] == 1

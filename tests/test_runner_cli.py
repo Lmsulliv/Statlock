@@ -1,8 +1,11 @@
 """Tests for ingest.runner (run-once flow) and the ingest CLI (status, add-account)."""
 import json
 
+import pytest
+
+import ingest.drain as drain_module
 from ingest.accounts import add_account
-from ingest.runner import maintenance_due, run_once
+from ingest.runner import UNEXPECTED_ERROR_SLEEP_S, maintenance_due, run_daemon, run_once
 from ingest.__main__ import main as cli_main
 
 from tests.fakes import FakeClient, FakeSleep, ManualNow, fixture_text, load_fixture, ok
@@ -70,6 +73,54 @@ def test_maintenance_due(db):
     assert not maintenance_due(db, now=now)
     now.advance(25 * 3600)
     assert maintenance_due(db, now=now)
+
+
+# ── Daemon last-resort guard ─────────────────────────────────────────────────
+#
+# An unhandled exception in one iteration must NOT kill the daemon (which would
+# halt ingestion until someone notices). The per-iteration body is wrapped: it
+# logs the traceback, sleeps 30s, and moves on. KeyboardInterrupt is the one
+# exception that still exits cleanly.
+
+def _skip_maintenance(db, now):
+    db.execute(
+        "INSERT INTO worker_meta(key, value) VALUES('last_maintenance_at', ?)",
+        (now().isoformat(),),
+    )
+    db.commit()
+
+
+def test_daemon_survives_unexpected_iteration_error(db, monkeypatch):
+    now = ManualNow()
+    _skip_maintenance(db, now)          # no tracked accounts -> discovery is a no-op
+    sleep = FakeSleep()
+    calls = {"n": 0}
+
+    def flaky_step(self):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+        return None                     # second iteration: queue empty
+
+    monkeypatch.setattr(drain_module.DrainWorker, "step", flaky_step)
+
+    run_daemon(db, FakeClient(), now=now, sleep=sleep, max_iterations=2)
+
+    assert calls["n"] == 2              # the daemon kept going after the crash
+    assert UNEXPECTED_ERROR_SLEEP_S in sleep.calls   # slept 30s instead of exiting
+
+
+def test_daemon_keyboard_interrupt_still_exits(db, monkeypatch):
+    now = ManualNow()
+    _skip_maintenance(db, now)
+
+    def interrupt_step(self):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(drain_module.DrainWorker, "step", interrupt_step)
+
+    # Must return (clean shutdown), not raise or loop forever.
+    run_daemon(db, FakeClient(), now=now, sleep=FakeSleep(), max_iterations=5)
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────

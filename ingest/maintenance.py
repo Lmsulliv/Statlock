@@ -29,6 +29,12 @@ log = logging.getLogger(__name__)
 REQUEUE_WINDOW_S = 24 * 3600
 ALL_TIME_ERA_ID = 0           # sentinel: NULL breaks SQLite composite-PK dedup
 
+# The exact last_error the drain loop stamps on a not-yet-parsed match that aged
+# out of the patient deferral path (drain._handle_not_parsed). Shared here so the
+# nightly revive can EXCLUDE these rows and the string can't drift between the
+# writer (drain) and the reader (revive).
+GAVE_UP_ERROR = "not parsed (gave up)"
+
 # Gapless decade brackets tiling 0..116 (12). Each baseline call fetches one
 # bracket; the query layer (api/queries.py) re-sums the brackets a scope
 # contains. Decades are the FINEST CLEAN partition the analytics badge filter
@@ -48,19 +54,64 @@ DAY_S = 24 * 3600
 WEEKLY_S = 7 * DAY_S
 MONTHLY_S = 30 * DAY_S
 RECENTLY_CLOSED_S = 30 * DAY_S    # a closed era younger than this refreshes weekly
+MONTHLY_REVIVE_S = 30 * DAY_S     # how often the gave-up second chance runs
 
 
 def revive_unavailable(conn, *, now=utcnow) -> int:
-    """Re-queue 'unavailable' matches whose last attempt is older than 24h."""
+    """Re-queue 'unavailable' matches whose last attempt is older than 24h.
+
+    EXCLUDES 'not parsed (gave up)' rows: those aged out of the patient deferral
+    path, and re-queueing them nightly burns one API call each per night forever
+    (their stale deferred_since instantly flips them back to unavailable). They
+    get a real second chance from the monthly revive_gave_up pass instead.
+    COALESCE because `last_error != x` is NULL for rows with no error, which would
+    silently drop every ordinary unavailable (whose last_error is NULL)."""
     cutoff = (now() - timedelta(seconds=REQUEUE_WINDOW_S)).isoformat()
     cursor = conn.execute(
         "UPDATE fetch_queue SET status = 'pending', attempts = 0, next_retry_at = NULL"
-        " WHERE status = 'unavailable' AND last_attempt_at < ?",
-        (cutoff,),
+        " WHERE status = 'unavailable' AND last_attempt_at < ?"
+        "   AND COALESCE(last_error, '') != ?",
+        (cutoff, GAVE_UP_ERROR),
     )
     conn.commit()
     if cursor.rowcount:
         log.info("maintenance: revived %d unavailable match(es)", cursor.rowcount)
+    return cursor.rowcount
+
+
+def revive_gave_up(conn, *, now=utcnow) -> int:
+    """Monthly second chance for 'not parsed (gave up)' matches. Runs at most once
+    per MONTHLY_REVIVE_S (tracked in worker_meta), because a fully reset gave-up
+    match costs a fresh discovery+drain attempt and most are permanently dead.
+
+    Resets deferred_since to NULL along with status/attempts/last_error -- that's
+    the whole point: the stale deferred_since is what instantly flipped a naively
+    revived row back to unavailable, so clearing it lets a genuinely recovered old
+    match restart the patient clock cleanly. Returns rows reset (0 when not due)."""
+    row = conn.execute(
+        "SELECT value FROM worker_meta WHERE key = 'last_gave_up_revive_at'"
+    ).fetchone()
+    now_iso = now().isoformat()
+    if row is not None:
+        due_at = (now() - timedelta(seconds=MONTHLY_REVIVE_S)).isoformat()
+        if row["value"] >= due_at:
+            return 0  # ran within the last MONTHLY_REVIVE_S: not due yet
+
+    cursor = conn.execute(
+        "UPDATE fetch_queue"
+        " SET status = 'pending', attempts = 0, next_retry_at = NULL,"
+        "     deferred_since = NULL, last_error = NULL"
+        " WHERE status = 'unavailable' AND last_error = ?",
+        (GAVE_UP_ERROR,),
+    )
+    conn.execute(
+        "INSERT INTO worker_meta(key, value) VALUES('last_gave_up_revive_at', ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (now_iso,),
+    )
+    conn.commit()
+    if cursor.rowcount:
+        log.info("maintenance: monthly pass revived %d gave-up match(es)", cursor.rowcount)
     return cursor.rowcount
 
 
@@ -286,6 +337,7 @@ def _queue_counts(conn) -> dict[str, int]:
 def run_maintenance(conn, client, *, now=utcnow) -> dict:
     """The full nightly job. Returns a summary dict."""
     revived = revive_unavailable(conn, now=now)
+    revived_gave_up = revive_gave_up(conn, now=now)
     refresh_baselines(conn, client, now=now)
     refresh_assets(conn, client, now=now)
     # Personas ride their OWN client/token bucket (separate budget). Gate on the
@@ -308,6 +360,7 @@ def run_maintenance(conn, client, *, now=utcnow) -> dict:
 
     summary = {
         "revived": revived,
+        "revived_gave_up": revived_gave_up,
         "candidates": candidates,
         "personas": personas,
         "queue": counts,
@@ -315,8 +368,9 @@ def run_maintenance(conn, client, *, now=utcnow) -> dict:
     }
     log.info(
         "maintenance summary: fetched %d, failed %d, deferred %d, unavailable %d, "
-        "queue depth %d, revived %d, new era candidates %d, personas %d",
+        "queue depth %d, revived %d (+%d gave-up), new era candidates %d, personas %d",
         counts.get("fetched", 0), counts.get("failed", 0), counts.get("deferred", 0),
-        counts.get("unavailable", 0), queue_depth, revived, candidates, personas,
+        counts.get("unavailable", 0), queue_depth, revived, revived_gave_up,
+        candidates, personas,
     )
     return summary

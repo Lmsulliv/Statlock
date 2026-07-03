@@ -86,6 +86,35 @@ def test_fetch_account_rank_non_200_writes_nothing(db):
     ).fetchone()[0] == 1
 
 
+import pytest
+
+
+@pytest.mark.parametrize("body", ["", "   ", "not json", '{"error":"nope"}'])
+def test_fetch_account_rank_tolerates_malformed_body(db, body):
+    """A 200 with an empty, unparseable, or non-list body writes nothing and
+    returns 0 instead of raising (which would crash the caller)."""
+    client = FakeClient()
+    client.add("mmr-history", (200, {}, body))
+    assert fetch_account_rank(db, client, ME, now=ManualNow()) == 0
+    assert _rows(db) == []
+    # Archived before parsing, even though the body was unusable.
+    assert db.execute(
+        "SELECT COUNT(*) FROM raw_api_responses WHERE url LIKE '%mmr-history%'"
+    ).fetchone()[0] == 1
+
+
+def test_fetch_account_rank_skips_rows_without_match_id(db):
+    body = __import__("json").dumps([
+        {"match_id": 7, "rank": 55, "start_time": 1_700_000_000},
+        {"rank": 40, "start_time": 1_700_000_100},          # no match_id -> skipped
+        {"match_id": 8, "start_time": 1_700_000_200},        # no rank -> skipped
+    ])
+    client = FakeClient()
+    client.add("mmr-history", (200, {}, body))
+    assert fetch_account_rank(db, client, ME, now=ManualNow()) == 1
+    assert [r["match_id"] for r in _rows(db)] == [7]
+
+
 def test_run_rank_sync_fetches_each_account(db):
     other = 238668046
     client = FakeClient()

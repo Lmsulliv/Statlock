@@ -19,6 +19,9 @@ log = logging.getLogger(__name__)
 MAINTENANCE_INTERVAL_S = 24 * 3600
 DISCOVERY_INTERVAL_S = 30 * 60
 IDLE_SLEEP_S = 60
+# Last-resort backoff: how long the daemon pauses after an UNEXPECTED error in an
+# iteration before trying again, rather than crashing the whole process.
+UNEXPECTED_ERROR_SLEEP_S = 30
 
 
 def _accounts_with_new_matches(new_by_account: dict[int, int]) -> list[int]:
@@ -71,17 +74,28 @@ def run_daemon(conn, client, *, now=utcnow, sleep=time.sleep, max_iterations=Non
             iterations += 1
             current = now()
 
-            if maintenance_due(conn, now=now):
-                run_maintenance(conn, client, now=now)
+            # Last-resort guard: a single unexpected exception in one iteration
+            # (a bug, an exotic API response a handler missed) must NOT kill the
+            # daemon, which would halt ingestion until someone notices. Log the
+            # traceback, back off, and move on -- crash-safety (all progress is in
+            # the DB) means the next iteration resumes cleanly. KeyboardInterrupt
+            # is a BaseException, so it slips past `except Exception` and reaches
+            # the outer handler for a clean shutdown.
+            try:
+                if maintenance_due(conn, now=now):
+                    run_maintenance(conn, client, now=now)
 
-            if last_discovery is None or (current - last_discovery).total_seconds() >= DISCOVERY_INTERVAL_S:
-                new_by_account = discover_all(conn, client, now=now)
-                run_rank_sync(
-                    conn, client, _accounts_with_new_matches(new_by_account), now=now)
-                last_discovery = current
+                if last_discovery is None or (current - last_discovery).total_seconds() >= DISCOVERY_INTERVAL_S:
+                    new_by_account = discover_all(conn, client, now=now)
+                    run_rank_sync(
+                        conn, client, _accounts_with_new_matches(new_by_account), now=now)
+                    last_discovery = current
 
-            if worker.step() is None:
-                # Queue empty: idle a minute before looking again.
-                sleep(IDLE_SLEEP_S)
+                if worker.step() is None:
+                    # Queue empty: idle a minute before looking again.
+                    sleep(IDLE_SLEEP_S)
+            except Exception:
+                log.exception("daemon iteration failed; backing off %ds", UNEXPECTED_ERROR_SLEEP_S)
+                sleep(UNEXPECTED_ERROR_SLEEP_S)
     except KeyboardInterrupt:
         log.info("daemon stopped (keyboard interrupt)")

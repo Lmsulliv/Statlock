@@ -33,6 +33,7 @@ _STEPS = [
     _DB_DIR / "migrations" / "013_curated_eras.sql",  # 12 -> 13: reseed patch_eras to 12 curated eras
     _DB_DIR / "migrations" / "014_rank_history_time.sql",  # 13 -> 14: account_rank_history.recorded_at
     _DB_DIR / "migrations" / "015_damage_taken.sql",  # 14 -> 15: match_players.player_damage_taken + damage_taken_sources
+    _DB_DIR / "migrations" / "016_fetch_queue_drain_index.sql",  # 15 -> 16: drain row-selection index
 ]
 
 

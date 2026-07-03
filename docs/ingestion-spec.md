@@ -50,6 +50,8 @@ forever:
     200 -> parse (see Parsing notes), write in ONE transaction,
            mark status='fetched'
            reset transient_strikes to 0
+           if the body can't be parsed/inserted -> bad payload (below):
+               treat as the match's fault, roll back, spend one attempt
     404 or "not yet available" ->        # the match's fault
            attempts += 1
            if attempts >= 5: status='unavailable'
@@ -88,10 +90,14 @@ The intuition: if something failed just now, it'll probably still fail in one se
 
 ### The two failure kinds (this distinction does a lot of work)
 
-- **The match's fault** (404, not yet parsed, metadata missing): increment `attempts`, eventually give up to `unavailable`. These are your throttled old match reports.
+- **The match's fault** (404, not yet parsed, metadata missing, **bad payload**): increment `attempts`, eventually give up to `unavailable`. These are your throttled old match reports.
 - **Our fault or the world's fault** (429, network blips, 5xx): never count against the match. The match is fine; the conditions weren't. Retrying it later costs nothing.
 
 Mixing these up is a classic ingestion bug: a flaky network at 3 a.m. permanently marks 50 perfectly good matches as unavailable.
+
+**Bad payload** is the newest match's-fault kind and the subtlest: an HTTP **200** whose body can't be turned into rows — empty, truncated, or an unexpected shape that makes `json.loads`, the parser, or the insert raise (including a `hero_id` the assets table doesn't know yet, which fails the foreign key). Left unguarded, that exception escapes the drain loop and kills the daemon while the row is still `pending`, so a restart refetches the same match and crashes again — one poison message halts ingestion for everyone. So the success path is wrapped: on any parse/insert failure we roll back the match transaction (the raw body was already archived before parsing, so nothing is lost for later forensics), record `last_error = 'bad payload: <ExceptionClass>: <message>'`, and spend one attempt exactly like a 404. The daemon logs a warning and moves on to the next row.
+
+For the unknown-`hero_id` case specifically there's a recovery step before we give up: the drain worker refreshes the assets table **once per run** (a new hero usually just means the nightly asset refresh hasn't happened yet), and if the hero is still unknown it writes a placeholder `heroes` row (`name = 'Unknown hero <id>'`) so the match ingests now and the foreign key holds; the next nightly refresh overwrites the placeholder with the real name.
 
 ### Parsing notes
 
@@ -127,7 +133,16 @@ once per day (e.g. 4 a.m.):
     UPDATE fetch_queue
        SET status='pending', attempts=0
      WHERE status='unavailable'
-       AND last_attempt_at < now() - 24h;
+       AND last_attempt_at < now() - 24h
+       AND last_error IS NOT 'not parsed (gave up)';   -- see below
+
+    -- monthly only: a genuine second chance for matches that aged out of the
+    -- deferral path. Resets status, attempts, AND deferred_since (the last one
+    -- matters most) for rows whose last_error is 'not parsed (gave up)'.
+    once per ~30 days (tracked in worker_meta.last_gave_up_revive_at):
+        UPDATE fetch_queue
+           SET status='pending', attempts=0, deferred_since=NULL, last_error=NULL
+         WHERE status='unavailable' AND last_error='not parsed (gave up)';
 
     refresh baselines, one request per era:
         for each era in patch_eras, plus one explicit all-time span, call analytics with min/max date params set to that era's
@@ -141,6 +156,8 @@ once per day (e.g. 4 a.m.):
 ```
 
 That nightly re-queue line is the entire automation story for your old match reports: every time Valve lets you unlock another batch, the tracker absorbs them within a day with zero manual steps.
+
+**Why the nightly pass excludes `'not parsed (gave up)'`.** A match that spent `MAX_DEFER_AGE_S` (14 days) on the patient deferral path without ever parsing lands in `unavailable` with that specific `last_error`. Its `deferred_since` is 14 days old. If the nightly revive re-queued it, the next drain would get the same "salts cannot be fetched" 400, re-defer it, and immediately see `now - deferred_since >= MAX_DEFER_AGE_S` again — so it flips right back to `unavailable`, having burned one API call for nothing. Every night. Forever. So the nightly pass skips these rows, and a separate **monthly** pass (throttled via `worker_meta.last_gave_up_revive_at`) gives them a real second chance by resetting `deferred_since` too, letting a genuinely recovered old match restart the 14-day clock cleanly instead of aging out on the first retry.
 
 ## How it actually runs
 
@@ -179,3 +196,8 @@ Worth writing down now, because these become your test suite and the acceptance 
 3. Simulate a 429: worker slows down and the match's `attempts` is unchanged.
 4. Simulate five 404s on one match: it lands in `unavailable`; nightly job revives it.
 5. Two tracked accounts in the same match: one queue row, one fetch, both visible in stats.
+6. A 200 with an empty / `not json` / `{}` body: the match is marked `failed` (bad payload, one attempt spent) and the drain loop proceeds to the next queued match instead of crashing; five such payloads land it in `unavailable`.
+7. A match whose players include a `hero_id` not in the assets table: exactly one asset refresh fires, and the match still ingests — via the refreshed assets, or via a `'Unknown hero <id>'` placeholder row if the refresh didn't learn it. A burst of new-hero matches triggers at most one refresh per daemon run.
+8. Discovery (or rank sync) on a malformed / non-list 200 body returns 0 and the daemon continues; history/mmr rows without a `match_id` are skipped, not crashed on.
+9. The nightly revive never touches `'not parsed (gave up)'` rows; the monthly pass resets them (including `deferred_since`) exactly once per ~30 days.
+10. An unexpected exception inside one daemon iteration is logged with a traceback and the daemon sleeps 30 s and continues; `KeyboardInterrupt` still exits cleanly.
