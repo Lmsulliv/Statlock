@@ -13,6 +13,7 @@ import json
 
 from ingest.parse import derive_kill_events, insert_match, parse_metadata
 from ingest.reprocess import reprocess_archive
+from tracker import rawstore
 
 MATCH_ID = 999
 H_ME, H_ALLY, H_ENEMY1, H_ENEMY2 = 7, 10, 15, 20
@@ -133,6 +134,35 @@ def test_reprocess_archive_is_idempotent(db):
 
     assert after_first == 4 and after_second == 4          # delete-then-insert holds steady
     assert db.execute("SELECT COUNT(*) FROM matches").fetchone()[0] == 1
+
+
+def test_reprocess_rebuilds_from_compressed_raw_json_without_archive(db):
+    """The archive is matches.raw_json now (a successful 200 metadata is no longer
+    duplicated into raw_api_responses). Reprocess must rebuild kill_events from a
+    COMPRESSED raw_json body with no raw_api_responses row present at all."""
+    _seed_heroes(db, H_ME, H_ALLY, H_ENEMY1, H_ENEMY2)
+    meta = _meta()
+    body = json.dumps(meta)
+    # Store the match with a compressed raw_json (as insert_match now does), and
+    # deliberately archive nothing into raw_api_responses.
+    parsed = parse_metadata(meta, body, set(), None, JUNE)
+    with db:
+        insert_match(db, parsed)
+    stored = db.execute("SELECT raw_json FROM matches WHERE match_id = ?",
+                        (MATCH_ID,)).fetchone()["raw_json"]
+    assert isinstance(stored, bytes)                      # compressed on disk
+    assert rawstore.load(stored) == body                 # round-trips byte-identical
+    assert db.execute("SELECT COUNT(*) FROM raw_api_responses").fetchone()[0] == 0
+
+    # Wipe the derived table, then prove reprocess rebuilds it from raw_json alone.
+    db.execute("DELETE FROM kill_events WHERE match_id = ?", (MATCH_ID,))
+    db.commit()
+
+    result = reprocess_archive(db)
+
+    assert result["matches_recovered"] == 0              # nothing to recover; already stored
+    assert db.execute("SELECT COUNT(*) FROM kill_events WHERE match_id = ?",
+                      (MATCH_ID,)).fetchone()[0] == 4
 
 
 def _six_zero_meta() -> dict:

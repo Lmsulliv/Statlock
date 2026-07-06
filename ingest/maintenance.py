@@ -17,11 +17,13 @@ import logging
 from dataclasses import dataclass
 from datetime import timedelta
 
+from api import auth
 from api.config import steam_api_key
 from ingest.client import BASE_URL, archive_response
 from ingest.eras import detect_era_candidates
 from ingest.personas import build_steam_client, refresh_personas
 from ingest.util import iso_to_unix, utcnow
+from tracker import rawstore
 from tracker.reference import load_heroes, load_items, load_ranks
 
 log = logging.getLogger(__name__)
@@ -149,12 +151,17 @@ def _era_spans(conn, now_unix: int) -> list[EraSpan]:
 def _refresh_due(span: EraSpan, now_unix: int, last_refreshed_at: str | None) -> bool:
     """Whether a span's baselines are stale enough to re-fetch (see the cadence
     constants). Never-fetched spans are always due, which is what makes the first
-    per-badge run rebuild every era."""
+    per-badge run rebuild every era.
+
+    The open era is due NIGHTLY (>= DAY_S), not unconditionally: the daemon now
+    re-checks due-ness on every idle pass (chunked refresh), and an always-due
+    open era would re-fetch its ~36 calls continuously whenever the queue is
+    empty. Under the old once-nightly caller the two rules were equivalent."""
     if last_refreshed_at is None:
         return True
-    if span.is_open:
-        return True
     age_s = now_unix - iso_to_unix(last_refreshed_at)
+    if span.is_open:
+        return age_s >= DAY_S
     if span.era_id == ALL_TIME_ERA_ID:
         return age_s >= MONTHLY_S
     recently_closed = span.closed_at is not None and now_unix - span.closed_at <= RECENTLY_CLOSED_S
@@ -207,21 +214,41 @@ def _latest_snapshot_id(conn) -> int | None:
     return row["s"] if row else None
 
 
-def refresh_baselines(conn, client, *, now=utcnow) -> int:
+def refresh_baselines(conn, client, *, now=utcnow, max_spans: int | None = None) -> int:
     """Refresh global baselines into a SINGLE evolving snapshot, staggered by era
-    mutability. Each run re-fetches only the eras that are due (the open era every
-    run; closed eras weekly/monthly; the all-time sentinel monthly) and replaces
-    just those eras' rows in place, so the latest snapshot stays complete for the
-    read layer (which reads MAX(snapshot_id)). Baselines are decade-bracketed and
-    Normal-only (game_mode=normal) so they line up with personal stats. Returns
-    the snapshot_id."""
+    mutability. Each run re-fetches only the eras that are due (the open era
+    nightly; closed eras weekly/monthly; the all-time sentinel monthly) and
+    replaces just those eras' rows in place, so the latest snapshot stays complete
+    for the read layer (which reads MAX(snapshot_id)). Baselines are
+    decade-bracketed and Normal-only (game_mode=normal) so they line up with
+    personal stats.
+
+    max_spans caps how many due spans one call refreshes (the daemon passes 1 so
+    baselines fill in one span per IDLE pass, never ahead of drain work); None
+    means all due spans (the run-once / nightly shape). Chunked runs are
+    resumable by construction: baseline_refresh_state records each era as it
+    lands, so the next call picks up the next still-due span. Returns the number
+    of spans refreshed (0 = nothing was due)."""
     fetched_at = now().isoformat()
     now_unix = iso_to_unix(fetched_at)
 
-    # First staggered run (no refresh state yet): start a fresh snapshot, and
-    # because the state is empty every era is due, so this run rebuilds them all.
-    # Later runs evolve that same snapshot, replacing only the due eras.
     refreshed = _last_refreshed_by_era(conn)
+    due = []
+    for span in _era_spans(conn, now_unix):
+        if _refresh_due(span, now_unix, refreshed.get(span.era_id)):
+            due.append(span)
+        else:
+            # debug, not info: the daemon runs this check every idle pass.
+            log.debug("baselines: era %s not due yet, skipping", span.era_id)
+    if max_spans is not None:
+        due = due[:max_spans]
+    if not due:
+        return 0
+
+    # First staggered run (no refresh state yet): start a fresh snapshot, and
+    # because the state is empty every era is due, so this run (or the chunked
+    # runs that follow it) rebuilds them all. Later runs evolve that same
+    # snapshot, replacing only the due eras.
     snapshot_id = _latest_snapshot_id(conn) if refreshed else None
     if snapshot_id is None:
         cursor = conn.execute(
@@ -230,10 +257,7 @@ def refresh_baselines(conn, client, *, now=utcnow) -> int:
         )
         snapshot_id = cursor.lastrowid
 
-    for span in _era_spans(conn, now_unix):
-        if not _refresh_due(span, now_unix, refreshed.get(span.era_id)):
-            log.info("baselines: era %s not due yet, skipping", span.era_id)
-            continue
+    for span in due:
         # Replace this era's rows in the evolving snapshot, then re-fetch fresh.
         conn.execute("DELETE FROM baseline_hero_matchups WHERE snapshot_id = ? AND era_id = ?",
                      (snapshot_id, span.era_id))
@@ -247,7 +271,7 @@ def refresh_baselines(conn, client, *, now=utcnow) -> int:
         )
         conn.commit()   # commit per era so a mid-run failure keeps finished eras
         log.info("baselines: era %s refreshed into snapshot %d", span.era_id, snapshot_id)
-    return snapshot_id
+    return len(due)
 
 
 def _parse_baseline_rows(body: str, url: str) -> list:
@@ -327,6 +351,76 @@ def refresh_assets(conn, client, *, now=utcnow) -> None:
             log.warning("assets: %s HTTP %s", path, status)
 
 
+# ── One-time archive housekeeping (CLI-triggered, not on the nightly schedule) ──
+#
+# These converge a legacy database onto the deduplicated + compressed archive
+# layout. They are one-shot by design: after the drain-loop change a successful
+# metadata 200 is never duplicated into raw_api_responses again, and a compressed
+# raw_json never reverts to text -- so wiring them into the nightly job would be a
+# permanent no-op scan. Both are idempotent (a second run does nothing) and batch
+# their writes so the single SQLite writer lock never starves the API.
+
+def prune_metadata_archive(conn, *, batch_size: int = 500) -> int:
+    """Delete redundant raw_api_responses rows: a successful (200) match-metadata
+    body whose match is stored with a non-empty raw_json (THE archive now). Batched
+    ~500 rows per transaction so a big prune can't hold the writer lock for long.
+
+    Safety: the EXISTS predicate matches a row ONLY to a stored match with a
+    non-empty raw_json, so an empty-200 body or a never-ingested match's body is
+    never deleted -- the recovery path (reprocess-archive's raw_api_responses
+    fallback) keeps everything it still needs. Idempotent: once the duplicates are
+    gone, no row matches and a re-run removes 0. Returns rows removed."""
+    prefix = f"{BASE_URL}/v1/matches/"
+    total = 0
+    while True:
+        ids = [r["id"] for r in conn.execute(
+            "SELECT r.id FROM raw_api_responses r"
+            " WHERE r.status_code = 200 AND r.url LIKE '%/v1/matches/%/metadata'"
+            "   AND EXISTS (SELECT 1 FROM matches m"
+            "               WHERE r.url = ? || m.match_id || '/metadata'"
+            "                 AND m.raw_json IS NOT NULL AND length(m.raw_json) > 0)"
+            " LIMIT ?",
+            (prefix, batch_size),
+        ).fetchall()]
+        if not ids:
+            break
+        placeholders = ",".join("?" for _ in ids)
+        conn.execute(
+            f"DELETE FROM raw_api_responses WHERE id IN ({placeholders})", ids)
+        conn.commit()   # commit per batch: release the writer lock between chunks
+        total += len(ids)
+    if total:
+        log.info("prune-archive: removed %d duplicate metadata body(ies)", total)
+    return total
+
+
+def compress_legacy_raw_json(conn, *, batch_size: int = 500) -> int:
+    """Compress any matches.raw_json still stored as uncompressed TEXT (rows written
+    before compression landed). Detected with typeof(raw_json) = 'text' -- a
+    compressed body is a BLOB, so converted rows drop out of the next batch and the
+    loop terminates. Batched per transaction to keep the writer lock short; a
+    re-run finds no text rows and returns 0. Returns rows compressed."""
+    total = 0
+    while True:
+        rows = conn.execute(
+            "SELECT match_id, raw_json FROM matches"
+            " WHERE typeof(raw_json) = 'text' LIMIT ?",
+            (batch_size,),
+        ).fetchall()
+        if not rows:
+            break
+        for r in rows:
+            conn.execute(
+                "UPDATE matches SET raw_json = ? WHERE match_id = ?",
+                (rawstore.dump(r["raw_json"]), r["match_id"]),
+            )
+        conn.commit()   # commit per batch: release the writer lock between chunks
+        total += len(rows)
+    if total:
+        log.info("compress-raw-json: compressed %d legacy raw_json row(s)", total)
+    return total
+
+
 def _queue_counts(conn) -> dict[str, int]:
     rows = conn.execute(
         "SELECT status, COUNT(*) AS n FROM fetch_queue GROUP BY status"
@@ -334,11 +428,16 @@ def _queue_counts(conn) -> dict[str, int]:
     return {r["status"]: r["n"] for r in rows}
 
 
-def run_maintenance(conn, client, *, now=utcnow) -> dict:
-    """The full nightly job. Returns a summary dict."""
+def run_fast_maintenance(conn, client, *, now=utcnow) -> dict:
+    """The nightly job MINUS the baseline refresh: revive passes, assets,
+    personas, era candidates, the summary log line, and the last_maintenance_at
+    stamp. Split out so the daemon can run this cheap part on schedule while the
+    ~470-call baseline refresh fills in incrementally during idle passes (see
+    ingest/runner.py) instead of blocking a first boot's draining for an hour.
+    Returns the summary dict."""
     revived = revive_unavailable(conn, now=now)
     revived_gave_up = revive_gave_up(conn, now=now)
-    refresh_baselines(conn, client, now=now)
+    expired_sessions = auth.delete_expired_sessions(conn, now=now)
     refresh_assets(conn, client, now=now)
     # Personas ride their OWN client/token bucket (separate budget). Gate on the
     # key so contributors without one build no throwaway client and skip cleanly.
@@ -348,8 +447,8 @@ def run_maintenance(conn, client, *, now=utcnow) -> dict:
     candidates = detect_era_candidates(conn, client, now=now)
 
     counts = _queue_counts(conn)
-    # Deferred rows (not-yet-parsed matches) are deliberately NOT part of queue
-    # depth: they are deprioritized background work, not a fresh backlog.
+    # Deferred and backfill rows are deliberately NOT part of queue depth: they
+    # are deprioritized background work, not a fresh backlog a user waits on.
     queue_depth = counts.get("pending", 0) + counts.get("failed", 0)
     conn.execute(
         "INSERT INTO worker_meta(key, value) VALUES('last_maintenance_at', ?)"
@@ -361,16 +460,27 @@ def run_maintenance(conn, client, *, now=utcnow) -> dict:
     summary = {
         "revived": revived,
         "revived_gave_up": revived_gave_up,
+        "expired_sessions": expired_sessions,
         "candidates": candidates,
         "personas": personas,
         "queue": counts,
         "queue_depth": queue_depth,
     }
     log.info(
-        "maintenance summary: fetched %d, failed %d, deferred %d, unavailable %d, "
-        "queue depth %d, revived %d (+%d gave-up), new era candidates %d, personas %d",
-        counts.get("fetched", 0), counts.get("failed", 0), counts.get("deferred", 0),
-        counts.get("unavailable", 0), queue_depth, revived, revived_gave_up,
-        candidates, personas,
+        "maintenance summary: fetched %d, failed %d, backfill %d, deferred %d, "
+        "unavailable %d, queue depth %d, revived %d (+%d gave-up), "
+        "new era candidates %d, personas %d, expired sessions %d",
+        counts.get("fetched", 0), counts.get("failed", 0), counts.get("backfill", 0),
+        counts.get("deferred", 0), counts.get("unavailable", 0), queue_depth,
+        revived, revived_gave_up, candidates, personas, expired_sessions,
     )
+    return summary
+
+
+def run_maintenance(conn, client, *, now=utcnow) -> dict:
+    """The full nightly job: the fast part plus EVERY due baseline span. This is
+    the manual catch-up shape run_once uses; the daemon calls the two halves
+    separately."""
+    summary = run_fast_maintenance(conn, client, now=now)
+    refresh_baselines(conn, client, now=now)
     return summary

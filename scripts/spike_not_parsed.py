@@ -32,8 +32,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from api.config import db_path
 from ingest.client import BASE_URL, Client, NetworkError
-from ingest.ratelimit import DEFAULT_STAMP, TokenBucket
+from ingest.ratelimit import TokenBucket
 from tracker.db import connect
+from tracker.paths import deadlock_stamp_path
 
 OUT = Path(__file__).resolve().parent.parent / "spikes" / "out"
 OUT.mkdir(parents=True, exist_ok=True)
@@ -44,7 +45,7 @@ SAMPLE_B = 6           # how many newest history matches to probe for the (b) si
 
 # The same client the worker uses; the shared stamp file means this spike and a
 # running worker can't together exceed 1 req / 5 s.
-_client = Client(TokenBucket(stamp_path=DEFAULT_STAMP))
+_client = Client(TokenBucket(stamp_path=deadlock_stamp_path()))
 
 
 def metadata_url(match_id: int) -> str:

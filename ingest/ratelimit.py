@@ -10,7 +10,9 @@ keep capacity at 1 and leave it a parameter for a future, justified tune-up.
 
 The timestamp of the last request is also persisted to a stamp file shared
 with tracker/refresh_assets.py, so politeness holds across separate
-processes and restarts, not just within one.
+processes and restarts, not just within one. The stamp path itself lives in
+tracker.paths (deadlock_stamp_path), so it can be pointed at the persistent
+volume in production; callers pass it in via stamp_path.
 """
 import logging
 import random
@@ -18,8 +20,6 @@ import time
 from pathlib import Path
 
 log = logging.getLogger(__name__)
-
-DEFAULT_STAMP = Path(__file__).parent.parent / "data" / ".last_deadlock_request"
 
 
 def _default_jitter() -> float:

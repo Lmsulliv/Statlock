@@ -42,6 +42,43 @@ def _no_steam_key(monkeypatch):
     monkeypatch.delenv("STEAM_API_KEY", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_demo_account(monkeypatch):
+    """Clear DEMO_ACCOUNT_ID so a real environment can't surface a demo button
+    mid-test. Demo tests opt in explicitly with monkeypatch.setenv."""
+    monkeypatch.delenv("DEMO_ACCOUNT_ID", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _open_writes(monkeypatch):
+    """Keep the suite's local single-user semantics: writes fail closed by default
+    now, so opt every test into the open-writes path (as the local workflow does)
+    and clear any real DEADLOCK_BASE_URL. Auth-mode tests set the base URL back
+    explicitly; fail-closed tests delete DEADLOCK_OPEN_WRITES explicitly."""
+    monkeypatch.setenv("DEADLOCK_OPEN_WRITES", "1")
+    monkeypatch.delenv("DEADLOCK_BASE_URL", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_baseline_caches(monkeypatch):
+    """The api.cache singletons are process-wide, so one test's entries could leak
+    into another whose small in-memory DB happens to share a version token (both
+    the snapshot id and MAX(match_id) are tiny in fixtures). Clear both around
+    every test. The LIVE cache also gets its TTL floor pinned to 0 so a test that
+    ingests data mid-run sees the new version immediately instead of within the
+    5-minute production floor; the floor itself is exercised with isolated
+    BaselineCache instances and a fake clock (test_baseline_cache.py)."""
+    from api import cache
+    monkeypatch.setattr(cache.LIVE_BASELINE_CACHE, "ttl_s", 0.0)
+    for c in (cache.BASELINE_CACHE, cache.LIVE_BASELINE_CACHE):
+        c.clear()
+        c.reset_stats()
+    yield
+    for c in (cache.BASELINE_CACHE, cache.LIVE_BASELINE_CACHE):
+        c.clear()
+        c.reset_stats()
+
+
 # ── Presentation-layer fixture (api_db) ──────────────────────────────────────
 #
 # A small, fully controlled world for the API/CLI acceptance scenarios. Counts

@@ -15,13 +15,13 @@ GETting the real one. The response body never contains the key.
 import json
 import logging
 from datetime import timedelta
-from pathlib import Path
 
 from api.config import steam_api_key
 from ingest.accounts import to_steamid64
 from ingest.client import Client, NetworkError, archive_response
 from ingest.ratelimit import TokenBucket
 from ingest.util import utcnow
+from tracker.paths import steam_stamp_path
 
 log = logging.getLogger(__name__)
 
@@ -30,9 +30,9 @@ REFRESH_AGE_S = 14 * 24 * 3600     # re-fetch a persona once it is 14 days old
 MAX_PER_CYCLE = 500                # at most 5 batches of 100 per maintenance run
 BATCH_SIZE = 100                   # Steam's documented GetPlayerSummaries limit
 
-# Persona traffic rides its own token bucket + stamp file so it never touches the
-# deadlock-api budget. 1 req/sec is plenty polite given one call resolves 100 ids.
-STEAM_STAMP = Path(__file__).parent.parent / "data" / ".last_steam_request"
+# Persona traffic rides its own token bucket + stamp file (steam_stamp_path, on
+# the persistent volume in prod) so it never touches the deadlock-api budget.
+# 1 req/sec is plenty polite given one call resolves 100 ids.
 
 _UPSERT = (
     "INSERT INTO steam_personas(account_id, persona_name, avatar_url, fetched_at)"
@@ -46,7 +46,7 @@ _UPSERT = (
 
 def build_steam_client() -> Client:
     """A Client on a SEPARATE token bucket so Steam never spends the deadlock budget."""
-    return Client(TokenBucket(rate=1.0, capacity=1.0, stamp_path=STEAM_STAMP))
+    return Client(TokenBucket(rate=1.0, capacity=1.0, stamp_path=steam_stamp_path()))
 
 
 def _due_account_ids(conn, cutoff: str) -> list[int]:

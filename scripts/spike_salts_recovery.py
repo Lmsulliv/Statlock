@@ -24,12 +24,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from api.config import db_path
 from ingest.client import BASE_URL, Client, NetworkError
-from ingest.ratelimit import DEFAULT_STAMP, TokenBucket
+from ingest.ratelimit import TokenBucket
 from tracker.db import connect
+from tracker.paths import deadlock_stamp_path
 
 N_SALTS = 4            # Steam-backed calls; MUST stay well under 10 / 30 min
 
-_client = Client(TokenBucket(stamp_path=DEFAULT_STAMP))
+_client = Client(TokenBucket(stamp_path=deadlock_stamp_path()))
 
 
 def probe(url: str) -> tuple[int, dict, str]:

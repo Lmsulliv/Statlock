@@ -82,19 +82,33 @@ class DrainWorker:
         self.assets_refreshed = False
 
     # ── eligible-row selection ──────────────────────────────────────────────
+    #
+    # Four tiers, first non-empty tier wins (docs/ingestion-spec.md):
+    #   (a) priority > 0 pending / due-failed  -- fair across accounts, newest first
+    #   (b) priority = 0 pending / due-failed  -- FIFO by discovery, newest on ties
+    #   (c) 'backfill'                         -- fair across accounts, newest first
+    #   (d) 'deferred' and due                 -- unchanged, always last
+    # Newest-first matters twice over: recent matches are what a user opens the
+    # app for, and old ones are the likeliest to 400 on missing replay salts.
+
+    # A row a drain step may act on: pending, or failed with its retry due.
+    _FRESH_ELIGIBLE = "(status = 'pending' OR (status = 'failed' AND next_retry_at <= ?))"
 
     def _next_row(self):
         now_iso = self._now().isoformat()
-        # Fresh work first: pending + due failed (oldest-discovered first). This
-        # query is unchanged from before deferral existed.
+        row = self._fair_pick(f"{self._FRESH_ELIGIBLE} AND priority > 0", (now_iso,))
+        if row is not None:
+            return row
         row = self.conn.execute(
-            "SELECT * FROM fetch_queue"
-            " WHERE status = 'pending'"
-            "    OR (status = 'failed' AND next_retry_at <= ?)"
-            " ORDER BY discovered_at, match_id"
-            " LIMIT 1",
+            f"SELECT * FROM fetch_queue"
+            f" WHERE {self._FRESH_ELIGIBLE} AND priority = 0"
+            f" ORDER BY discovered_at, match_id DESC"
+            f" LIMIT 1",
             (now_iso,),
         ).fetchone()
+        if row is not None:
+            return row
+        row = self._fair_pick("status = 'backfill'", ())
         if row is not None:
             return row
         # Only when nothing fresh is eligible do we touch deferred work, so a
@@ -107,6 +121,34 @@ class DrainWorker:
             (now_iso,),
         ).fetchone()
 
+    def _fair_pick(self, where: str, params: tuple):
+        """Round-robin fairness: among the accounts owning rows matching `where`,
+        pick the one least recently served (sync_state.last_drained_at; NULL --
+        never served -- sorts first, which is SQLite's default ASC NULL order),
+        then take that account's NEWEST eligible match. So two simultaneous bulk
+        imports interleave instead of the first starving the second. Legacy rows
+        with no owner form their own NULL group and are handled the same way."""
+        account = self.conn.execute(
+            f"SELECT fq.discovered_for_account AS account"
+            f" FROM fetch_queue fq"
+            f" LEFT JOIN sync_state ss ON ss.account_id = fq.discovered_for_account"
+            f" WHERE {where}"
+            f" GROUP BY fq.discovered_for_account"
+            f" ORDER BY ss.last_drained_at, fq.discovered_for_account"
+            f" LIMIT 1",
+            params,
+        ).fetchone()
+        if account is None:
+            return None
+        # `IS ?` (not `= ?`) so the ownerless NULL group matches its rows too.
+        return self.conn.execute(
+            f"SELECT * FROM fetch_queue"
+            f" WHERE {where} AND discovered_for_account IS ?"
+            f" ORDER BY match_id DESC"
+            f" LIMIT 1",
+            (*params, account["account"]),
+        ).fetchone()
+
     # ── one step of work ────────────────────────────────────────────────────
 
     def step(self) -> str | None:
@@ -115,7 +157,24 @@ class DrainWorker:
         row = self._next_row()
         if row is None:
             return None
+        outcome = self._fetch_and_handle(row)
+        self._stamp_last_drained(row)
+        return outcome
 
+    def _stamp_last_drained(self, row) -> None:
+        """Advance the owning account's round-robin cursor. Stamped after EVERY
+        fetch attempt, success or not: fairness meters the shared API budget,
+        and a 404 or 429 spent a request just like a 200 did."""
+        account_id = row["discovered_for_account"]
+        if account_id is None:
+            return
+        self.conn.execute(
+            "UPDATE sync_state SET last_drained_at = ? WHERE account_id = ?",
+            (self._now().isoformat(), account_id),
+        )
+        self.conn.commit()
+
+    def _fetch_and_handle(self, row) -> str:
         match_id = row["match_id"]
         url = _metadata_url(match_id)
         fetched_at = self._now().isoformat()
@@ -126,11 +185,15 @@ class DrainWorker:
             log.warning("match %s: network error (%s) -> transient", match_id, e)
             return self._handle_transient(match_id, fetched_at)
 
-        # Hard rule 2: archive raw before parsing.
-        archive_response(self.conn, url, status, body, fetched_at)
+        # Hard rule 2 (as amended): archive the raw body before parsing -- EXCEPT a
+        # successful metadata 200, whose body is archived by matches.raw_json when
+        # _handle_success stores the match (no duplicate). A 200 that FAILS to parse
+        # never reaches matches, so _handle_success archives it itself on that path.
+        if status != 200:
+            archive_response(self.conn, url, status, body, fetched_at)
 
         if status == 200:
-            return self._handle_success(row, body, fetched_at)
+            return self._handle_success(row, url, body, fetched_at)
         if status == 429:
             return self._handle_rate_limited(match_id, headers)
         if status >= 500:
@@ -143,15 +206,20 @@ class DrainWorker:
 
     # ── outcome handlers ────────────────────────────────────────────────────
 
-    def _handle_success(self, row, body: str, fetched_at: str) -> str:
+    def _handle_success(self, row, url: str, body: str, fetched_at: str) -> str:
         # HTTP 200 only means the request succeeded, NOT that the body is usable
         # metadata: an empty, truncated, or unexpected body makes json.loads /
         # parse_metadata / insert_match raise. Unguarded, that exception would
         # propagate out of the drain loop and kill the daemon while this row stays
         # 'pending' -- a restart refetches the same match and crashes again, so one
         # poison message halts ingestion for everyone. We treat a bad payload as
-        # the match's FAULT (the raw body was already archived for forensics before
-        # we got here) and spend the attempt budget like a 404.
+        # the match's FAULT and spend the attempt budget like a 404.
+        #
+        # A good 200's archive IS matches.raw_json (written by insert_match), so we
+        # skip the duplicate raw_api_responses insert on the success path. But a bad
+        # payload never reaches matches, so on the except path below we archive the
+        # raw body into raw_api_responses for forensics before marking the fault --
+        # nothing fetched is ever lost.
         match_id = row["match_id"]
         try:
             meta = json.loads(body)
@@ -176,8 +244,11 @@ class DrainWorker:
                 sqlite3.IntegrityError) as exc:
             # `with self.conn` already rolled back its own writes on the exception;
             # rollback() again is a safe no-op that also covers a failure before the
-            # block opened. The archived raw body is untouched (committed earlier).
+            # block opened. The match never made it into matches, so archive the raw
+            # body into raw_api_responses now (hard rule 2) -- this is the one place a
+            # 200 gets archived there, and reprocess-archive recovers from it later.
             self.conn.rollback()
+            archive_response(self.conn, url, 200, body, fetched_at)
             error = f"bad payload: {type(exc).__name__}: {str(exc)[:200]}"
             log.warning("match %s: %s -> fault", match_id, error)
             return self._mark_match_fault(row, error, fetched_at)

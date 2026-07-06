@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from datetime import timedelta
 
+from api.auth import delete_expired_sessions
 from ingest.maintenance import (
     ALL_TIME_ERA_ID,
     DAY_S,
@@ -17,6 +18,7 @@ from ingest.maintenance import (
     refresh_baselines,
     revive_gave_up,
     revive_unavailable,
+    run_fast_maintenance,
     run_maintenance,
 )
 
@@ -159,9 +161,12 @@ def test_refresh_baselines_writes_decade_brackets_each_era(db):
     now = ManualNow(NOW)
     client = _baseline_client()
 
-    snapshot_id = refresh_baselines(db, client, now=now)
+    refreshed = refresh_baselines(db, client, now=now)
 
     n_spans = 3  # two eras + the explicit all-time span; first run, all due
+    assert refreshed == n_spans        # the return value counts refreshed spans
+    snapshot_id = db.execute(
+        "SELECT MAX(snapshot_id) AS s FROM baseline_snapshots").fetchone()["s"]
     calls = client.calls_matching("hero-counter-stats")
     # One counter call per (decade bracket, same_lane in {0, 1}) per span.
     assert len(calls) == 2 * N_BRACKETS * n_spans
@@ -321,11 +326,13 @@ def test_second_run_refreshes_open_era_only_and_keeps_snapshot_complete(db):
     now = ManualNow(NOW)
     client = _baseline_client()
 
-    snapshot_id = refresh_baselines(db, client, now=now)   # run 1: full rebuild
+    assert refresh_baselines(db, client, now=now) == 3     # run 1: full rebuild
+    snapshot_id = db.execute(
+        "SELECT MAX(snapshot_id) AS s FROM baseline_snapshots").fetchone()["s"]
     before_second = len(client.calls)
 
     now.advance(DAY_S)                                      # +1 day
-    refresh_baselines(db, client, now=now)                 # run 2: staggered
+    assert refresh_baselines(db, client, now=now) == 1     # run 2: open era only
 
     # A day later only the open era (jun) is due: jan closed <30d ago -> weekly
     # (not due after 1 day); the all-time sentinel is monthly. So run 2 makes one
@@ -356,6 +363,51 @@ def test_second_run_refreshes_open_era_only_and_keeps_snapshot_complete(db):
     assert jan_rows > 0
 
 
+# ── Chunked refresh (max_spans): baselines off the first-boot critical path ──
+#
+# A first boot owes ~470 rate-limited baseline calls. The daemon now refreshes
+# AT MOST ONE due era span per idle pass (max_spans=1) so user-facing draining
+# always goes first; baseline_refresh_state records per-era progress, which
+# makes the chunked run resumable by construction.
+
+def test_max_spans_refreshes_one_due_span_per_call(db):
+    seed_eras(db)
+    now = ManualNow(NOW)
+    client = _baseline_client()
+
+    assert refresh_baselines(db, client, now=now, max_spans=1) == 1
+
+    # Exactly one span's worth of calls: (2 counter + 1 item) per bracket.
+    assert len(client.calls) == 3 * N_BRACKETS
+    assert db.execute(
+        "SELECT COUNT(*) FROM baseline_refresh_state").fetchone()[0] == 1
+
+
+def test_max_spans_calls_converge_then_return_zero(db):
+    era_jan, era_jun = seed_eras(db)
+    now = ManualNow(NOW)
+    client = _baseline_client()
+
+    # Three spans are due (jan, jun, all-time); one call refreshes one each.
+    assert refresh_baselines(db, client, now=now, max_spans=1) == 1
+    assert refresh_baselines(db, client, now=now, max_spans=1) == 1
+    assert refresh_baselines(db, client, now=now, max_spans=1) == 1
+    # Everything refreshed at this instant: nothing due, no calls made.
+    before = len(client.calls)
+    assert refresh_baselines(db, client, now=now, max_spans=1) == 0
+    assert len(client.calls) == before
+
+    # The chunked runs converged to the same state as one uncapped run: a
+    # single evolving snapshot holding every era's rows.
+    assert db.execute("SELECT COUNT(*) FROM baseline_snapshots").fetchone()[0] == 1
+    eras = {r["era_id"] for r in db.execute(
+        "SELECT DISTINCT era_id FROM baseline_hero_matchups")}
+    assert eras == {era_jan, era_jun, ALL_TIME_ERA_ID}
+    state_eras = {r["era_id"] for r in db.execute(
+        "SELECT era_id FROM baseline_refresh_state")}
+    assert state_eras == {era_jan, era_jun, ALL_TIME_ERA_ID}
+
+
 def test_refresh_due_cadence():
     now_unix = unix("2026-06-15T00:00:00+00:00")
 
@@ -364,7 +416,12 @@ def test_refresh_due_cadence():
 
     open_era = EraSpan(2, 0, now_unix, True, None)
     assert _refresh_due(open_era, now_unix, None)           # never fetched -> due
-    assert _refresh_due(open_era, now_unix, ago(0))         # open era -> always due
+    # The open era refreshes NIGHTLY, not on every call: the daemon now runs
+    # this check every idle pass, and "always due" would re-fetch the open
+    # era's 36 calls continuously whenever the queue is empty.
+    assert not _refresh_due(open_era, now_unix, ago(0))     # just fetched
+    assert not _refresh_due(open_era, now_unix, ago(DAY_S - 1))
+    assert _refresh_due(open_era, now_unix, ago(DAY_S))     # a day old -> due
 
     all_time = EraSpan(ALL_TIME_ERA_ID, 0, now_unix, False, None)
     assert not _refresh_due(all_time, now_unix, ago(WEEKLY_S))      # 7d < monthly
@@ -377,6 +434,42 @@ def test_refresh_due_cadence():
     old = EraSpan(1, 0, now_unix - 60 * DAY_S, False, now_unix - 60 * DAY_S)
     assert not _refresh_due(old, now_unix, ago(WEEKLY_S))           # monthly: 7d < 30d
     assert _refresh_due(old, now_unix, ago(MONTHLY_S + 1))
+
+
+# ── Expired-session cleanup ──────────────────────────────────────────────────
+
+def seed_session(db, token: str, expires_iso: str) -> None:
+    # user 1 is the local/dev user seeded by migration 011 (FK-safe).
+    db.execute(
+        "INSERT INTO sessions(token, user_id, created_at, expires_at)"
+        " VALUES (?, 1, ?, ?)",
+        (token, "2026-01-01T00:00:00+00:00", expires_iso),
+    )
+    db.commit()
+
+
+def test_delete_expired_sessions_removes_only_expired(db):
+    now = ManualNow(NOW)
+    seed_session(db, "dead", "2026-06-10T00:00:00+00:00")   # expired before NOW
+    seed_session(db, "live", "2026-07-11T00:00:00+00:00")   # still valid
+
+    assert delete_expired_sessions(db, now=now) == 1
+
+    tokens = {r["token"] for r in db.execute("SELECT token FROM sessions")}
+    assert tokens == {"live"}
+
+
+def test_fast_maintenance_sweeps_expired_sessions(db):
+    seed_eras(db)
+    now = ManualNow(NOW)
+    seed_session(db, "dead", "2026-06-10T00:00:00+00:00")
+    seed_session(db, "live", "2026-07-11T00:00:00+00:00")
+
+    summary = run_fast_maintenance(db, full_client(), now=now)
+
+    assert summary["expired_sessions"] == 1
+    tokens = {r["token"] for r in db.execute("SELECT token FROM sessions")}
+    assert tokens == {"live"}
 
 
 # ── The full nightly job ─────────────────────────────────────────────────────

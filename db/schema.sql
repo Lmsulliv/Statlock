@@ -150,9 +150,12 @@ CREATE TABLE fetch_queue (
     match_id        INTEGER PRIMARY KEY,
     discovered_at   TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'pending',
-                    -- pending | fetched | failed | unavailable | deferred
+                    -- pending | fetched | failed | unavailable | deferred | backfill
                     -- (deferred = not yet parsed upstream; see migration 007.
-                    --  deferred_since is added by migration 007, not here.)
+                    --  deferred_since is added by migration 007, not here.
+                    --  backfill = older remainder of a first import, drained
+                    --  only when nothing fresh is eligible; priority and
+                    --  discovered_for_account are added by migration 018.)
     attempts        INTEGER DEFAULT 0,
     last_attempt_at TEXT,
     next_retry_at   TEXT,

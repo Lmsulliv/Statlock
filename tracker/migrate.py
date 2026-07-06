@@ -34,6 +34,10 @@ _STEPS = [
     _DB_DIR / "migrations" / "014_rank_history_time.sql",  # 13 -> 14: account_rank_history.recorded_at
     _DB_DIR / "migrations" / "015_damage_taken.sql",  # 14 -> 15: match_players.player_damage_taken + damage_taken_sources
     _DB_DIR / "migrations" / "016_fetch_queue_drain_index.sql",  # 15 -> 16: drain row-selection index
+    _DB_DIR / "migrations" / "017_account_match_summaries.sql",  # 16 -> 17: match-history summaries
+    _DB_DIR / "migrations" / "018_drain_priority.sql",  # 17 -> 18: drain priority + fairness columns
+    _DB_DIR / "migrations" / "019_account_matches_view.sql",  # 18 -> 19: v_account_matches union view
+    _DB_DIR / "migrations" / "020_discovery_cadence.sql",  # 19 -> 20: next_discovery_at + discovery_requests
 ]
 
 

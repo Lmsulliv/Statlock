@@ -1,22 +1,30 @@
-"""reprocess-archive: rebuild derived tables from the raw_api_responses archive.
+"""reprocess-archive: rebuild derived tables from the raw_json archive.
 
-No HTTP -- hard rule 2's archive (every status-200 body is stored before parsing)
-is the source of truth here, so backfilling costs zero requests and can't trip the
-rate limit. For every archived match body we idempotently:
+No HTTP -- the archived match bodies are the source of truth here, so
+backfilling costs zero requests and can't trip the rate limit.
 
-  - if the match is already stored: (re)materialize its derived tables
-    (kill_events + laning_stats + damage_taken_sources) from raw_json, and
-    backfill the match_players.player_damage_taken column a new schema added;
-  - if it is NOT stored (e.g. a pre-player_slot 6x0 anonymized match that crashed
-    ingest before the schema could accept it): parse and insert match + players +
-    purchases + kill_events + laning_stats now, and flip its fetch_queue row to
-    'fetched'.
+The archive is now matches.raw_json itself (a successful 200 metadata ingest is
+stored there and NOT duplicated into raw_api_responses; see CLAUDE.md hard rule
+2). So this rebuild has two sources, in priority order:
+
+  1. PRIMARY -- matches.raw_json. For every stored match we (re)materialize its
+     derived tables (kill_events + laning_stats + damage_taken_sources) from the
+     archived body, and backfill the match_players.player_damage_taken column a
+     later schema added. raw_json is read through tracker.rawstore, so both
+     compressed (new) and legacy uncompressed rows work.
+
+  2. FALLBACK -- raw_api_responses, for match_ids that are NOT in the matches
+     table (e.g. a pre-player_slot 6x0 anonymized match, or any 200 whose parse
+     failed, that crashed ingest before the schema could accept it). Those bodies
+     still live in the response archive; we parse and insert match + players +
+     purchases + kill_events + laning_stats now, and flip the fetch_queue row to
+     'fetched'. A match already stored (source 1) is never re-recovered.
 
 One match = one transaction (hard rule 4). Re-running is a no-op on row counts:
-recovered matches take the "already stored" branch on the next pass, and the
-replace_* helpers delete-then-insert, so the derived tables stay stable. This is
-also how new derived tables backfill historical matches with zero API calls: add
-the table, add its replace_* call here, run reprocess-archive (laning_stats did).
+recovered matches move to the primary source on the next pass, and the replace_*
+helpers delete-then-insert, so the derived tables stay stable. This is also how
+new derived tables backfill historical matches with zero API calls: add the
+table, add its replace_* call here, run reprocess-archive (laning_stats did).
 """
 import json
 import logging
@@ -34,12 +42,14 @@ from ingest.parse import (
     replace_laning_stats,
 )
 from ingest.util import unix_to_iso, utcnow
+from tracker import rawstore
 
 log = logging.getLogger(__name__)
 
 
-def _latest_match_bodies(conn) -> dict[int, str]:
-    """match_id -> its most recently archived status-200 metadata body. A match
+def _archive_only_bodies(conn, stored_ids: set[int]) -> dict[int, str]:
+    """match_id -> its most recently archived status-200 metadata body, for
+    matches NOT already stored (those are handled from matches.raw_json). A match
     re-fetched over time has several archived copies; the highest id (newest) wins.
     Bodies that don't parse or lack match_info are skipped -- this is where the
     empty-200 responses land, and they carry nothing to reprocess."""
@@ -57,7 +67,10 @@ def _latest_match_bodies(conn) -> dict[int, str]:
         info = meta.get("match_info") if isinstance(meta, dict) else None
         if not info or info.get("match_id") is None:
             continue
-        bodies[info["match_id"]] = row["body"]
+        match_id = info["match_id"]
+        if match_id in stored_ids:
+            continue  # already stored: rebuilt from matches.raw_json instead
+        bodies[match_id] = row["body"]
     return bodies
 
 
@@ -78,10 +91,23 @@ def _backfill_damage_taken_column(conn, meta: dict) -> None:
         )
 
 
+def _derived_counts(conn, match_id: int) -> tuple[int, int, int]:
+    """(kill_events, laning_stats, damage_taken_sources) row counts for a match."""
+    kills = conn.execute(
+        "SELECT COUNT(*) FROM kill_events WHERE match_id = ?", (match_id,)
+    ).fetchone()[0]
+    laning = conn.execute(
+        "SELECT COUNT(*) FROM laning_stats WHERE match_id = ?", (match_id,)
+    ).fetchone()[0]
+    damage = conn.execute(
+        "SELECT COUNT(*) FROM damage_taken_sources WHERE match_id = ?", (match_id,)
+    ).fetchone()[0]
+    return kills, laning, damage
+
+
 def reprocess_archive(conn, *, now=utcnow) -> dict:
     """Backfill the derived tables + the player_damage_taken column (and recover
     unstorable matches) from the archive. Returns counts per rebuilt artifact."""
-    bodies = _latest_match_bodies(conn)
     shop_item_ids = {r["item_id"] for r in
                      conn.execute("SELECT item_id FROM items").fetchall()}
     recovered = 0
@@ -89,44 +115,59 @@ def reprocess_archive(conn, *, now=utcnow) -> dict:
     laning_rebuilt = 0
     damage_rebuilt = 0
 
-    for match_id, body in bodies.items():
+    # ── Source 1: rebuild every stored match from matches.raw_json ──────────
+    # Fetch ids first (cheap), then read one body at a time -- the bodies are
+    # 1-2 MB each, so we never hold them all in memory at once.
+    stored_ids = {r["match_id"] for r in
+                  conn.execute("SELECT match_id FROM matches").fetchall()}
+    for match_id in stored_ids:
+        row = conn.execute(
+            "SELECT raw_json FROM matches WHERE match_id = ?", (match_id,)
+        ).fetchone()
+        body = rawstore.load(row["raw_json"])
+        if not body:
+            continue
+        try:
+            meta = json.loads(body)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        # One match = one transaction (hard rule 4).
+        with conn:
+            replace_kill_events(conn, match_id, derive_kill_events(meta))
+            replace_laning_stats(conn, match_id, derive_laning_stats(meta))
+            replace_damage_taken_sources(conn, match_id,
+                                         derive_damage_taken_sources(meta))
+            _backfill_damage_taken_column(conn, meta)
+
+        kills, laning, damage = _derived_counts(conn, match_id)
+        rebuilt += kills
+        laning_rebuilt += laning
+        damage_rebuilt += damage
+
+    # ── Source 2: recover matches that never made it into the matches table ──
+    for match_id, body in _archive_only_bodies(conn, stored_ids).items():
         meta = json.loads(body)
-        already_stored = conn.execute(
-            "SELECT 1 FROM matches WHERE match_id = ?", (match_id,)
-        ).fetchone() is not None
+        start_iso = unix_to_iso(meta["match_info"]["start_time"])
+        era_id = era_id_for(conn, start_iso)
+        parsed = parse_metadata(meta, body, shop_item_ids, era_id, now().isoformat())
 
         # One match = one transaction: the inserts and the queue flip commit together.
         with conn:
-            if already_stored:
-                replace_kill_events(conn, match_id, derive_kill_events(meta))
-                replace_laning_stats(conn, match_id, derive_laning_stats(meta))
-                replace_damage_taken_sources(conn, match_id,
-                                             derive_damage_taken_sources(meta))
-                _backfill_damage_taken_column(conn, meta)
-            else:
-                start_iso = unix_to_iso(meta["match_info"]["start_time"])
-                era_id = era_id_for(conn, start_iso)
-                parsed = parse_metadata(meta, body, shop_item_ids, era_id,
-                                        now().isoformat())
-                insert_match(conn, parsed)  # includes its kill_events
-                # Flip the queue row if one exists (no-op otherwise): the body was
-                # fetched-200 long ago but never stored.
-                conn.execute(
-                    "UPDATE fetch_queue SET status = 'fetched', next_retry_at = NULL,"
-                    " last_error = NULL WHERE match_id = ?",
-                    (match_id,),
-                )
-                recovered += 1
+            insert_match(conn, parsed)  # includes its kill_events
+            # Flip the queue row if one exists (no-op otherwise): the body was
+            # fetched-200 long ago but never stored.
+            conn.execute(
+                "UPDATE fetch_queue SET status = 'fetched', next_retry_at = NULL,"
+                " last_error = NULL WHERE match_id = ?",
+                (match_id,),
+            )
+        recovered += 1
 
-        rebuilt += conn.execute(
-            "SELECT COUNT(*) FROM kill_events WHERE match_id = ?", (match_id,)
-        ).fetchone()[0]
-        laning_rebuilt += conn.execute(
-            "SELECT COUNT(*) FROM laning_stats WHERE match_id = ?", (match_id,)
-        ).fetchone()[0]
-        damage_rebuilt += conn.execute(
-            "SELECT COUNT(*) FROM damage_taken_sources WHERE match_id = ?", (match_id,)
-        ).fetchone()[0]
+        kills, laning, damage = _derived_counts(conn, match_id)
+        rebuilt += kills
+        laning_rebuilt += laning
+        damage_rebuilt += damage
 
     log.info("reprocess-archive: %d match(es) recovered, %d kill event(s) rebuilt,"
              " %d laning row(s) rebuilt, %d damage-source row(s) rebuilt",

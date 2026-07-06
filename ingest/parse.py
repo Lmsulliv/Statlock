@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from ingest.util import unix_to_iso
 from stats.laning import laning_mark
+from tracker import rawstore
 
 
 @dataclass
@@ -211,12 +212,16 @@ def insert_match(conn: sqlite3.Connection, parsed: ParsedMatch) -> None:
     update belongs in the same transaction so a crash can't leave the two
     out of step."""
     m = parsed.match_row
+    # raw_json is the archive now (hard rule 2, as amended); store it zlib-compressed
+    # (a metadata body is 1-2 MB). The dict keeps its plain-text value for callers /
+    # tests; only the stored parameter is compressed. rawstore round-trips it byte
+    # for byte, so a later re-parse sees exactly what was fetched.
     conn.execute(
         "INSERT INTO matches(match_id, start_time, duration_s, game_mode, winning_team,"
         " era_id, average_badge_team0, average_badge_team1, raw_json, ingested_at)"
         " VALUES (:match_id, :start_time, :duration_s, :game_mode, :winning_team,"
         " :era_id, :average_badge_team0, :average_badge_team1, :raw_json, :ingested_at)",
-        m,
+        {**m, "raw_json": rawstore.dump(m["raw_json"])},
     )
     conn.executemany(
         "INSERT INTO match_players(match_id, player_slot, account_id, hero_id, team, lane,"
