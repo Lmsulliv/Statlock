@@ -17,7 +17,19 @@
       "PowerShell(& \"C:\\\\Users\\\\magyc\\\\AppData\\\\Local\\\\Python\\\\pythoncore-3.14-64\\\\python.exe\" -c \"import fastapi, uvicorn, sys; print\\('OK', sys.version.split\\(\\)[0], fastapi.__version__\\)\" 2>&1)",
       "Bash(python -c \"import json; d=json.load\\(open\\('tests/fixtures/assets_ranks.json'\\)\\); print\\(type\\(d\\), len\\(d\\)\\); print\\(d[0]\\); print\\(d[-1]\\); print\\('tiers:', [r.get\\('tier'\\) for r in d]\\)\")",
       "PowerShell(py -3.14 -m pytest tests/test_rank_ingestion.py -q 2>&1)",
-      "PowerShell(py -3.14 -m pytest -q 2>&1)"
+      "PowerShell(py -3.14 -m pytest -q 2>&1)",
+      "Bash(python -m pytest tests/test_provisional.py tests/test_migration.py tests/test_performance.py -q)",
+      "Bash(ls venv/Scripts/python.exe .venv/Scripts/python.exe)",
+      "Bash(which python3 *)",
+      "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(npm test *)",
+      "PowerShell(py -3.14 -m pytest tests/test_ingestion.py -q 2>&1)",
+      "Bash(py -3.12 -c \"import pytest, sys; print\\(sys.version\\)\")",
+      "Bash(python3.12 --version)",
+      "Bash(py -3.14 -c \"import pytest; print\\('pytest', pytest.__version__\\)\")",
+      "Bash(python -m pip show pytest)",
+      "Bash(py -3.14 -m pytest tests/test_live_baseline_cache.py tests/test_baseline_cache.py -q)",
+      "Bash(py -3.14 -m pytest tests/test_performance.py tests/test_win_conditions.py tests/test_presentation.py -q)"
     ]
   }
 }

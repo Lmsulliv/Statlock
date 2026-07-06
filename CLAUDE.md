@@ -31,8 +31,16 @@ silently picking one:
 1. Statistics math (Wilson, shrinkage, verdicts) lives ONLY in
    stats/ and is imported everywhere else. The frontend never computes
    statistics; it renders what the API returns.
-2. All API responses from deadlock-api get archived raw (raw_json)
-   before any parsing.
+2. All API responses from deadlock-api get archived raw before any
+   parsing, into `raw_api_responses`. ONE deliberate exception (see
+   docs/ingestion-spec.md): a successful (200) match-metadata response is
+   archived by `matches.raw_json` alone — that column IS its raw archive,
+   stored zlib-compressed via `tracker/rawstore`, so the body isn't
+   duplicated. A metadata 200 that fails to parse (never reaches `matches`)
+   and every non-200 / every other endpoint still archive into
+   `raw_api_responses`. Read `matches.raw_json` only through
+   `tracker/rawstore` (it transparently decompresses legacy uncompressed
+   rows too).
 3. Never exceed 1 request per 5 seconds to deadlock-api, including
    during development and tests. Tests must mock HTTP; no test may hit
    the live API.

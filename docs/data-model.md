@@ -55,10 +55,24 @@ CREATE TABLE matches (
     era_id          INTEGER REFERENCES patch_eras(era_id)
     average_badge_team0   INTEGER,      -- team 0 average rank if provided
     average_badge_team1   INTEGER,      -- team 1 average rank if provided
-    raw_json        TEXT NOT NULL,      -- full metadata response, archived
+    raw_json        TEXT NOT NULL,      -- full metadata response, archived (see note)
     ingested_at     TEXT NOT NULL
 );
+```
 
+> **`raw_json` storage.** This column IS the raw archive for a successful metadata
+> response (hard rule 2, as amended — the body is no longer duplicated into
+> `raw_api_responses`). It is stored **zlib-compressed** (a metadata body is
+> 1.2–1.6 MB): the value is written as a BLOB even though the column type is
+> `TEXT`, which SQLite's dynamic typing allows with no migration. Legacy rows
+> predating compression remain plain TEXT; the `compress-raw-json` maintenance
+> task converts them in batches. Always read this column through
+> `tracker/rawstore.load` (Python), which transparently handles both forms —
+> **SQL-level `json_each(raw_json)` / `json_extract` no longer work on compressed
+> rows.** Migration 005 (which walks `raw_json` in SQL) is unaffected: it only
+> runs when upgrading a schema <5 database, which predates compression.
+
+```sql
 CREATE TABLE match_players (
     match_id        INTEGER NOT NULL REFERENCES matches(match_id),
     player_slot     INTEGER NOT NULL,   -- 1..12, always present, unique per match
@@ -181,25 +195,98 @@ CREATE TABLE tracked_accounts (
 CREATE TABLE sync_state (
     account_id          INTEGER PRIMARY KEY REFERENCES tracked_accounts(account_id),
     last_match_id       INTEGER,        -- high-water mark for incremental pulls
-    last_synced_at      TEXT
+    last_synced_at      TEXT,
+    last_drained_at     TEXT,           -- v18: round-robin fairness cursor; the
+                                        -- drain loop serves the owning account
+                                        -- least recently stamped here
+    next_discovery_at   TEXT            -- v20: activity-aware discovery cadence.
+                                        -- When this account is next due for a
+                                        -- discovery pass (NULL = due now). Set
+                                        -- after each visit by how recently it was
+                                        -- played: active 30 min / idle 6 h /
+                                        -- dormant 24 h (see ingestion-spec).
+);
+
+-- v20: web -> daemon mailbox. The web process must NEVER call the external API,
+-- so a stale-account view hit inserts a row here (INSERT OR IGNORE) and the
+-- daemon's next discovery pass treats the account as due, then deletes the row.
+CREATE TABLE discovery_requests (
+    account_id    INTEGER PRIMARY KEY REFERENCES tracked_accounts(account_id),
+    requested_at  TEXT NOT NULL
 );
 
 CREATE TABLE fetch_queue (
     match_id        INTEGER PRIMARY KEY,
     discovered_at   TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'pending',
-                    -- pending | fetched | failed | unavailable
+                    -- pending | fetched | failed | unavailable | deferred (v7)
+                    -- | backfill (v18: older remainder of a first import,
+                    --   drained only when nothing fresh is eligible)
     attempts        INTEGER DEFAULT 0,
     last_attempt_at TEXT,
-    last_error      TEXT
+    next_retry_at   TEXT,                        -- backoff / deferral due time
+    last_error      TEXT,
+    deferred_since  TEXT,                        -- v7: deferral give-up clock
+    priority        INTEGER NOT NULL DEFAULT 0,  -- v18: 1 = fresh user-facing work
+    discovered_for_account INTEGER               -- v18: owner for fairness; the
+                                                 -- FIRST discoverer wins (INSERT
+                                                 -- OR IGNORE); NULL pre-v18
 );
 ```
 
 This is what makes the automated, steady-pace pulling you described work. The loop is:
 
-1. **Discover.** Hit match history for each tracked account, insert any unseen match IDs into `fetch_queue`, advance `last_match_id`.
-2. **Drain.** A worker pulls `pending` rows at a polite fixed rate (e.g. one metadata fetch every few seconds with jitter), writes to the match tables, and marks the row `fetched`.
+1. **Discover.** Hit match history for each tracked account, insert any unseen match IDs into `fetch_queue`, advance `last_match_id`. A first import queues its newest 50 as priority-1 `pending` and the rest as `backfill` (see the ingestion spec's Loop 1).
+2. **Drain.** A worker pulls `pending` rows at a polite fixed rate (e.g. one metadata fetch every few seconds with jitter), writes to the match tables, and marks the row `fetched`. Selection is tiered (priority-1 fair across accounts and newest-first, then priority-0, then `backfill`, then `deferred`); see the ingestion spec's Loop 2.
 3. **Retry with backoff.** Failed rows increment `attempts`; give up after N tries and mark `unavailable`. This handles the exact situation you're in now where old matches aren't fetchable yet because of Valve's match report unlock throttle. A nightly job can flip stale `unavailable` rows back to `pending`, so when you unlock more old reports, the tracker picks them up automatically with zero manual work.
+
+### account_match_summaries (schema v17)
+
+```sql
+CREATE TABLE account_match_summaries (
+    account_id  INTEGER NOT NULL,
+    match_id    INTEGER NOT NULL,
+    hero_id     INTEGER,            -- NO foreign key (see below)
+    start_time  TEXT NOT NULL,      -- ISO 8601, from unix_to_iso
+    game_mode   TEXT,               -- mode int as text (matches.game_mode convention)
+    won         INTEGER,            -- 1/0 = player_team == match_result; NULL if unknown
+    kills INTEGER, deaths INTEGER, assists INTEGER,
+    net_worth INTEGER, last_hits INTEGER, denies INTEGER,
+    duration_s  INTEGER,
+    fetched_at  TEXT NOT NULL,
+    PRIMARY KEY (account_id, match_id)
+);
+CREATE INDEX idx_ams_account_start ON account_match_summaries(account_id, start_time);
+```
+
+Written by the **discovery** loop, not the drain loop. The match-history call
+discovery already makes for each tracked account carries a compact per-match summary
+(hero, K/D/A, net worth, last hits, denies, result, duration, start time, game mode —
+see `docs/api-findings.md`, "Match history response shape"). We upsert that payload
+here so a **freshly imported account has useful data within seconds**, instead of
+waiting hours for the rate-limited drain loop (one metadata fetch every 5 s) to work
+through hundreds of matches. It is a hand-built denormalized copy of data the API
+gives us for free — cheap writes at discovery time buy instant reads. The full match
+tables still arrive later via metadata ingestion and remain the authoritative source.
+
+Conventions:
+
+- **No foreign key on `hero_id`** (deliberately, unlike `match_players`). Discovery
+  runs before any asset refresh could learn a brand-new hero, and a summary row must
+  never be blocked by an unknown hero — showing data fast is the whole point. The
+  `hero_id` is a display hint only; the FK-enforced per-player hero arrives with
+  metadata.
+- **`won` is derived** as `player_team == match_result`, per api-findings
+  (`match_result` is the winning team's number, not a won-flag), and is NULL when
+  either field is missing.
+- **NULL, never 0, for a missing stat.** A NULL admits "unknown"; a 0 claims
+  "measured as zero". Every field is read with `.get()`, so a sparse history row keeps
+  its gaps as NULL and can't pollute future averages.
+- **Idempotent upsert** on `(account_id, match_id)`: discovery re-materializes the
+  full history every cycle (a few hundred rows), rewriting each row in place rather
+  than duplicating it. The daemon also runs discovery + rank sync immediately for any
+  never-synced (`sync_state.last_synced_at IS NULL`) account, so an account added via
+  the API doesn't wait up to 30 min for the discovery timer.
 
 ## Per-user identity (schema v11)
 
@@ -396,6 +483,10 @@ Two views, both from `raw_json` (docs/api-findings.md, "Damage taken"), both bac
 
 - **`match_players.player_damage_taken`** — the **net**, post-mitigation total you took, read from the last `stats[]` entry exactly like `player_damage` / `healing`. It is a continuous Performance metric (lower-is-better) compared to a **live population baseline** derived from the column itself, no stored baseline — the same machinery as `deaths`. Historical rows stay NULL until `reprocess-archive` UPDATEs them (a new column can't be back-filled by the `replace_*` helpers, which only touch the derived tables).
 - **`damage_taken_sources(match_id, victim_slot, source_slot, damage_taken)`** — which enemy dealt how much damage **to** you per match, from `match_info.damage_matrix`. Each `(dealer → victim)` chain carries a cumulative `damage[]` series; we keep the final value, summed per `(victim, source)` pair. `source_slot` is NULL for environment / non-roster dealers (creeps, towers, boss), exactly like `kill_events.killer_slot`; hero / team are resolved by joining `match_players` on `(match_id, source_slot)` at read time. This is **gross, pre-mitigation** damage — it does **not** reconcile with the net `player_damage_taken` total — so it backs only a **relative** per-enemy-hero ranking on the Deaths screen (average gross damage per game, no verdict, no baseline), never an absolute total.
+
+### Caching the live baselines
+
+Because the Performance and Laning baselines `AVG` over *every* `match_players` / `laning_stats` row, they slow down linearly as matches accumulate, so `api/cache.py` memoizes them (`cached_baseline_performance` / `cached_baseline_laning`) in a version-gated LRU separate from the snapshot-baseline cache. Its invalidation token is **`queries.ingest_version` = `MAX(match_id)`** (O(1) on the integer primary key, moves on every ingest), paired with a **5-minute TTL floor** so a burst of ingestion doesn't churn the cache — a population mean over thousands of matches doesn't meaningfully move with one more game. Unlike the snapshot cache, the key includes `account_id` (the live baseline *excludes* the scoped account — "you vs the field"). Caveat: a `reprocess-archive` backfill rewrites `kill_events` (the `lane_deaths` metric) without moving `MAX(match_id)`, so a stale `lane_deaths` mean survives until the floor lapses or a real match ingests.
 
 ## What's deliberately not here yet
 

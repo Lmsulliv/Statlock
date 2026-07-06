@@ -8,40 +8,76 @@ A single long-running (or regularly launched) process with three jobs, run as se
 
 | Loop | Purpose | Cadence |
 |---|---|---|
-| Discovery | Find new match IDs for tracked accounts | Every 30 min |
+| Discovery | Find new match IDs for tracked accounts | Per account, 30 min – 24 h by activity |
 | Drain | Fetch full metadata for queued matches | Continuous, rate-limited |
-| Maintenance | Re-queue stale failures, refresh baselines and assets | Nightly |
+| Maintenance | Re-queue stale failures, refresh assets | Nightly (baselines: chunked into drain-idle gaps, see Loop 3) |
 
 Keeping them separate matters: discovery is cheap (one match-history call per account), draining is the expensive part, and maintenance is housekeeping. Different costs, different schedules.
 
 ## Loop 1: Discovery
 
 ```
-every 30 minutes:
-    for each account in tracked_accounts:
+each daemon iteration:
+    for each account DUE by sync_state.next_discovery_at (or flagged in discovery_requests):
         history = GET match-history(account_id)
-        for match in history where match_id > sync_state.last_match_id:
-            INSERT OR IGNORE INTO fetch_queue (match_id, status='pending')
+        new = history where match_id > sync_state.last_match_id, NEWEST first
+        for i, match in enumerate(new):
+            if this is the account's FIRST sync and i >= 50:
+                status, priority = 'backfill', 0     # older remainder of an import
+            else:
+                status, priority = 'pending', 1      # fresh, user-facing work
+            INSERT OR IGNORE INTO fetch_queue
+                (match_id, status, priority, discovered_for_account=account_id)
         update sync_state.last_match_id to max seen
         update sync_state.last_synced_at
+        update sync_state.next_discovery_at    # by activity, see below
 ```
 
 Design notes:
 
-- **`INSERT OR IGNORE` makes discovery idempotent.** If you and your brother both appear in the same match, it gets discovered twice but queued once. Idempotency (safe to run the same operation repeatedly) is the property to aim for everywhere in this system.
+- **`INSERT OR IGNORE` makes discovery idempotent.** If you and your brother both appear in the same match, it gets discovered twice but queued once. Idempotency (safe to run the same operation repeatedly) is the property to aim for everywhere in this system. It also makes the **first discoverer win**: a match already queued through another account keeps its original `discovered_for_account` and priority.
+- **The first-import split (newest 50 pending, rest backfill).** A fresh import's newest matches are what the user opens the app for — and the oldest are the likeliest to 400 on missing replay salts — so only the newest 50 queue as priority-1 `pending`; everything older queues as `backfill`, which drains only when nothing fresh is eligible anywhere. Once an account is synced, its few new matches per cycle all queue at priority 1 so fresh games appear quickly.
+- **`discovered_for_account` is the fairness handle.** The drain loop round-robins across the accounts owning eligible rows (see Loop 2), so two simultaneous bulk imports interleave instead of the first starving the second.
 - **The high-water mark (`last_match_id`) makes restarts cheap.** If the process dies and restarts, it doesn't re-walk your entire history, just everything newer than the mark.
-- 30 minutes is deliberate. Deadlock matches run 25 to 45 minutes, so polling faster buys almost nothing and just burns the API's goodwill.
+
+### Activity-aware cadence (schema v20)
+
+A flat 30-minute poll costs one API call per tracked account forever, and accounts accumulate permanently (every Steam login tracks one). At the 1-request-per-5-second budget, ~300 accounts × 1 call / 30 min already saturates the entire budget with discovery alone, starving the drain loop. So each account carries a **`sync_state.next_discovery_at`** and is rescheduled after every visit by how recently it was *played* (the max `start_time` in `account_match_summaries`, read after the summary upsert), not by a flat timer:
+
+| Bucket | Condition | Next visit |
+|---|---|---|
+| Active | new matches this pass, or last match within 48 h | 30 min |
+| Idle | last match 2–14 days ago | 6 h |
+| Dormant | last match > 14 days ago, or never any | 24 h |
+
+- The daemon's discovery pass selects only accounts **due** by `next_discovery_at` (`NULL` = due now, so accounts predating the migration are visited once and then scheduled). Total calls per cycle track the *active* account count, so the registry can grow without discovery swallowing the budget.
+- **A non-200 reschedules on the active cadence too** (30 min), not "due now" — otherwise a persistently-erroring account would be retried every single iteration instead of every 30 min.
+- 30 minutes for an active account is deliberate. Deadlock matches run 25 to 45 minutes, so polling faster buys almost nothing and just burns the API's goodwill.
+- The manual **run-once** path (`python ingest.py`) still visits *everyone* regardless of schedule — the "catch up when you play" shape — and stamps the same schedule as a side effect, so a manual run and the daemon share one cadence.
+
+### The `discovery_requests` mailbox (web → daemon)
+
+An idle account's owner reopening the app should still feel current, but **the web process must never call the external API** — the rate limit is enforced only in the daemon, and a request-triggered fetch from the web process could blow past it. Instead, hitting `/api/overview` or `/api/accounts/{id}/progress` for an account whose last discovery is over 30 minutes old writes a row into **`discovery_requests`** (a small mailbox table, `INSERT OR IGNORE` keyed by `account_id`). The daemon treats a requested account as immediately due, discovers it on its next iteration, and deletes the row. A freshly-synced account (within the 30-min floor) or a never-synced one (owned by the immediate first-import path) files nothing.
 
 ## Loop 2: Drain (the rate-limited heart)
 
 ```
 forever:
-    row = SELECT from fetch_queue
-          WHERE status = 'pending'
-             OR (status = 'failed' AND now() > next_retry_at)
-          ORDER BY discovered_at
-          LIMIT 1
-    if no row: sleep 60s, continue
+    row = first non-empty tier of:
+      (a) pending / due-failed rows with priority > 0:
+            fairness: among accounts owning such rows (discovered_for_account),
+            pick the one with the OLDEST sync_state.last_drained_at (NULL first,
+            ties by account_id), then take its NEWEST match_id
+      (b) pending / due-failed rows at priority 0 (legacy / revived rows):
+            ORDER BY discovered_at, match_id DESC
+      (c) 'backfill' rows: same per-account fairness as (a), newest first
+      (d) 'deferred' rows whose retry is due: ORDER BY next_retry_at (unchanged,
+            always last -- see the deferral notes below)
+    if no row: sleep 60s, continue      # (daemon: baseline chunk first, Loop 3)
+
+    after the fetch attempt completes -- ANY outcome, a 404 or 429 spent a
+    request just like a 200 -- stamp sync_state.last_drained_at for
+    row.discovered_for_account (the round-robin cursor)
 
     wait_for_token()                  # rate limiter, see below
     response = GET match-metadata(row.match_id)
@@ -95,7 +131,9 @@ The intuition: if something failed just now, it'll probably still fail in one se
 
 Mixing these up is a classic ingestion bug: a flaky network at 3 a.m. permanently marks 50 perfectly good matches as unavailable.
 
-**Bad payload** is the newest match's-fault kind and the subtlest: an HTTP **200** whose body can't be turned into rows — empty, truncated, or an unexpected shape that makes `json.loads`, the parser, or the insert raise (including a `hero_id` the assets table doesn't know yet, which fails the foreign key). Left unguarded, that exception escapes the drain loop and kills the daemon while the row is still `pending`, so a restart refetches the same match and crashes again — one poison message halts ingestion for everyone. So the success path is wrapped: on any parse/insert failure we roll back the match transaction (the raw body was already archived before parsing, so nothing is lost for later forensics), record `last_error = 'bad payload: <ExceptionClass>: <message>'`, and spend one attempt exactly like a 404. The daemon logs a warning and moves on to the next row.
+**Bad payload** is the newest match's-fault kind and the subtlest: an HTTP **200** whose body can't be turned into rows — empty, truncated, or an unexpected shape that makes `json.loads`, the parser, or the insert raise (including a `hero_id` the assets table doesn't know yet, which fails the foreign key). Left unguarded, that exception escapes the drain loop and kills the daemon while the row is still `pending`, so a restart refetches the same match and crashes again — one poison message halts ingestion for everyone. So the success path is wrapped: on any parse/insert failure we roll back the match transaction, archive the raw body into `raw_api_responses` (so nothing is lost for later forensics), record `last_error = 'bad payload: <ExceptionClass>: <message>'`, and spend one attempt exactly like a 404. The daemon logs a warning and moves on to the next row.
+
+> **Where a successful metadata body is archived (deliberate spec change).** Every response is archived raw before parsing (hard rule 2) — with ONE exception for the highest-volume payload. A metadata body runs 1.2–1.6 MB, and a *successful* 200 was being stored twice: once in `matches.raw_json` and once in `raw_api_responses`. So for a metadata 200 that ingests cleanly, `matches.raw_json` IS the raw archive (stored zlib-compressed via `tracker/rawstore`, byte-identical to what was fetched, so any future re-parse or backfill — soul curves, death timing — works unchanged), and the duplicate `raw_api_responses` insert is skipped. The archive-on-failure above is exactly why the skip is safe: a 200 whose parse/insert fails never reaches `matches`, so it still gets archived into `raw_api_responses` (and `reprocess-archive` recovers from there). The only cost is a narrow window — a hard process crash *between* the fetch and the commit loses that in-memory body — but the row is still `pending`, so it's simply refetched: no durable loss. Every non-200 response and every other endpoint archive into `raw_api_responses` as before.
 
 For the unknown-`hero_id` case specifically there's a recovery step before we give up: the drain worker refreshes the assets table **once per run** (a new hero usually just means the nightly asset refresh hasn't happened yet), and if the hero is still unknown it writes a placeholder `heroes` row (`name = 'Unknown hero <id>'`) so the match ingests now and the foreign key holds; the next nightly refresh overwrites the placeholder with the real name.
 
@@ -144,16 +182,39 @@ once per day (e.g. 4 a.m.):
            SET status='pending', attempts=0, deferred_since=NULL, last_error=NULL
          WHERE status='unavailable' AND last_error='not parsed (gave up)';
 
-    refresh baselines, one request per era:
-        for each era in patch_eras, plus one explicit all-time span, call analytics with min/max date params set to that era's
-        boundaries. NEVER omit the date params: the endpoint defaults to a trailing 30-day window, which would silently store recent-meta numbers under an older era's label.
-        (new snapshot_id; old snapshots kept for time-travel debugging)
-
     refresh heroes / items from assets API
 
     log a one-line summary:
-        "discovered X, fetched Y, failed Z, unavailable W, queue depth Q"
+        "discovered X, fetched Y, failed Z, backfill B, unavailable W, queue depth Q"
 ```
+
+### Baseline refresh: off the nightly critical path
+
+Baselines (one call per era span x decade bracket x endpoint — roughly 470
+rate-limited calls when everything is due, as on a fresh database) are NOT part
+of the nightly job above. They refresh **incrementally in the daemon's idle
+gaps**: only when a drain step finds nothing eligible, the daemon refreshes **at
+most one due era span** (~36 calls), then re-enters the loop immediately — so
+new drain work is noticed right away and user-facing fetches always go first. A
+fresh database converges to fully-built baselines over its idle time instead of
+making its first user wait an hour before their first match ingests.
+
+Per-span rules (unchanged in substance):
+
+- For each era in patch_eras, plus one explicit all-time span, call analytics
+  with min/max date params set to that era's boundaries. NEVER omit the date
+  params: the endpoint defaults to a trailing 30-day window, which would
+  silently store recent-meta numbers under an older era's label.
+- Due-ness is staggered by mutability and tracked per era in
+  `baseline_refresh_state` (which is also what makes the chunked refresh
+  resumable by construction): the open era refreshes **nightly** (not on every
+  idle pass — it would otherwise re-fetch continuously whenever the queue is
+  empty), recently closed eras weekly, old eras and the all-time span monthly.
+- All spans evolve a single snapshot in place, replacing only the due eras'
+  rows, so the latest snapshot stays complete for the read layer.
+
+The manual `run-once` shape still performs the full catch-up: the fast nightly
+part, then **all** due spans, then discovery and drain.
 
 That nightly re-queue line is the entire automation story for your old match reports: every time Valve lets you unlock another batch, the tracker absorbs them within a day with zero manual steps.
 
@@ -201,3 +262,7 @@ Worth writing down now, because these become your test suite and the acceptance 
 8. Discovery (or rank sync) on a malformed / non-list 200 body returns 0 and the daemon continues; history/mmr rows without a `match_id` are skipped, not crashed on.
 9. The nightly revive never touches `'not parsed (gave up)'` rows; the monthly pass resets them (including `deferred_since`) exactly once per ~30 days.
 10. An unexpected exception inside one daemon iteration is logged with a traceback and the daemon sleeps 30 s and continues; `KeyboardInterrupt` still exits cleanly.
+11. The first metadata fetch after a fresh import is that account's NEWEST match; a first import of more than 50 matches queues the newest 50 as priority-1 `pending` and the remainder as `backfill`.
+12. Two simultaneous bulk imports interleave: consecutive fetches alternate accounts (round-robin on `sync_state.last_drained_at`), each account newest first.
+13. `backfill` rows drain only when no `pending` or due-`failed` row is eligible anywhere; `deferred` rows still drain last of all.
+14. A queue holding any eligible drain work never triggers a baseline span; on a fresh database with one imported account, all 50 prioritized matches complete before the first span. An idle daemon refreshes at most one due span per pass (continuing the loop, not sleeping) and sleeps only when nothing is due.
