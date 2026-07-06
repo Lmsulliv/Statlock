@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ApiError } from '../api/client'
 import { useAccounts, useAddAccount, useSyncStatus } from '../api/queries'
 import type { SyncStatus, TrackedAccount } from '../api/types'
+import { AccountProgressCard } from '../components/AccountProgressCard'
 import { EmptyState } from '../components/EmptyState'
 import { InlineRename } from '../components/InlineRename'
 import { QueryBoundary } from '../components/QueryBoundary'
@@ -13,8 +14,9 @@ const fmtTime = (iso: string | null) => {
 }
 
 // Turn a failed mutation into a human sentence. An unparseable id (400), a lost
-// login (401), and a stale session/CSRF token (403) are the ones the user can act
-// on; anything else is most likely the backend being down.
+// login (401), a stale session/CSRF token (403), and hitting the per-user account
+// cap (409) are the ones the user can act on; anything else is most likely the
+// backend being down.
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 400)
@@ -23,6 +25,8 @@ function errorMessage(error: unknown): string {
       return 'Please log in to manage accounts.'
     if (error.status === 403)
       return 'Your session looks stale. Reload the page and log in again.'
+    if (error.status === 409)
+      return 'You’ve reached the limit of 5 tracked accounts per user.'
   }
   return 'Something went wrong. Is the backend running?'
 }
@@ -99,10 +103,17 @@ function AddAccountForm() {
       </form>
       {add.isError && <p className="state-error">{errorMessage(add.error)}</p>}
       {add.isSuccess && (
-        <p className="state-ok">
-          Queued account {add.data.account_id}. The worker will ingest its
-          matches on its next discovery cycle.
-        </p>
+        <>
+          <p className="state-ok">
+            Queued account {add.data.account_id}. Analyzing your recent matches
+            now.
+          </p>
+          {/* Live progress: the card polls /api/accounts/{id}/progress and shows
+              a bar advancing within seconds, then removes itself once analysis
+              catches up. Renders nothing until the first poll returns counts, so
+              the line above covers that brief gap. */}
+          <AccountProgressCard accountId={add.data.account_id} />
+        </>
       )}
     </section>
   )

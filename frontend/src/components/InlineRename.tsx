@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { useClearName, useRenameName } from '../api/queries'
-import { isOwner } from '../config'
+import { useCanManage } from '../api/useCanManage'
 
-// An inline, owner-only rename control reused by the Accounts list and each
-// RecurringPlayers row. Each instance owns its own mutations, so its busy/error
-// state is self-contained (no shared-mutation bookkeeping). Save sets a manual
-// label (PUT); "Use Steam name" clears it (DELETE), reverting to the Steam
-// persona then the bare id. Hiding it for non-owners is convenience; the real
-// gate is the API returning 403 on the write.
+// An inline rename control reused by the Accounts list and each RecurringPlayers
+// row. Shown only to viewers who can manage (never on a public /player profile).
+// Each instance owns its own mutations, so its busy/error state is self-contained
+// (no shared-mutation bookkeeping). Save sets a manual label (PUT); "Use Steam
+// name" clears it (DELETE), reverting to the Steam persona then the bare id.
+// Hiding it is convenience; the real gate is the API returning 403 on the write.
 export function InlineRename({
   accountId,
   currentName,
@@ -19,8 +19,9 @@ export function InlineRename({
   const [draft, setDraft] = useState(currentName)
   const rename = useRenameName()
   const clear = useClearName()
+  const canManage = useCanManage()
 
-  if (!isOwner) return null
+  if (!canManage) return null
 
   const busy = rename.isPending || clear.isPending
   const failed = rename.isError || clear.isError

@@ -11,6 +11,7 @@ import { EmptyState } from '../components/EmptyState'
 import { HeroIcon } from '../components/HeroIcon'
 import { QueryBoundary } from '../components/QueryBoundary'
 import { fmtClock, gameModeLabel } from '../format'
+import { useHref } from '../player/PlayerContext'
 import { useScope } from '../scope/useScope'
 
 const fmtDateTime = (iso: string) => {
@@ -23,13 +24,14 @@ export function MatchDetail() {
   const id = Number(matchId)
   const { scope } = useScope()
   const { search } = useLocation()
+  const href = useHref()
   // Pass the scoped account so "you" matches the Overview the click came from.
   const detail = useMatchDetail(id, scope.accountId)
 
   return (
     <section>
       {/* Carry `search` so returning to Overview keeps the active scope. */}
-      <Link to={{ pathname: '/', search }} className="back-link">
+      <Link to={{ pathname: href('/'), search }} className="back-link">
         ← Back to Overview
       </Link>
       <h1 className="screen-title">Match detail</h1>

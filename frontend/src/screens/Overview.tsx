@@ -1,12 +1,20 @@
 import { useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { useOverview, useRanks } from '../api/queries'
-import type { CurrentRank, MmrPoint, Overview as OverviewData, RecentMatch, SyncStatus } from '../api/types'
+import { useMe, useOverview, useRanks } from '../api/queries'
+import { useCanManage } from '../api/useCanManage'
+import type { MmrPoint, Overview as OverviewData, RecentMatch, SyncStatus } from '../api/types'
+import { AccountProgressCard } from '../components/AccountProgressCard'
+import { CurrentRankBadge } from '../components/CurrentRankBadge'
+import { DemoProfileLink } from '../components/DemoProfileLink'
 import { EmptyState } from '../components/EmptyState'
 import { HeroIcon } from '../components/HeroIcon'
+import { ProvisionalBadge } from '../components/ProvisionalBadge'
 import { QueryBoundary } from '../components/QueryBoundary'
 import { gameModeLabel } from '../format'
-import { useScope } from '../scope/useScope'
+import { useHref, usePlayerPin } from '../player/PlayerContext'
+import { GAME_MODE_NORMAL, useScope } from '../scope/useScope'
+import { FocusAreas } from './overview/FocusAreas'
+import { HeroCards } from './overview/HeroCards'
 
 const fmtDate = (iso: string) => {
   const d = new Date(iso)
@@ -27,8 +35,9 @@ export function Overview() {
     <section>
       <h1 className="screen-title">Overview</h1>
       <p className="screen-sub">
-        Is everything alive, and how are you doing? Rank over time, your last ten
-        matches, and the ingestion worker’s status at the current scope.
+        How are you doing? Rank over time, where the data says to focus, your
+        most-played heroes, and your last ten matches at the current scope. The
+        worker’s sync status lives in the small indicator in the header.
       </p>
       <QueryBoundary query={overview}>
         {(data) => (data.account_id === null ? <OverviewEmpty data={data} /> : <OverviewBody data={data} />)}
@@ -38,28 +47,68 @@ export function Overview() {
 }
 
 function OverviewBody({ data }: { data: OverviewData }) {
+  const { scope } = useScope()
+  const { search } = useLocation()
+  const href = useHref()
+  const pin = usePlayerPin()
+  const canManage = useCanManage()
+  // Focus areas and hero cards rest on Normal-population analytics (and link
+  // into Normal-only screens), so they sit out under Street Brawl; the rest of
+  // the Overview stays Brawl-friendly.
+  const normal = scope.gameMode === GAME_MODE_NORMAL
   return (
     <div className="overview">
-      {data.sync.pending_era_candidates > 0 && (
+      {/* The banner links to the Era manager, which only managers can reach —
+          so it only shows for them. The pending count still reaches everyone
+          through the API; hiding the dead-end link is presentation. */}
+      {canManage && data.sync.pending_era_candidates > 0 && (
         <EraCandidateBanner count={data.sync.pending_era_candidates} />
       )}
 
+      {/* Live onboarding progress while a fresh import is still analyzing. The
+          card polls the progress endpoint (a mailbox nudge) and removes itself
+          once caught up — skipped on a public profile so an anonymous visitor
+          never triggers that side effect. */}
+      {!pin && <AccountProgressCard accountId={data.account_id} />}
+
+      {/* The 30-second hook: the digest's top calls, linking into Improvement. */}
+      {normal && <FocusAreas />}
+
+      <div className="overview-cols">
+        <section className="card">
+          <div className="card-head">
+            <h2 className="card-title">Rank over time</h2>
+            {data.current_rank && <CurrentRankBadge rank={data.current_rank} />}
+          </div>
+          <MmrChart series={data.mmr_series} />
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <h2 className="card-title">Your heroes</h2>
+            <Link className="card-link" to={{ pathname: href('/heroes'), search }}>
+              All heroes →
+            </Link>
+          </div>
+          {normal ? (
+            <HeroCards />
+          ) : (
+            <p className="muted">
+              Hero records compare against Normal analytics, so they sit out under
+              Street Brawl.
+            </p>
+          )}
+        </section>
+      </div>
+
       <section className="card">
         <div className="card-head">
-          <h2 className="card-title">Rank over time</h2>
-          {data.current_rank && <CurrentRankBadge rank={data.current_rank} />}
+          <h2 className="card-title">Last {data.last_matches.length || 10} matches</h2>
+          {/* Provisional when a recent row is still a discovery summary; the
+              badge reserves its space so it can vanish without shifting layout. */}
+          <ProvisionalBadge show={data.provisional} />
         </div>
-        <MmrChart series={data.mmr_series} />
-      </section>
-
-      <section className="card">
-        <h2 className="card-title">Last {data.last_matches.length || 10} matches</h2>
         <RecentMatches matches={data.last_matches} />
-      </section>
-
-      <section className="card">
-        <h2 className="card-title">Sync status</h2>
-        <SyncBadge sync={data.sync} />
       </section>
     </div>
   )
@@ -80,23 +129,6 @@ function EraCandidateBanner({ count }: { count: number }) {
         Review in Era manager →
       </Link>
     </div>
-  )
-}
-
-// The account's current rank, shown beside the chart title. This is the latest
-// point of the series (server-resolved to a tier name + accent color), so it's
-// the value you can check against what the game shows in-client.
-function CurrentRankBadge({ rank }: { rank: CurrentRank }) {
-  const label = rank.name
-    ? `${rank.name}${rank.subtier ? ` ${rank.subtier}` : ''}`
-    : `Badge ${rank.badge}`
-  return (
-    <span className="current-rank" title={`Current rank · badge ${rank.badge}`}>
-      <img className="current-rank-art" src={rank.badge_url} alt="" />
-      <span className="current-rank-label" style={rank.color ? { color: rank.color } : undefined}>
-        {label}
-      </span>
-    </span>
   )
 }
 
@@ -228,12 +260,13 @@ function MmrChart({ series }: { series: MmrPoint[] }) {
 function RecentMatches({ matches }: { matches: RecentMatch[] }) {
   const navigate = useNavigate()
   const { search } = useLocation()
+  const href = useHref()
   if (matches.length === 0) {
     return <p className="muted">No matches ingested yet. The worker may still be syncing.</p>
   }
   // Each row opens the match detail view, carrying `search` so the detail view
   // sees the same scope (and thus the same "you" account) as this Overview.
-  const open = (matchId: number) => navigate({ pathname: `/matches/${matchId}`, search })
+  const open = (matchId: number) => navigate({ pathname: href(`/matches/${matchId}`), search })
   return (
     <table className="data-table">
       <thead>
@@ -316,15 +349,33 @@ function SyncBadge({ sync }: { sync: SyncStatus }) {
 }
 
 // Empty DB: the server resolves no account, so it hands back a message instead of
-// data. Render that as a helpful empty state, never an error (scenario 6).
+// data. Render that as a helpful empty state, never an error (scenario 6). This is
+// also the cold-visitor landing, so lead with the demo profile and, in auth mode,
+// point a logged-out visitor at Steam login rather than server-side CLI commands
+// they can't run.
 function OverviewEmpty({ data }: { data: OverviewData }) {
+  const me = useMe()
+  const loggedOut = me.data?.auth_enabled && !me.data.authenticated
   return (
     <EmptyState title="No tracked account yet.">
-      <p>{data.message ?? 'Add an account and run the worker to see your overview.'}</p>
       <p>
-        Add one with <code>python -m ingest add-account &lt;id&gt; --self</code>,
-        then run <code>python -m ingest run-daemon</code>.
+        This is where your rank over time, focus areas, most-played heroes, and
+        recent matches will appear once an account is tracked.
       </p>
+      <DemoProfileLink variant="button" />
+      {loggedOut ? (
+        <p>
+          <a className="demo-link" href="/api/auth/login">
+            Log in with Steam
+          </a>{' '}
+          to track your own matches.
+        </p>
+      ) : (
+        <p>
+          Add one with <code>python -m ingest add-account &lt;id&gt; --self</code>,
+          then run <code>python -m ingest run-daemon</code>.
+        </p>
+      )}
       <SyncBadge sync={data.sync} />
     </EmptyState>
   )

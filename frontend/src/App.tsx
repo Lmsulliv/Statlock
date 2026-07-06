@@ -1,54 +1,55 @@
-import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
-import { useMe } from './api/queries'
+import { NavLink, Route, Routes, matchPath, useLocation } from 'react-router-dom'
+import { useCanManage } from './api/useCanManage'
 import { AuthControls } from './components/AuthControls'
-import { isOwner } from './config'
+import { HeaderMenu } from './components/HeaderMenu'
+import { RedirectWithScope } from './components/RedirectWithScope'
+import { SyncIndicator } from './components/SyncIndicator'
+import { PlayerProvider, useBasePath, withBasePath, type PlayerPin } from './player/PlayerContext'
+import { PlayerGate } from './player/PlayerGate'
 import { ScopeBar } from './scope/ScopeBar'
-import { Matchups } from './screens/Matchups'
-import { Overview } from './screens/Overview'
-import { Items } from './screens/Items'
-import { Laning } from './screens/Laning'
-import { Performance } from './screens/Performance'
-import { Trends } from './screens/Trends'
-import { Deaths } from './screens/Deaths'
-import { Improvement } from './screens/Improvement'
-import { Tilt } from './screens/Tilt'
-import { RecurringPlayers } from './screens/RecurringPlayers'
-import { Eras } from './screens/Eras'
 import { Accounts } from './screens/Accounts'
+import { Eras } from './screens/Eras'
+import { Heroes } from './screens/heroes/Heroes'
+import { Improvement } from './screens/Improvement'
+import { Insights } from './screens/insights/Insights'
 import { MatchDetail } from './screens/MatchDetail'
+import { Overview } from './screens/Overview'
+import { Performance } from './screens/performance/Performance'
 
-// `ownerOnly` entries are the management screens (Accounts importer, Era manager).
-// They're shown when the viewer can write: under Steam login (auth mode) that means
-// authenticated; in local/dev mode it falls back to the build-time VITE_OWNER flag.
-// This is convenience only — the API enforces the gate on every write.
+// Five tabs a first-time visitor can navigate cold. Management (the Accounts
+// importer and Era manager) lives behind the header gear, not in the nav.
+// Only Overview needs `end`: the other tabs light up for their sub-paths
+// (/heroes/all, /performance/laning, /insights/deaths) via prefix matching.
 const NAV = [
   { to: '/', label: 'Overview', end: true },
-  { to: '/matchups', label: 'Matchups', end: false },
-  { to: '/items', label: 'Items', end: false },
-  { to: '/laning', label: 'Laning', end: false },
+  { to: '/heroes', label: 'Heroes', end: false },
   { to: '/performance', label: 'Performance', end: false },
-  { to: '/trends', label: 'Trends', end: false },
-  { to: '/deaths', label: 'Deaths', end: false },
+  { to: '/insights', label: 'Insights', end: false },
   { to: '/improvement', label: 'Improvement', end: false },
-  { to: '/tilt', label: 'Tilt', end: false },
-  { to: '/recurring-players', label: 'Recurring players', end: false },
-  { to: '/accounts', label: 'Accounts', end: false, ownerOnly: true },
-  { to: '/eras', label: 'Era manager', end: false, ownerOnly: true },
 ]
 
 export function App() {
+  const { pathname } = useLocation()
+  // A /player/:accountId/* path pins the app to that account and switches to the
+  // public, read-only face (see PlayerContext). Any other path is the normal
+  // owner-facing app (pin === null).
+  const match = matchPath('/player/:accountId/*', pathname)
+  const pin: PlayerPin | null = match
+    ? { accountId: Number(match.params.accountId), basePath: `/player/${match.params.accountId}` }
+    : null
+
+  return (
+    <PlayerProvider pin={pin}>
+      <AppChrome pinned={pin !== null} />
+    </PlayerProvider>
+  )
+}
+
+function AppChrome({ pinned }: { pinned: boolean }) {
   // Carry the scope query string across navigation, so switching screens keeps
   // the active scope (and the URL stays bookmarkable on every screen).
   const { search } = useLocation()
-  // Can the viewer reach the management screens? In auth mode: only when logged in.
-  // In local mode (or until /me resolves): the build-time VITE_OWNER flag.
-  const me = useMe()
-  const canManage = me.data
-    ? me.data.auth_enabled
-      ? me.data.authenticated
-      : isOwner
-    : isOwner
-  const navItems = NAV.filter((n) => canManage || !n.ownerOnly)
+  const base = useBasePath()
 
   return (
     <div className="app">
@@ -57,10 +58,10 @@ export function App() {
       <header className="app-header">
         <div className="app-title">Deadlock Stat Tracker</div>
         <nav className="app-nav">
-          {navItems.map((n) => (
+          {NAV.map((n) => (
             <NavLink
               key={n.to}
-              to={{ pathname: n.to, search }}
+              to={{ pathname: withBasePath(base, n.to), search }}
               end={n.end}
               className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}
             >
@@ -68,31 +69,75 @@ export function App() {
             </NavLink>
           ))}
         </nav>
-        <AuthControls />
+        <div className="header-tools">
+          <SyncIndicator />
+          {/* No management surfaces on a public profile: the gear menu and login
+              controls stay off under a pin (the API enforces writes regardless). */}
+          {!pinned && <HeaderMenu />}
+          {!pinned && <AuthControls />}
+        </div>
       </header>
 
       <ScopeBar />
 
       <main className="app-main">
+        {/* Two mounts of the same screen table. The public profile route wraps it
+            in PlayerGate (profile header + not-tracked fallback); everything else
+            is the normal app. Descendant <Routes> in ScreenRoutes match the splat
+            remainder, so one relative table serves both. */}
         <Routes>
-          <Route path="/" element={<Overview />} />
-          <Route path="/matches/:matchId" element={<MatchDetail />} />
-          <Route path="/matchups" element={<Matchups />} />
-          <Route path="/items" element={<Items />} />
-          <Route path="/laning" element={<Laning />} />
-          <Route path="/performance" element={<Performance />} />
-          <Route path="/trends" element={<Trends />} />
-          <Route path="/deaths" element={<Deaths />} />
-          <Route path="/improvement" element={<Improvement />} />
-          <Route path="/tilt" element={<Tilt />} />
-          <Route path="/recurring-players" element={<RecurringPlayers />} />
-          {/* Management screens: the routes aren't registered unless the viewer can
-              manage, so the Accounts importer and Era manager aren't reachable by
-              URL either. The API still enforces the gate on every write. */}
-          {canManage && <Route path="/accounts" element={<Accounts />} />}
-          {canManage && <Route path="/eras" element={<Eras />} />}
+          <Route
+            path="/player/:accountId/*"
+            element={
+              <PlayerGate>
+                <ScreenRoutes />
+              </PlayerGate>
+            }
+          />
+          <Route path="/*" element={<ScreenRoutes />} />
         </Routes>
       </main>
     </div>
+  )
+}
+
+// The screen route table, with paths RELATIVE to the current base so it serves
+// both the normal app (mounted at "/*") and the public profile (mounted at
+// "/player/:accountId/*") from one definition. React Router matches a descendant
+// <Routes> against the parent splat remainder, so the same relative paths work
+// under either mount.
+function ScreenRoutes() {
+  const canManage = useCanManage()
+  return (
+    <Routes>
+      <Route path="" element={<Overview />} />
+      <Route path="matches/:matchId" element={<MatchDetail />} />
+      <Route path="heroes" element={<Heroes />} />
+      <Route path="heroes/all" element={<Heroes allHeroes />} />
+      <Route path="performance" element={<Performance segment="overall" />} />
+      <Route path="performance/laning" element={<Performance segment="laning" />} />
+      <Route path="performance/trends" element={<Performance segment="trends" />} />
+      <Route path="insights" element={<Insights />} />
+      <Route path="insights/:section" element={<Insights />} />
+      <Route path="improvement" element={<Improvement />} />
+
+      {/* Legacy routes from the ten-tab layout redirect into the new structure,
+          carrying the scope query string (and, under a pin, the base path) so old
+          bookmarks and shared links keep rendering the same data. */}
+      <Route path="matchups" element={<RedirectWithScope to="/heroes/all" />} />
+      <Route path="items" element={<RedirectWithScope to="/heroes" />} />
+      <Route path="laning" element={<RedirectWithScope to="/performance/laning" />} />
+      <Route path="trends" element={<RedirectWithScope to="/performance/trends" />} />
+      <Route path="deaths" element={<RedirectWithScope to="/insights/deaths" />} />
+      <Route path="tilt" element={<RedirectWithScope to="/insights/sessions" />} />
+      <Route path="recurring-players" element={<RedirectWithScope to="/insights/players" />} />
+
+      {/* Management screens: the routes aren't registered unless the viewer can
+          manage (never under a pin), so the Accounts importer and Era manager
+          aren't reachable by URL either. The API still enforces the gate on every
+          write. */}
+      {canManage && <Route path="accounts" element={<Accounts />} />}
+      {canManage && <Route path="eras" element={<Eras />} />}
+    </Routes>
   )
 }

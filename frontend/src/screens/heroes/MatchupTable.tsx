@@ -1,15 +1,11 @@
 import { useMemo, useState } from 'react'
-import { useMatchups, useSyncStatus } from '../api/queries'
-import type { MatchupRow } from '../api/types'
-import { BaselineCell, DeltaCell, KillCountCell } from '../components/cells'
-import { EmptyState } from '../components/EmptyState'
-import { HeroIcon } from '../components/HeroIcon'
-import { IntervalBar } from '../components/IntervalBar'
-import { QueryBoundary } from '../components/QueryBoundary'
-import { SampleSize } from '../components/SampleSize'
-import { VERDICT_ORDER } from '../components/verdict'
-import { VerdictBadge } from '../components/VerdictBadge'
-import { useScope } from '../scope/useScope'
+import type { MatchupRow } from '../../api/types'
+import { BaselineCell, DeltaCell, KillCountCell } from '../../components/cells'
+import { HeroIcon } from '../../components/HeroIcon'
+import { IntervalBar } from '../../components/IntervalBar'
+import { SampleSize } from '../../components/SampleSize'
+import { VERDICT_ORDER } from '../../components/verdict'
+import { VerdictBadge } from '../../components/VerdictBadge'
 
 type SortKey =
   | 'name'
@@ -93,9 +89,11 @@ function sortValue(r: MatchupRow, key: SortKey): number | string | null {
   }
 }
 
-export function Matchups() {
-  const { scope } = useScope()
-  const matchups = useMatchups(scope)
+// The sortable matchup table, extracted from the old Matchups screen so both
+// the "All heroes" grid and a hero's detail section render the same thing. The
+// sort state lives inside: it resets when the table unmounts, exactly like the
+// old per-screen state did.
+export function MatchupTable({ rows }: { rows: MatchupRow[] }) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({
     key: 'name',
     dir: 'asc',
@@ -108,38 +106,6 @@ export function Matchups() {
         : { key, dir: key === 'name' ? 'asc' : 'desc' },
     )
 
-  return (
-    <section>
-      <h1 className="screen-title">Matchups</h1>
-      <p className="screen-sub">
-        One row per enemy hero, sorted A→Z by default; click any header to
-        re-sort. Win rate always shows as a 95% confidence interval (a bar with
-        whiskers), and the gold dashed line marks the global baseline when
-        available. Color marks a confirmed verdict, lighting up only when the
-        interval clears the baseline.
-      </p>
-      <QueryBoundary query={matchups}>
-        {(rows) =>
-          rows.length === 0 ? (
-            <MatchupsEmpty />
-          ) : (
-            <MatchupsTable rows={rows} sort={sort} onHeader={onHeader} />
-          )
-        }
-      </QueryBoundary>
-    </section>
-  )
-}
-
-function MatchupsTable({
-  rows,
-  sort,
-  onHeader,
-}: {
-  rows: MatchupRow[]
-  sort: { key: SortKey; dir: 'asc' | 'desc' }
-  onHeader: (key: SortKey) => void
-}) {
   const sorted = useMemo(() => {
     const out = [...rows]
     out.sort((a, b) => {
@@ -231,39 +197,5 @@ function MatchupsTable({
         ))}
       </tbody>
     </table>
-  )
-}
-
-// When there are no rows, say why — using the live sync counts rather than a
-// blank table (presentation rule 5).
-function MatchupsEmpty() {
-  const sync = useSyncStatus()
-  return (
-    <EmptyState title="No matchups to show yet.">
-      <QueryBoundary query={sync}>
-        {(s) => (
-          <>
-            <p>
-              {s.fetched.toLocaleString()} matches fetched ·{' '}
-              {s.queue_depth.toLocaleString()} queued ·{' '}
-              {s.unavailable.toLocaleString()} unavailable.
-            </p>
-            {s.fetched === 0 ? (
-              <p>
-                The worker hasn’t ingested any matches yet. Add an account with{' '}
-                <code>python -m ingest add-account &lt;id&gt; --self</code>, run{' '}
-                <code>python -m ingest run-daemon</code>, and come back in an hour.
-              </p>
-            ) : (
-              <p>
-                Matches are ingested, but none fall in the current scope. Try
-                widening the rank range, switching the era or game mode, or
-                setting the lane view to Overall.
-              </p>
-            )}
-          </>
-        )}
-      </QueryBoundary>
-    </EmptyState>
   )
 }

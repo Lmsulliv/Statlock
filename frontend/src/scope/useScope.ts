@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { usePlayerPin } from '../player/PlayerContext'
 
 // The scope selector, client-side. It mirrors the API's scope params, and the
 // URL query string is its single source of truth: every control reads and
@@ -58,15 +59,26 @@ export function scopeFromParams(params: URLSearchParams): Scope {
 
 export function useScope() {
   const [params, setParams] = useSearchParams()
-  const scope = useMemo(() => scopeFromParams(params), [params])
+  const pin = usePlayerPin()
+  // On a public /player/:accountId view the account is fixed by the URL path, so
+  // it overrides the query param and is never itself written back to the URL.
+  const pinnedAccount =
+    pin && Number.isFinite(pin.accountId) ? pin.accountId : null
+  const scope = useMemo(() => {
+    const s = scopeFromParams(params)
+    if (pinnedAccount !== null) s.accountId = pinnedAccount
+    return s
+  }, [params, pinnedAccount])
 
   const update = useCallback(
     (patch: Partial<Scope>) => {
       const next: Scope = { ...scope, ...patch }
       // Only non-default values land in the URL, keeping it short while still
       // fully determining the view (a missing param falls back to the default).
+      // account_id is omitted entirely when pinned (the path already fixes it).
       const sp = new URLSearchParams()
-      if (next.accountId !== null) sp.set('account_id', String(next.accountId))
+      if (pinnedAccount === null && next.accountId !== null)
+        sp.set('account_id', String(next.accountId))
       if (next.eraIds.length > 0) sp.set('era_ids', next.eraIds.join(','))
       if (next.badgeMin !== DEFAULTS.badgeMin) sp.set('badge_min', String(next.badgeMin))
       if (next.badgeMax !== DEFAULTS.badgeMax) sp.set('badge_max', String(next.badgeMax))
@@ -76,7 +88,7 @@ export function useScope() {
       if (next.inLane) sp.set('in_lane', 'true')
       setParams(sp, { replace: true })
     },
-    [scope, setParams],
+    [scope, setParams, pinnedAccount],
   )
 
   return { scope, update }

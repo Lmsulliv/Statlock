@@ -4,11 +4,13 @@ import type {
   ImprovementEntry,
   WinCondition,
 } from '../api/types'
+import { DemoProfileLink } from '../components/DemoProfileLink'
 import { EmptyState } from '../components/EmptyState'
 import { HeroIcon } from '../components/HeroIcon'
+import { ModeNotice } from '../components/ModeNotice'
 import { QueryBoundary } from '../components/QueryBoundary'
 import { VerdictBadge } from '../components/VerdictBadge'
-import { useScope } from '../scope/useScope'
+import { GAME_MODE_NORMAL, useScope, type Scope } from '../scope/useScope'
 
 const pct = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100)}%`)
 
@@ -17,16 +19,31 @@ const signedPct = (x: number) => `${x >= 0 ? '+' : ''}${Math.round(x * 100)}%`
 
 // "Against Haze" for a matchup, "With Soul Shredder" for an item — the entry's
 // kind picks the preposition; `subject` is the display name the server chose.
-const lead = (e: ImprovementEntry) =>
+// Exported for the Overview's Focus areas strip, which renders the same entries.
+export const lead = (e: ImprovementEntry) =>
   e.kind === 'matchup' ? `Against ${e.subject}` : `With ${e.subject}`
 
 // Each kind carries its own art field; HeroIcon falls back to the initial when
 // the URL is null, so the same icon component serves heroes and items.
-const iconUrl = (e: ImprovementEntry) =>
+export const iconUrl = (e: ImprovementEntry) =>
   e.kind === 'matchup' ? (e.enemy_hero_image_url ?? null) : (e.item_image_url ?? null)
 
 export function Improvement() {
   const { scope } = useScope()
+  // The digest is built from matchup + item deltas, both Normal-only, so the
+  // whole screen stays Normal-only.
+  if (scope.gameMode !== GAME_MODE_NORMAL) {
+    return (
+      <section>
+        <h1 className="screen-title">Directions for improvement</h1>
+        <ModeNotice />
+      </section>
+    )
+  }
+  return <ImprovementBody scope={scope} />
+}
+
+function ImprovementBody({ scope }: { scope: Scope }) {
   const improvement = useImprovement(scope)
   // Reuse the played-heroes list the ScopeBar resolves names from (same query
   // key, so this is cached, not a new request) to name the selected hero.
@@ -232,6 +249,11 @@ function ImprovementEmpty({ heroName }: { heroName: string | null }) {
     <EmptyState
       title={heroName ? `Nothing to report for ${heroName} yet.` : 'Nothing to report yet.'}
     >
+      <p>
+        Your confirmed strengths and weaknesses — the matchups and items where
+        your win rate clearly departs from the baseline, plus what tends to win
+        your games — will appear here.
+      </p>
       <QueryBoundary query={sync}>
         {(s) => (
           <>
@@ -258,6 +280,7 @@ function ImprovementEmpty({ heroName }: { heroName: string | null }) {
           </>
         )}
       </QueryBoundary>
+      <DemoProfileLink />
     </EmptyState>
   )
 }

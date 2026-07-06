@@ -69,6 +69,14 @@ export interface PerformanceRow {
   metrics: MetricField[]
 }
 
+// /api/performance wraps the rows in a provisional flag (true when any
+// contributing match is still a discovery summary awaiting full metadata). The
+// population baseline itself is always metadata-only.
+export interface PerformanceResponse {
+  provisional: boolean
+  rows: PerformanceRow[]
+}
+
 // Early-game (laning) report rows are structurally identical to performance rows
 // (a metrics list of MetricField), just a different metric set: net worth, last
 // hits, and denies at the lane-end mark. Same renderer, same honesty machinery.
@@ -159,6 +167,9 @@ export interface TrendsResponse {
   mode: 'rolling' | 'calendar'
   granularity: 'week' | 'month'
   window_games: number
+  // True when any contributing match is still a discovery summary awaiting full
+  // metadata; the UI badges the result as "will improve" and re-polls.
+  provisional: boolean
   metrics: TrendMetric[]
 }
 
@@ -184,6 +195,9 @@ export interface TiltResponse {
   overall: { games: number; wins: number; winrate: number | null }
   sessions: number
   session_gap_hours: number
+  // True when any contributing match is still a discovery summary awaiting full
+  // metadata (tilt reads win/loss + match time, which a summary already carries).
+  provisional: boolean
 }
 
 // ── Recurring players (api/service.recurring_players) ────────────────────────
@@ -215,6 +229,25 @@ export interface PlayedHero {
   image_url: string | null
 }
 
+// One hero's win/loss record (api/service.hero_records). Carries the same
+// StatFields as a tilt/recurring row: `global_rate`/`global_matches` are the
+// account's OWN overall in-scope rate, the "you vs your usual self" baseline.
+// `provisional` is per-hero (true while any contributing match is still a
+// discovery summary); the response's top-level flag is the OR across heroes.
+export interface HeroRecord extends StatFields {
+  hero_id: number
+  hero_name: string
+  hero_image_url: string | null
+  games: number
+  wins: number
+  provisional: boolean
+}
+
+export interface HeroRecordsResponse {
+  provisional: boolean
+  heroes: HeroRecord[]
+}
+
 export interface Rank {
   tier: number // 0 Obscurus .. 11 Eternus
   name: string
@@ -243,6 +276,21 @@ export interface Me {
   user_id: number | null
   account_id: number | null
   display_name: string | null
+  // The account id the logged-out landing highlights as a live demo, or null
+  // when DEMO_ACCOUNT_ID isn't configured (the demo button then never renders).
+  demo_account_id: number | null
+}
+
+// A public, label-free profile header (GET /api/players/{id}/profile) for the
+// shareable /player/:accountId route. display_name resolves persona > bare id and
+// never anyone's private label. has_data is false for an account we hold nothing
+// for, so the route shows a friendly "not tracked here" page instead of empty
+// screens.
+export interface PlayerProfile {
+  account_id: number
+  display_name: string
+  current_rank: CurrentRank | null
+  has_data: boolean
 }
 
 // The body returned by the rename writes (PUT/DELETE /api/accounts/{id}/name):
@@ -390,6 +438,9 @@ export interface RecentMatch {
   net_worth: number
   start_time: string
   game_mode: string
+  // "summary" while only the discovery summary is held, "full" once metadata
+  // lands — so a single recent-match row can be badged as still-deepening.
+  source: 'full' | 'summary'
 }
 
 export interface Overview {
@@ -398,7 +449,24 @@ export interface Overview {
   current_rank: CurrentRank | null
   last_matches: RecentMatch[]
   sync: SyncStatus
+  // True when any recent-match row is still a discovery summary awaiting full
+  // metadata; the UI badges the overview as "will improve" and re-polls.
+  provisional: boolean
   message?: string
+}
+
+// Onboarding progress counts for one account (GET /api/accounts/{id}/progress),
+// polled while a fresh import ingests. `known` = discovery summaries held;
+// `analyzed` = matches with full metadata (climbs toward `known` as the drain
+// works); the pending tiers are remaining queue depth. Scope-free — these are raw
+// counts, not statistics.
+export interface AccountProgress {
+  account_id: number
+  known: number
+  analyzed: number
+  prioritized_pending: number
+  backfill_pending: number
+  deferred: number
 }
 
 // ── Match detail (api/service.match_detail) ──────────────────────────────────

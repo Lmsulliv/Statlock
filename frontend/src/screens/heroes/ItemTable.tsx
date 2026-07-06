@@ -1,15 +1,11 @@
 import { useMemo, useState } from 'react'
-import { useItems, usePlayedHeroes, useSyncStatus } from '../api/queries'
-import type { ItemRow } from '../api/types'
-import { BaselineCell, DeltaCell } from '../components/cells'
-import { EmptyState } from '../components/EmptyState'
-import { HeroIcon } from '../components/HeroIcon'
-import { IntervalBar } from '../components/IntervalBar'
-import { QueryBoundary } from '../components/QueryBoundary'
-import { SampleSize } from '../components/SampleSize'
-import { VERDICT_ORDER } from '../components/verdict'
-import { VerdictBadge } from '../components/VerdictBadge'
-import { useScope } from '../scope/useScope'
+import type { ItemRow } from '../../api/types'
+import { BaselineCell, DeltaCell } from '../../components/cells'
+import { HeroIcon } from '../../components/HeroIcon'
+import { IntervalBar } from '../../components/IntervalBar'
+import { SampleSize } from '../../components/SampleSize'
+import { VERDICT_ORDER } from '../../components/verdict'
+import { VerdictBadge } from '../../components/VerdictBadge'
 
 // Purchase-timing delta is plain seconds (personal avg minus global avg). Render
 // it as a m:ss clock plus a direction word, since "3:40 later than average" is
@@ -30,8 +26,8 @@ interface Column {
   title?: string
 }
 
-// Same column shape as Matchups, plus the extra purchase-timing column. Titles
-// explain the columns that need interpreting (rule: don't make the reader guess).
+// Same column shape as the matchup table, plus the extra purchase-timing column.
+// Titles explain the columns that need interpreting.
 const COLUMNS: Column[] = [
   { key: 'name', label: 'Item' },
   { key: 'games', label: 'Record' },
@@ -87,9 +83,10 @@ function sortValue(r: ItemRow, key: SortKey): number | string | null {
   }
 }
 
-export function Items() {
-  const { scope } = useScope()
-  const items = useItems(scope)
+// The sortable per-hero item table, extracted from the old Items screen so the
+// hero detail view renders it as one section. Sort state lives inside, like
+// MatchupTable.
+export function ItemTable({ rows }: { rows: ItemRow[] }) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({
     key: 'name',
     dir: 'asc',
@@ -102,43 +99,6 @@ export function Items() {
         : { key, dir: key === 'name' ? 'asc' : 'desc' },
     )
 
-  return (
-    <section>
-      <h1 className="screen-title">Items</h1>
-      <p className="screen-sub">
-        One row per item for the hero you’ve picked in the scope bar, sorted A→Z
-        by default; click any header to re-sort. Win rate always shows as a 95%
-        confidence interval, and color marks a confirmed verdict, lighting up only
-        when the interval clears the baseline. The purchase-timing column stands on
-        its own: it compares when you buy the item against everyone else,
-        independent of win rate.
-      </p>
-      {scope.heroId === null ? (
-        <ItemsNoHero />
-      ) : (
-        <QueryBoundary query={items}>
-          {(rows) =>
-            rows.length === 0 ? (
-              <ItemsEmpty />
-            ) : (
-              <ItemsTable rows={rows} sort={sort} onHeader={onHeader} />
-            )
-          }
-        </QueryBoundary>
-      )}
-    </section>
-  )
-}
-
-function ItemsTable({
-  rows,
-  sort,
-  onHeader,
-}: {
-  rows: ItemRow[]
-  sort: { key: SortKey; dir: 'asc' | 'desc' }
-  onHeader: (key: SortKey) => void
-}) {
   const sorted = useMemo(() => {
     const out = [...rows]
     out.sort((a, b) => {
@@ -226,57 +186,5 @@ function ItemsTable({
         ))}
       </tbody>
     </table>
-  )
-}
-
-// hero_id is required for items, so when no hero is picked we don't fetch — we
-// point the user at the "My hero" control in the scope bar (rule: empty states
-// explain themselves). usePlayedHeroes tells us how many heroes are available.
-function ItemsNoHero() {
-  const { scope } = useScope()
-  const heroes = usePlayedHeroes(scope)
-  const count = heroes.data?.length ?? 0
-  return (
-    <EmptyState title="Pick a hero to see item stats.">
-      <p>
-        Items are per-hero, so choose one with the <strong>My hero</strong>{' '}
-        selector in the scope bar above.
-        {count > 0 && ` You’ve played ${count} hero${count === 1 ? '' : 'es'} on this account.`}
-      </p>
-    </EmptyState>
-  )
-}
-
-// Hero chosen, but no item meets the current scope. Explain why using live sync
-// counts rather than a blank table (presentation rule 5).
-function ItemsEmpty() {
-  const sync = useSyncStatus()
-  return (
-    <EmptyState title="No items to show for this hero yet.">
-      <QueryBoundary query={sync}>
-        {(s) => (
-          <>
-            <p>
-              {s.fetched.toLocaleString()} matches fetched ·{' '}
-              {s.queue_depth.toLocaleString()} queued ·{' '}
-              {s.unavailable.toLocaleString()} unavailable.
-            </p>
-            {s.fetched === 0 ? (
-              <p>
-                The worker hasn’t ingested any matches yet. Add an account with{' '}
-                <code>python -m ingest add-account &lt;id&gt; --self</code>, run{' '}
-                <code>python -m ingest run-daemon</code>, and come back in an hour.
-              </p>
-            ) : (
-              <p>
-                Matches are ingested, but no item on this hero falls in the
-                current scope. Try widening the rank range or switching the era
-                or game mode.
-              </p>
-            )}
-          </>
-        )}
-      </QueryBoundary>
-    </EmptyState>
   )
 }

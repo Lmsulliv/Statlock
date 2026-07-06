@@ -598,6 +598,114 @@ a.btn {
   background: var(--neg-weak-wash);
 }
 
+/* ── Info tooltip (shared VerdictBadge / IntervalBar explainer) ────────────── */
+
+.infotip {
+  position: relative;
+  cursor: help;
+}
+
+/* Inline triggers (badges) hug their content; block triggers (the interval bar)
+   keep whatever layout their own class provides (e.g. .interval's flex column). */
+.infotip:not(.infotip-block) {
+  display: inline-flex;
+  align-items: center;
+}
+
+.infotip:focus-visible {
+  outline: 2px solid var(--pos);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.infotip-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  width: max-content;
+  max-width: 260px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--text);
+  text-align: left;
+  white-space: normal;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+.infotip-summary {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+/* Full-screen catch layer so a tap outside a pinned tip dismisses it. */
+.infotip-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+
+/* Provisional badge: marks a still-deepening result. `is-hidden` keeps the box
+   (visibility, not display) so it can appear/disappear with no layout shift. */
+.provisional-badge {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.provisional-badge.is-hidden {
+  visibility: hidden;
+}
+
+/* ── Onboarding progress (progress bar + card + unlock line) ───────────────── */
+
+.progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--baseline); /* reference gold — progress, not a verdict */
+  border-radius: inherit;
+  transition: width 0.4s ease;
+}
+
+.progress-card .card-title {
+  margin-bottom: 12px;
+}
+
+.progress-note {
+  margin: 10px 0 0;
+}
+
+/* A row that holds a ProvisionalBadge above a screen's content. Min-height keeps
+   the badge's box reserved so toggling visibility never shifts the layout. */
+.screen-badge-row {
+  display: flex;
+  min-height: 26px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+/* The unlock line inside a deep-analysis empty state: a sentence over a bar. */
+.unlock-progress {
+  margin: 4px 0 12px;
+  max-width: 42ch;
+}
+
+.unlock-progress p {
+  margin: 0 0 8px;
+}
+
 /* ── Interval bar (the honesty centerpiece) ───────────────────────────────── */
 
 .interval {
@@ -803,6 +911,52 @@ a.btn {
 
 .current-rank-label {
   font-size: 13px;
+  font-weight: 600;
+}
+
+/* ── Public profile header (the /player/:id read-only view) ───────────────── */
+
+.profile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.profile-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.profile-eyebrow {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.profile-name {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0;
+}
+
+/* The demo call-to-action: prominent button on the landing, quiet link in
+   empty states. */
+.demo-cta {
+  margin-top: 12px;
+}
+
+.demo-link {
+  display: inline-block;
+  margin-top: 12px;
   font-weight: 600;
 }
 
@@ -1568,4 +1722,314 @@ a.btn {
 
 .timeline-arrow {
   color: var(--text-muted);
+}
+
+/* ── Five-tab restructure: header tools, composites, split layouts ────────── */
+
+/* Right cluster of the header: sync pill, management gear, auth controls.
+   Takes over auth-controls' old margin-left:auto push. */
+.header-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-tools .auth-controls {
+  margin-left: 0;
+}
+
+/* Sync status, demoted from an Overview card to a small pill; the full detail
+   lives in its title tooltip. */
+.sync-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  cursor: default;
+}
+
+/* Operational state, not a verdict: green = drained, amber = still working. */
+.sync-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--pos);
+}
+
+.sync-dot.busy {
+  background: var(--baseline);
+}
+
+/* Management gear + dropdown (popover mechanics mirror the rank-range one). */
+.menu {
+  position: relative;
+}
+
+.menu-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.menu-button:hover,
+.menu-button[aria-expanded='true'] {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.menu-panel {
+  position: absolute;
+  z-index: 41;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.menu-item {
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.menu-item:hover {
+  background: var(--surface-2);
+}
+
+/* Segment control rendered from NavLinks (Performance's Overall/Laning/Over
+   time): the anchor variant of .toggle-opt. */
+a.toggle-opt {
+  text-decoration: none;
+  color: var(--text-muted);
+}
+
+a.toggle-opt.active {
+  color: var(--bg);
+}
+
+.segment-nav {
+  margin-bottom: 16px;
+}
+
+/* Overview: rank chart and hero cards share a row on wide screens. */
+.overview-cols {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 18px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .overview-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* A small right-aligned link in a card head (e.g. "Full digest →"). */
+.card-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.card-link:hover {
+  color: var(--text);
+}
+
+/* Focus areas: the top improvement calls as compact clickable cards. */
+.focus-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--gap);
+}
+
+.focus-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.focus-card:hover {
+  border-color: var(--text-muted);
+}
+
+.focus-card-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.focus-card-body {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* Overview hero cards: most-played heroes at a glance. */
+.hero-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--gap);
+}
+
+.hero-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.hero-card:hover {
+  border-color: var(--text-muted);
+}
+
+.hero-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 600;
+}
+
+/* Heroes tab: sidebar list beside the detail pane. */
+.heroes-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 18px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .heroes-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.hero-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hero-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.hero-list-item:hover {
+  background: var(--surface-2);
+}
+
+.hero-list-item.active {
+  background: var(--surface-2);
+  border-color: var(--text-muted);
+}
+
+.hero-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.hero-list-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+/* Hero detail: a stack of section cards. */
+.hero-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.hero-detail-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hero-detail-title .card-title {
+  margin: 0;
+}
+
+.hero-detail-record {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 10px 0 6px;
+}
+
+.hero-detail-record .interval {
+  min-width: 260px;
+}
+
+.hero-detail-note {
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+/* Insights: stacked section cards; scroll-margin keeps a deep-linked section's
+   heading visible below the top of the viewport. */
+.insights {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.insight-section {
+  scroll-margin-top: 16px;
 }

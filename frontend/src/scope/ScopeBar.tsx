@@ -1,20 +1,29 @@
-import { useAccounts, useEras, usePlayedHeroes, useRanks } from '../api/queries'
+import { useAccounts, useEras, usePlayedHeroes, usePlayerProfile, useRanks } from '../api/queries'
 import type { Era, PlayedHero, Rank, TrackedAccount } from '../api/types'
 import { HeroIcon } from '../components/HeroIcon'
 import { RankRange } from '../components/RankRange'
+import { usePlayerPin } from '../player/PlayerContext'
 import { scopeLabel } from './scopeLabel'
 import { useScope } from './useScope'
 
 export function ScopeBar() {
   const { scope, update } = useScope()
+  const pin = usePlayerPin()
   const eras = useEras()
   const heroesQuery = usePlayedHeroes(scope)
   const ranksQuery = useRanks()
   const accountsQuery = useAccounts()
+  // On a public profile the pinned account isn't in the viewer's account list, so
+  // synthesize an entry from the (cached) profile name for the scope label.
+  const profile = usePlayerProfile(pin?.accountId ?? NaN)
   const eraList: Era[] = eras.data?.eras ?? []
   const heroList: PlayedHero[] = heroesQuery.data ?? []
   const rankList: Rank[] = ranksQuery.data ?? []
-  const accountList: TrackedAccount[] = accountsQuery.data ?? []
+  const fetchedAccounts: TrackedAccount[] = accountsQuery.data ?? []
+  const accountList: TrackedAccount[] =
+    pin && profile.data
+      ? [{ account_id: pin.accountId, display_name: profile.data.display_name, is_self: false }]
+      : fetchedAccounts
   // Native <option>s can't hold an <img>, so the icon shows the *selected* hero
   // beside the dropdown rather than one per row.
   const selectedHero = heroList.find((h) => h.hero_id === scope.heroId)
@@ -47,28 +56,33 @@ export function ScopeBar() {
   return (
     <div className="scope-bar">
       <div className="scope-controls">
-        <div className="scope-control">
-          <span className="scope-label">Account</span>
-          <select
-            className="select-input"
-            value={selectedAccountId}
-            onChange={(e) => {
-              const id = Number(e.target.value)
-              // Picking the self account resets accountId to null so it stays out
-              // of the URL (the default); any other account is set explicitly.
-              update({
-                accountId: selfAccount && id === selfAccount.account_id ? null : id,
-              })
-            }}
-          >
-            {accountList.map((a) => (
-              <option key={a.account_id} value={a.account_id}>
-                {a.display_name ?? `Account ${a.account_id}`}
-                {a.is_self ? ' (you)' : ''}
-              </option>
-            ))}
-          </select>
-        </div>
+        {/* The account switcher is a management affordance; on a public /player
+            profile the account is fixed by the URL, so the picker stays hidden
+            (the other filters remain usable). */}
+        {!pin && (
+          <div className="scope-control">
+            <span className="scope-label">Account</span>
+            <select
+              className="select-input"
+              value={selectedAccountId}
+              onChange={(e) => {
+                const id = Number(e.target.value)
+                // Picking the self account resets accountId to null so it stays out
+                // of the URL (the default); any other account is set explicitly.
+                update({
+                  accountId: selfAccount && id === selfAccount.account_id ? null : id,
+                })
+              }}
+            >
+              {accountList.map((a) => (
+                <option key={a.account_id} value={a.account_id}>
+                  {a.display_name ?? `Account ${a.account_id}`}
+                  {a.is_self ? ' (you)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div className="scope-control">
           <span className="scope-label">My hero</span>

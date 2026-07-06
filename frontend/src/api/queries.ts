@@ -3,8 +3,10 @@ import type { Scope } from '../scope/useScope'
 import { deleteJson, fetchJson, postJson, putJson, scopeParams } from './client'
 import type {
   AccountName,
+  AccountProgress,
   DeathPatternsResponse,
   ErasResponse,
+  HeroRecordsResponse,
   Improvement,
   ItemRow,
   LaningRow,
@@ -12,8 +14,9 @@ import type {
   MatchupRow,
   Me,
   Overview,
-  PerformanceRow,
+  PerformanceResponse,
   PlayedHero,
+  PlayerProfile,
   Rank,
   RecurringPlayersResponse,
   SyncStatus,
@@ -53,7 +56,7 @@ export function usePerformance(scope: Scope) {
   const params = scopeParams(scope)
   return useQuery({
     queryKey: ['performance', params],
-    queryFn: () => fetchJson<PerformanceRow[]>('/api/performance', params),
+    queryFn: () => fetchJson<PerformanceResponse>('/api/performance', params),
   })
 }
 
@@ -163,6 +166,26 @@ export function useSyncStatus(refetchInterval?: number) {
   })
 }
 
+// Onboarding progress for one account, polled while a fresh import ingests. The
+// poll drives itself: refetchInterval is a *function* TanStack Query calls after
+// each fetch, so we keep polling every 5s only while the drain is actively
+// working (a prioritized or backfill match is still pending) and stop once it's
+// idle. Deferred rows can linger indefinitely, so they deliberately don't keep
+// the poll alive. `enabled` gates the fetch until we know which account to ask
+// about (null = no self account resolved yet).
+export function useAccountProgress(accountId: number | null) {
+  return useQuery({
+    queryKey: ['account-progress', accountId],
+    queryFn: () => fetchJson<AccountProgress>(`/api/accounts/${accountId}/progress`),
+    enabled: accountId !== null,
+    refetchInterval: (query) => {
+      const d = query.state.data
+      if (!d) return 5000 // keep polling until the first response lands
+      return d.prioritized_pending + d.backfill_pending > 0 ? 5000 : false
+    },
+  })
+}
+
 export function useEras() {
   return useQuery({
     queryKey: ['eras'],
@@ -214,6 +237,20 @@ export function useMe() {
   })
 }
 
+// The public profile header for the shareable /player/:accountId route (and the
+// friendly "not tracked here" fallback). `enabled` guards against a non-numeric
+// path param (Number('abc') is NaN): we skip the fetch and let the caller show
+// the friendly page. staleTime is generous — a profile name/rank rarely changes
+// within a visit.
+export function usePlayerProfile(accountId: number) {
+  return useQuery({
+    queryKey: ['player-profile', accountId],
+    queryFn: () => fetchJson<PlayerProfile>(`/api/players/${accountId}/profile`),
+    enabled: Number.isFinite(accountId),
+    staleTime: 5 * 60 * 1000,
+  })
+}
+
 // Log out (revoke the session) then hard-reload to the root, so all per-user data
 // refetches as anonymous and the cleared cookies take effect. A full reload is the
 // simplest correct reset for cookie-based auth.
@@ -236,6 +273,17 @@ export function useAccounts() {
   })
 }
 
+// The account the current scope actually resolves to: the explicitly chosen one,
+// else the self account (what the server defaults to when account_id is absent).
+// The progress endpoint is keyed by id and can't take "null = self", so screens
+// that show progress resolve the id here first. Returns null until the accounts
+// list loads or when there is no self account yet.
+export function useEffectiveAccountId(scope: Scope): number | null {
+  const accounts = useAccounts()
+  if (scope.accountId !== null) return scope.accountId
+  return accounts.data?.find((a) => a.is_self)?.account_id ?? null
+}
+
 // Import a tracked account (the owner-gated POST /api/accounts). The server only
 // records the account and returns 202; the worker ingests later, so on success
 // we refresh the accounts list and the sync-status badge (queue depth bumps as
@@ -248,6 +296,7 @@ export function useAddAccount() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['accounts'] })
       qc.invalidateQueries({ queryKey: ['sync-status'] })
+      qc.invalidateQueries({ queryKey: ['account-progress'] })
     },
   })
 }
@@ -280,6 +329,18 @@ export function useClearName() {
     mutationFn: (accountId: number) =>
       deleteJson<AccountName>(`/api/accounts/${accountId}/name`),
     onSuccess: () => invalidateNames(qc),
+  })
+}
+
+// Per-hero win/loss records (games, Wilson interval, verdict vs the account's
+// own overall rate). Feeds the Heroes list and the Overview hero cards; the
+// most-played default on /heroes is derived from these rows client-side (a
+// sort, not a statistic).
+export function useHeroRecords(scope: Scope) {
+  const params = scopeParams(scope)
+  return useQuery({
+    queryKey: ['hero-records', params],
+    queryFn: () => fetchJson<HeroRecordsResponse>('/api/hero-records', params),
   })
 }
 

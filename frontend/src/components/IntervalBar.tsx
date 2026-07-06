@@ -1,5 +1,6 @@
 import type { Verdict } from '../api/types'
-import { VERDICT_TONE } from './verdict'
+import { InfoTip } from './InfoTip'
+import { INTERVAL_TIP, VERDICT_TONE } from './verdict'
 
 interface Props {
   winrate: number | null
@@ -45,13 +46,20 @@ export function IntervalBar({
   const left = (x: number) => `${(clamp(posOf(x)) * 100).toFixed(2)}%`
   const hasInterval = ciLow !== null && ciHigh !== null
 
-  const title =
+  const summary =
     `${fmt(winrate)} · 95% CI ${fmt(ciLow)}–${fmt(ciHigh)}` +
     (globalRate !== null ? ` · baseline ${fmt(globalRate)}` : ' · no baseline')
+  // The numeric summary leads the tip; the plain-language explainer follows.
+  const tip = (
+    <>
+      <strong className="infotip-summary">{summary}</strong>
+      {INTERVAL_TIP}
+    </>
+  )
 
   return (
-    <div className="interval">
-      <div className={`interval-bar tone-${tone}`} title={title}>
+    <InfoTip tip={tip} block className="interval">
+      <div className={`interval-bar tone-${tone}`}>
         <div className="interval-track" />
         {globalRate !== null && (
           <div className="interval-baseline" style={{ left: left(globalRate) }} />
@@ -81,6 +89,6 @@ export function IntervalBar({
           <span className="interval-baseline-key">baseline {fmt(globalRate)}</span>
         )}
       </div>
-    </div>
+    </InfoTip>
   )
 }

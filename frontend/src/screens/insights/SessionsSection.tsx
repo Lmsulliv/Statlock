@@ -1,23 +1,25 @@
-import { useTilt, useSyncStatus } from '../api/queries'
-import type { TiltBucket, TiltResponse } from '../api/types'
-import { BaselineCell, DeltaCell } from '../components/cells'
-import { EmptyState } from '../components/EmptyState'
-import { IntervalBar } from '../components/IntervalBar'
-import { QueryBoundary } from '../components/QueryBoundary'
-import { SampleSize } from '../components/SampleSize'
-import { VerdictBadge } from '../components/VerdictBadge'
-import { useScope } from '../scope/useScope'
+import { useSyncStatus, useTilt } from '../../api/queries'
+import type { TiltBucket, TiltResponse } from '../../api/types'
+import { BaselineCell, DeltaCell } from '../../components/cells'
+import { DemoProfileLink } from '../../components/DemoProfileLink'
+import { EmptyState } from '../../components/EmptyState'
+import { IntervalBar } from '../../components/IntervalBar'
+import { ProvisionalBadge } from '../../components/ProvisionalBadge'
+import { QueryBoundary } from '../../components/QueryBoundary'
+import { SampleSize } from '../../components/SampleSize'
+import { VerdictBadge } from '../../components/VerdictBadge'
+import type { Scope } from '../../scope/useScope'
 
 const pct = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100)}%`)
 
-export function Tilt() {
-  const { scope } = useScope()
+// The old Tilt screen's body, retitled "Do you tilt?" by its Insights card.
+// The two bucket tables sit side by side — they're the same shape and read
+// together (session fatigue vs loss-streak pressure).
+export function SessionsSection({ scope }: { scope: Scope }) {
   const tilt = useTilt(scope)
-
   return (
-    <section>
-      <h1 className="screen-title">Tilt</h1>
-      <p className="screen-sub">
+    <>
+      <p className="muted improve-hint">
         Measures how you perform across a single sitting. Games are grouped into
         sessions, with a new session starting after a break of about three hours,
         then split by how deep into the session each game falls and by how many
@@ -29,7 +31,7 @@ export function Tilt() {
       <QueryBoundary query={tilt}>
         {(data) => (data.overall.games === 0 ? <TiltEmpty /> : <TiltBody data={data} />)}
       </QueryBoundary>
-    </section>
+    </>
   )
 }
 
@@ -37,37 +39,42 @@ function TiltBody({ data }: { data: TiltResponse }) {
   const sessions = `${data.sessions.toLocaleString()} session${data.sessions === 1 ? '' : 's'}`
   return (
     <div className="tilt">
+      <div className="screen-badge-row">
+        <ProvisionalBadge show={data.provisional} />
+      </div>
       <p className="muted tilt-summary">
         {data.overall.games.toLocaleString()} games across {sessions} · a session
         is play with gaps under {data.session_gap_hours}h · baseline is your
         overall win rate, {pct(data.overall.winrate)}.
       </p>
 
-      <section className="tilt-section">
-        <h2 className="improve-heading">By game number in session</h2>
-        <p className="muted">
-          Do you fade as a sitting wears on? Game 1 is the first after a{' '}
-          {data.session_gap_hours}h+ break.
-        </p>
-        <TiltTable rows={data.by_session_index} firstHeader="Game #" />
-      </section>
+      <div className="team-cols">
+        <section className="tilt-section">
+          <h3 className="improve-heading">By game number in session</h3>
+          <p className="muted">
+            Do you fade as a sitting wears on? Game 1 is the first after a{' '}
+            {data.session_gap_hours}h+ break.
+          </p>
+          <TiltTable rows={data.by_session_index} firstHeader="Game #" />
+        </section>
 
-      <section className="tilt-section">
-        <h2 className="improve-heading">By loss streak</h2>
-        <p className="muted">
-          After losing N in a row this session, how do you do on the next game?
-          The streak resets after any win or a break.
-        </p>
-        <TiltTable rows={data.by_loss_streak} firstHeader="Going in" />
-      </section>
+        <section className="tilt-section">
+          <h3 className="improve-heading">By loss streak</h3>
+          <p className="muted">
+            After losing N in a row this session, how do you do on the next game?
+            The streak resets after any win or a break.
+          </p>
+          <TiltTable rows={data.by_loss_streak} firstHeader="Going in" />
+        </section>
+      </div>
     </div>
   )
 }
 
-// Same columns as Matchups, minus the hero icon: the first column is the bucket
-// label and the baseline column is relabeled "Your overall" because that's the
-// reference here. Rows render in the server's natural order (the progression is
-// the signal), so this table isn't sortable.
+// Same columns as the matchup table, minus the hero icon: the first column is
+// the bucket label and the baseline column is relabeled "Your overall" because
+// that's the reference here. Rows render in the server's natural order (the
+// progression is the signal), so this table isn't sortable.
 function TiltTable({ rows, firstHeader }: { rows: TiltBucket[]; firstHeader: string }) {
   return (
     <table className="data-table">
@@ -120,11 +127,15 @@ function TiltTable({ rows, firstHeader }: { rows: TiltBucket[]; firstHeader: str
 }
 
 // No sessions in scope: explain why with the live sync counts (presentation
-// rule 5 / scenario 6), mirroring the other screens' empty states.
+// rule 5 / scenario 6), mirroring the other empty states.
 function TiltEmpty() {
   const sync = useSyncStatus()
   return (
     <EmptyState title="No sessions to analyze yet.">
+      <p>
+        How your win rate holds up deep into a play session and across loss
+        streaks — your tilt signature — will appear here.
+      </p>
       <QueryBoundary query={sync}>
         {(s) => (
           <>
@@ -149,6 +160,7 @@ function TiltEmpty() {
           </>
         )}
       </QueryBoundary>
+      <DemoProfileLink />
     </EmptyState>
   )
 }

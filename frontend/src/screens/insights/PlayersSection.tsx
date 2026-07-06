@@ -1,13 +1,14 @@
-import { useRecurringPlayers, useSyncStatus } from '../api/queries'
-import type { RecurringPlayer, RecurringPlayersResponse } from '../api/types'
-import { BaselineCell, DeltaCell } from '../components/cells'
-import { EmptyState } from '../components/EmptyState'
-import { InlineRename } from '../components/InlineRename'
-import { IntervalBar } from '../components/IntervalBar'
-import { QueryBoundary } from '../components/QueryBoundary'
-import { SampleSize } from '../components/SampleSize'
-import { VerdictBadge } from '../components/VerdictBadge'
-import { useScope } from '../scope/useScope'
+import { useRecurringPlayers, useSyncStatus } from '../../api/queries'
+import type { RecurringPlayer, RecurringPlayersResponse } from '../../api/types'
+import { BaselineCell, DeltaCell } from '../../components/cells'
+import { DemoProfileLink } from '../../components/DemoProfileLink'
+import { EmptyState } from '../../components/EmptyState'
+import { InlineRename } from '../../components/InlineRename'
+import { IntervalBar } from '../../components/IntervalBar'
+import { QueryBoundary } from '../../components/QueryBoundary'
+import { SampleSize } from '../../components/SampleSize'
+import { VerdictBadge } from '../../components/VerdictBadge'
+import type { Scope } from '../../scope/useScope'
 
 const pct = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100)}%`)
 
@@ -16,14 +17,13 @@ const pct = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100)}%
 const playerLabel = (p: RecurringPlayer) =>
   p.display_name ?? `Account ${p.account_id}`
 
-export function RecurringPlayers() {
-  const { scope } = useScope()
+// The old Recurring players screen's body: teammates and opponents side by
+// side, each judged against your own rate over the same matches.
+export function PlayersSection({ scope }: { scope: Scope }) {
   const recurring = useRecurringPlayers(scope)
-
   return (
-    <section>
-      <h1 className="screen-title">Recurring players</h1>
-      <p className="screen-sub">
+    <>
+      <p className="muted improve-hint">
         The other real players who keep turning up across your matches, split
         into <strong>teammates</strong> (your win rate <em>with</em> them) and{' '}
         <strong>opponents</strong> (your win rate <em>against</em> them). Each is
@@ -36,14 +36,10 @@ export function RecurringPlayers() {
       </p>
       <QueryBoundary query={recurring}>
         {(data) =>
-          data.overall.games === 0 ? (
-            <RecurringEmpty />
-          ) : (
-            <RecurringBody data={data} />
-          )
+          data.overall.games === 0 ? <RecurringEmpty /> : <RecurringBody data={data} />
         }
       </QueryBoundary>
-    </section>
+    </>
   )
 }
 
@@ -58,31 +54,32 @@ function RecurringBody({ data }: { data: RecurringPlayersResponse }) {
         off, and under the verdict floor they read “not enough data.”
       </p>
 
-      <section className="recurring-section">
-        <h2 className="improve-heading">Teammates: win rate with</h2>
-        <p className="muted">
-          Players who keep landing on your team, most-shared first. A confirmed
-          strength is someone you genuinely win more alongside.
-        </p>
-        <RecurringTable rows={data.teammates} firstHeader="Teammate" />
-      </section>
+      <div className="team-cols">
+        <section className="recurring-section">
+          <h3 className="improve-heading">Teammates: win rate with</h3>
+          <p className="muted">
+            Players who keep landing on your team, most-shared first. A confirmed
+            strength is someone you genuinely win more alongside.
+          </p>
+          <RecurringTable rows={data.teammates} firstHeader="Teammate" />
+        </section>
 
-      <section className="recurring-section">
-        <h2 className="improve-heading">Opponents: win rate against</h2>
-        <p className="muted">
-          Players you keep running into on the other side. A confirmed weakness is
-          a genuine nemesis: you beat them less than you usually do.
-        </p>
-        <RecurringTable rows={data.opponents} firstHeader="Opponent" />
-      </section>
+        <section className="recurring-section">
+          <h3 className="improve-heading">Opponents: win rate against</h3>
+          <p className="muted">
+            Players you keep running into on the other side. A confirmed weakness is
+            a genuine nemesis: you beat them less than you usually do.
+          </p>
+          <RecurringTable rows={data.opponents} firstHeader="Opponent" />
+        </section>
+      </div>
     </div>
   )
 }
 
-// Same columns as Tilt (and Matchups, minus the hero icon): the first column is
-// the player, the baseline column is "Your overall" because that's the reference
-// here. Rows render in the server's order (most-shared first), so this table
-// isn't re-sortable.
+// Same columns as the tilt table: the first column is the player, the baseline
+// column is "Your overall" because that's the reference here. Rows render in
+// the server's order (most-shared first), so this table isn't re-sortable.
 function RecurringTable({ rows, firstHeader }: { rows: RecurringPlayer[]; firstHeader: string }) {
   if (rows.length === 0) {
     return (
@@ -147,11 +144,15 @@ function RecurringTable({ rows, firstHeader }: { rows: RecurringPlayer[]; firstH
 }
 
 // No matches in scope: explain why with the live sync counts (presentation rule
-// 5 / scenario 6), mirroring the other screens' empty states.
+// 5 / scenario 6), mirroring the other empty states.
 function RecurringEmpty() {
   const sync = useSyncStatus()
   return (
     <EmptyState title="No recurring players to show yet.">
+      <p>
+        The teammates and opponents who show up in your matches most — and your
+        win rate with and against each — will appear here.
+      </p>
       <QueryBoundary query={sync}>
         {(s) => (
           <>
@@ -176,6 +177,7 @@ function RecurringEmpty() {
           </>
         )}
       </QueryBoundary>
+      <DemoProfileLink />
     </EmptyState>
   )
 }

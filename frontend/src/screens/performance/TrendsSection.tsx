@@ -1,9 +1,11 @@
 import { useState } from 'react'
-import { useSyncStatus, useTrends, type TrendsParams } from '../api/queries'
-import type { TrendMetric, TrendPoint } from '../api/types'
-import { EmptyState } from '../components/EmptyState'
-import { QueryBoundary } from '../components/QueryBoundary'
-import { useScope } from '../scope/useScope'
+import { useSyncStatus, useTrends, type TrendsParams } from '../../api/queries'
+import type { TrendMetric, TrendPoint } from '../../api/types'
+import { DemoProfileLink } from '../../components/DemoProfileLink'
+import { EmptyState } from '../../components/EmptyState'
+import { ProvisionalBadge } from '../../components/ProvisionalBadge'
+import { QueryBoundary } from '../../components/QueryBoundary'
+import type { Scope } from '../../scope/useScope'
 
 const DEFAULT_WINDOW = 20 // mirrors stats.trends.TRENDS_WINDOW_DEFAULT
 
@@ -11,8 +13,11 @@ const fmtNum = (x: number | null) =>
   x === null ? '—' : x.toLocaleString(undefined, { maximumFractionDigits: 2 })
 const fmtPct = (x: number | null) => (x === null ? '—' : `${(x * 100).toFixed(1)}%`)
 
-export function Trends() {
-  const { scope } = useScope()
+// The old Trends screen's body: win rate and per-game numbers over time. The
+// view toggles are UI state, not scope, so they stay local useState (they'd be
+// erased from the URL by the scope bar anyway — useScope.update() rebuilds the
+// query string from scope keys only).
+export function TrendsSection({ scope }: { scope: Scope }) {
   const [opts, setOpts] = useState<TrendsParams>({
     mode: 'rolling',
     granularity: 'week',
@@ -21,11 +26,10 @@ export function Trends() {
   const trends = useTrends(scope, opts)
 
   return (
-    <section>
-      <h1 className="screen-title">Trends</h1>
+    <>
       <p className="screen-sub">
         Are you getting better? Win rate and your per-game numbers over time, the
-        same stats as Performance but tracked match by match. Toggle a rolling
+        same stats as the Overall view but tracked match by match. Toggle a rolling
         average over your last N games to smooth the noise, or calendar buckets to
         compare week against week. The gold dashed line is the reference — your
         overall win rate, or the field's average for a metric. Thin windows can't
@@ -39,15 +43,20 @@ export function Trends() {
           data.metrics.length === 0 ? (
             <TrendsEmpty />
           ) : (
-            <div className="trend-grid">
-              {data.metrics.map((m) => (
-                <MetricCard key={m.key} metric={m} />
-              ))}
-            </div>
+            <>
+              <div className="screen-badge-row">
+                <ProvisionalBadge show={data.provisional} />
+              </div>
+              <div className="trend-grid">
+                {data.metrics.map((m) => (
+                  <MetricCard key={m.key} metric={m} />
+                ))}
+              </div>
+            </>
           )
         }
       </QueryBoundary>
-    </section>
+    </>
   )
 }
 
@@ -237,11 +246,15 @@ function Sparkline({ metric }: { metric: TrendMetric }) {
 }
 
 // No rows: explain why with the live sync counts rather than a blank grid
-// (presentation rule 5). Mirrors PerformanceEmpty.
+// (presentation rule 5).
 function TrendsEmpty() {
   const sync = useSyncStatus()
   return (
     <EmptyState title="No trend data to show yet.">
+      <p>
+        Your key metrics plotted over time — rolling or per-week — so you can see
+        whether you’re getting better, will appear here.
+      </p>
       <QueryBoundary query={sync}>
         {(s) => (
           <>
@@ -266,6 +279,7 @@ function TrendsEmpty() {
           </>
         )}
       </QueryBoundary>
+      <DemoProfileLink />
     </EmptyState>
   )
 }
