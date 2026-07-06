@@ -133,6 +133,28 @@ def test_empty_database_renders_empty_states(empty_db_path):
     assert eras["pending_candidates"] == []
 
 
+# ── Sync status: backfill is visible but not part of the fresh backlog ────────
+
+def test_sync_status_reports_backfill_separately(db):
+    rows = [
+        (1, "pending"), (2, "pending"), (3, "failed"),
+        (4, "backfill"), (5, "deferred"), (6, "fetched"),
+    ]
+    for match_id, status in rows:
+        db.execute(
+            "INSERT INTO fetch_queue(match_id, discovered_at, status)"
+            " VALUES (?, '2026-06-11', ?)", (match_id, status))
+    db.commit()
+
+    status = service.sync_status(db)
+
+    assert status["backfill"] == 1                # its own top-level bucket
+    assert status["queue"]["backfill"] == 1
+    # Depth counts only the fresh backlog: backfill and deferred are
+    # deprioritized background work, not matches a user is waiting on.
+    assert status["queue_depth"] == 3
+
+
 # ── Game-mode separation: Street Brawl never mixes with Normal ────────────────
 
 def test_game_mode_separation(api_db):

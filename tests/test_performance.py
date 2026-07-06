@@ -113,10 +113,19 @@ def _metrics(row):
     return {m["key"]: m for m in row["metrics"]}
 
 
+def _perf_rows(conn, scope):
+    """service.performance now returns {"provisional", "rows"}; the tests below
+    exercise the rows, so unwrap them here in one place."""
+    return service.performance(conn, scope)["rows"]
+
+
 # ── Structure: overall first, then heroes A->Z ───────────────────────────────
 
 def test_rows_are_overall_then_heroes_alphabetical(perf_db):
-    rows = service.performance(perf_db, make_scope())
+    result = service.performance(perf_db, make_scope())
+    # All metadata-backed fixture, so the result is never provisional.
+    assert result["provisional"] is False
+    rows = result["rows"]
     assert [r["scope"] for r in rows] == ["overall", "hero", "hero"]
     assert rows[0]["hero_id"] is None and rows[0]["games"] == 11   # 6 Wraith + 5 Solo
     assert [r["hero_name"] for r in rows[1:]] == ["Solo", "Wraith"]
@@ -125,7 +134,7 @@ def test_rows_are_overall_then_heroes_alphabetical(perf_db):
 # ── Per-hero personal mean + live population baseline + verdict ───────────────
 
 def test_net_worth_per_min_is_a_clear_strength_vs_population(perf_db):
-    rows = service.performance(perf_db, make_scope())
+    rows = _perf_rows(perf_db, make_scope())
     wraith = _metrics(next(r for r in rows if r["hero_name"] == "Wraith"))
     nw = wraith["net_worth_per_min"]
 
@@ -141,7 +150,7 @@ def test_net_worth_per_min_is_a_clear_strength_vs_population(perf_db):
 
 
 def test_deaths_direction_is_flipped_so_fewer_reads_as_a_strength(perf_db):
-    rows = service.performance(perf_db, make_scope())
+    rows = _perf_rows(perf_db, make_scope())
     deaths = _metrics(next(r for r in rows if r["hero_name"] == "Wraith"))["deaths"]
 
     assert deaths["mean"] == 2.5 and deaths["baseline_mean"] == 6.0
@@ -153,7 +162,7 @@ def test_deaths_direction_is_flipped_so_fewer_reads_as_a_strength(perf_db):
 
 
 def test_damage_taken_direction_is_flipped_so_less_reads_as_a_strength(perf_db):
-    rows = service.performance(perf_db, make_scope())
+    rows = _perf_rows(perf_db, make_scope())
     dmg = _metrics(next(r for r in rows if r["hero_name"] == "Wraith"))["player_damage_taken"]
 
     assert dmg["games"] == 6
@@ -171,7 +180,7 @@ def test_damage_taken_direction_is_flipped_so_less_reads_as_a_strength(perf_db):
 def test_sparse_metric_is_personal_only(perf_db):
     # Healing is NULL for everyone in the fixture -> no personal sample and no
     # baseline, so it must show personal-only, never a comparison against nothing.
-    healing = _metrics(next(r for r in service.performance(perf_db, make_scope())
+    healing = _metrics(next(r for r in _perf_rows(perf_db, make_scope())
                             if r["hero_name"] == "Wraith"))["healing"]
     assert healing["games"] == 0
     assert healing["mean"] is None
@@ -180,7 +189,7 @@ def test_sparse_metric_is_personal_only(perf_db):
 
 
 def test_owner_only_hero_has_no_baseline(perf_db):
-    solo = _metrics(next(r for r in service.performance(perf_db, make_scope())
+    solo = _metrics(next(r for r in _perf_rows(perf_db, make_scope())
                          if r["hero_name"] == "Solo"))
     nw = solo["net_worth_per_min"]
     assert nw["mean"] is not None            # the owner has personal data...
@@ -193,17 +202,18 @@ def test_owner_only_hero_has_no_baseline(perf_db):
 
 def test_api_and_cli_match_the_service(perf_db, capsys):
     scope = make_scope()
-    rows = service.performance(perf_db, scope)
+    result = service.performance(perf_db, scope)
 
-    api_rows = TestClient(app).get("/api/performance").json()
-    assert api_rows == rows
+    api_result = TestClient(app).get("/api/performance").json()
+    assert api_result == result
 
     cli.main(["performance"])                 # reads the same DB via DEADLOCK_DB
     out = capsys.readouterr().out
-    assert out.strip() == cli.render_performance(rows, scope).strip()
+    assert out.strip() == cli.render_performance(result["rows"], scope).strip()
 
 
-# ── Empty database renders an empty list, not an error ───────────────────────
+# ── Empty database renders an empty result, not an error ─────────────────────
 
 def test_empty_database_returns_no_rows(empty_db_path):
-    assert TestClient(app).get("/api/performance").json() == []
+    assert TestClient(app).get("/api/performance").json() == {
+        "provisional": False, "rows": []}

@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from api import match_detail, queries, service
 from api.app import app
+from tracker import rawstore
 from tracker.db import connect
 from tracker.migrate import migrate
 
@@ -145,6 +146,21 @@ def test_service_enriches_players_and_marks_you(db):
     assert me["hero_name"] == "Wraith" and me["image_url"] == f"http://img/{H_ME}.png"
     assert me["is_you"] is True
     assert all(p["is_you"] is False for p in detail["players"] if p["account_id"] != ME)
+
+
+def test_service_renders_compressed_raw_json(db):
+    """match_detail must read a COMPRESSED raw_json (what insert_match writes now)
+    just as it reads a legacy uncompressed one. _seed stores plain text (legacy);
+    here we overwrite that match's raw_json with the compressed form and confirm
+    the roster still parses."""
+    _seed(db)
+    db.execute("UPDATE matches SET raw_json = ? WHERE match_id = ?",
+               (rawstore.dump(json.dumps(_meta())), MATCH_ID))
+    db.commit()
+
+    detail = service.match_detail(db, MATCH_ID)
+    assert len(detail["players"]) == 4
+    assert next(p for p in detail["players"] if p["account_id"] == ME)["is_you"] is True
 
 
 def test_service_orders_and_enriches_your_purchases(db):

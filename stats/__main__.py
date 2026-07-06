@@ -299,8 +299,8 @@ def main(argv=None) -> None:
             print(render_matchups(rows, scope, args.hero))
         elif args.command == "performance":
             scope = _scope_from_args(args)
-            rows = service.performance(conn, scope)
-            print(render_performance(rows, scope))
+            result = service.performance(conn, scope)
+            print(render_performance(result["rows"], scope))
         elif args.command == "laning":
             scope = _scope_from_args(args)
             rows = service.laning(conn, scope)

@@ -12,6 +12,7 @@ import dataclasses
 import json
 import math
 import sqlite3
+from datetime import timedelta
 
 from stats import (
     VERDICT_CLEAR_STRENGTH,
@@ -43,6 +44,7 @@ from stats.trends import (
 
 from ingest import accounts as ingest_accounts
 from ingest.util import DEFAULT_USER_ID, utcnow
+from tracker import rawstore
 
 from api import cache
 from api import match_detail as detail
@@ -53,9 +55,27 @@ _RATE_DP = 4   # decimal places for rates (keeps JSON clean and deterministic)
 _TIME_DP = 1   # decimal places for purchase-timing seconds
 _METRIC_DP = 2  # decimal places for continuous metrics (net worth/min, KDA, ...)
 
+# How many accounts one user may link (user_accounts rows). Their self account
+# from first login is one of these rows, so it counts toward the cap.
+MAX_ACCOUNTS_PER_USER = 5
+
+
+class AccountLimitError(Exception):
+    """A user tried to link more than MAX_ACCOUNTS_PER_USER accounts. The API turns
+    this into a 409 (add_account raises it before touching the DB)."""
+
 
 def _round(x: float | None, ndigits: int = _RATE_DP) -> float | None:
     return None if x is None else round(x, ndigits)
+
+
+def _is_provisional(rows: list[dict]) -> bool:
+    """True when any contributing row is a discovery summary awaiting full
+    metadata (source == 'summary'; see v_account_matches). The top-level
+    `provisional` flag every summary-capable screen carries, so the UI can badge a
+    result as "will improve" and re-poll. Rows without a `source` key (never
+    summary-backed) count as full."""
+    return any(r.get("source") == "summary" for r in rows)
 
 
 def _resolved(conn: sqlite3.Connection, scope: Scope) -> Scope | None:
@@ -415,22 +435,26 @@ def _continuous_rows(conn: sqlite3.Connection, scope: Scope,
     return rows
 
 
-def performance(conn: sqlite3.Connection, scope: Scope) -> list[dict]:
+def performance(conn: sqlite3.Connection, scope: Scope) -> dict:
     """Continuous-metric performance per hero and overall, each compared to a live
     population baseline (queries.baseline_performance). The continuous twin of
     matchups(): personal means + t-intervals + verdicts from stats/, assembled
     here. Net worth is per-minute; the rest are per-game averages.
 
-    One object per scope row -- the overall row first, then heroes A->Z -- each
-    carrying a `metrics` list in the canonical PERF_METRICS order. The per-metric
-    `games` is the non-null sample size (so sparse metrics like healing read
-    honestly), while the row-level `games` is the match count for that scope."""
+    Returns {"provisional": bool, "rows": [...]} -- one object per scope row in
+    `rows` (the overall row first, then heroes A->Z), each carrying a `metrics`
+    list in the canonical PERF_METRICS order. The per-metric `games` is the
+    non-null sample size (so sparse metrics like healing read honestly), while the
+    row-level `games` is the match count for that scope. `provisional` is true when
+    any contributing match is still a discovery summary awaiting full metadata (see
+    v_account_matches); the population baseline itself is always metadata-only."""
     scope = _resolved(conn, scope)
     if scope is None:
-        return []
+        return {"provisional": False, "rows": []}
     personal = queries.personal_performance(conn, scope)
-    return _continuous_rows(conn, scope, queries.PERF_METRICS, personal,
-                            queries.baseline_performance)
+    rows = _continuous_rows(conn, scope, queries.PERF_METRICS, personal,
+                            cache.cached_baseline_performance)
+    return {"provisional": _is_provisional(personal), "rows": rows}
 
 
 # ── Laning (early-game continuous metrics at the lane-end mark) ───────────────
@@ -450,7 +474,7 @@ def laning(conn: sqlite3.Connection, scope: Scope) -> list[dict]:
         return []
     personal = queries.personal_laning(conn, scope)
     return _continuous_rows(conn, scope, queries.LANING_METRICS, personal,
-                            queries.baseline_laning)
+                            cache.cached_baseline_laning)
 
 
 # ── Trends (performance over time) ───────────────────────────────────────────
@@ -514,7 +538,7 @@ def trends(conn: sqlite3.Connection, scope: Scope, *, mode: str = "rolling",
         window_games = TRENDS_WINDOW_DEFAULT
 
     empty = {"mode": mode, "granularity": granularity,
-             "window_games": window_games, "metrics": []}
+             "window_games": window_games, "provisional": False, "metrics": []}
     scope = _resolved(conn, scope)
     if scope is None:
         return empty
@@ -529,7 +553,7 @@ def trends(conn: sqlite3.Connection, scope: Scope, *, mode: str = "rolling",
         buckets = rolling_windows(series, window_games)
 
     played = sorted({r["hero_id"] for r in series})
-    baseline = queries.baseline_performance(conn, scope, played)
+    baseline = cache.cached_baseline_performance(conn, scope, played)
     base_overall = baseline.get("overall") or {}
 
     total_wins = sum(r["won"] for r in series)
@@ -551,7 +575,8 @@ def trends(conn: sqlite3.Connection, scope: Scope, *, mode: str = "rolling",
         })
 
     return {"mode": mode, "granularity": granularity,
-            "window_games": window_games, "metrics": metrics}
+            "window_games": window_games,
+            "provisional": _is_provisional(series), "metrics": metrics}
 
 
 # ── Improvement digest ───────────────────────────────────────────────────────
@@ -642,7 +667,7 @@ def win_conditions(conn: sqlite3.Connection, scope: Scope,
         return []
 
     my_hero_ids = [hero_id] if hero_id is not None else sorted({r["hero_id"] for r in rows})
-    baselines = queries.baseline_laning(conn, scope, my_hero_ids)
+    baselines = cache.cached_baseline_laning(conn, scope, my_hero_ids)
 
     out = []
     for cond in WIN_CONDITIONS:
@@ -741,12 +766,15 @@ def tilt(conn: sqlite3.Connection, scope: Scope) -> dict:
         "by_session_index": [], "by_loss_streak": [],
         "overall": {"games": 0, "wins": 0, "winrate": None},
         "sessions": 0, "session_gap_hours": SESSION_GAP_S / 3600,
+        "provisional": False,
     }
     scope = _resolved(conn, scope)
     if scope is None:
         return empty
 
-    results = queries.account_results(conn, scope)
+    # full_only=False: tilt needs only win/loss and match time, both of which a
+    # provisional summary carries, so a fresh import gets a session view at once.
+    results = queries.account_results(conn, scope, full_only=False)
     sessions = group_sessions(results)
     overall_games = len(results)
     overall_wins = sum(r["won"] for r in results)
@@ -768,13 +796,15 @@ def tilt(conn: sqlite3.Connection, scope: Scope) -> dict:
         },
         "sessions": len(sessions),
         "session_gap_hours": SESSION_GAP_S / 3600,
+        "provisional": _is_provisional(results),
     }
 
 
 # ── Recurring players (teammates you win with, opponents you beat) ───────────
 
 def recurring_players(conn: sqlite3.Connection, scope: Scope,
-                      hero_id: int | None = None) -> dict:
+                      hero_id: int | None = None,
+                      *, user_id: int | None = DEFAULT_USER_ID) -> dict:
     """Other real players who keep sharing the account's matches, split into
     recurring teammates (your win rate WITH them) and opponents (your win rate
     AGAINST them). Like tilt, each is judged against the account's OWN win rate
@@ -782,8 +812,9 @@ def recurring_players(conn: sqlite3.Connection, scope: Scope,
     set -- so a verdict means you do better/worse with (or against) that player
     than your usual self. Co-players below stats.recurring.MIN_CO_OCCURRENCE
     shared games are dropped; thin survivors fall under the verdict floor and
-    read not_enough_data. display_name is resolved (manual label > Steam persona >
-    bare account id) so even untracked co-players surface by their best name."""
+    read not_enough_data. display_name is resolved for the VIEWER (user_id): their
+    own manual label > Steam persona > bare account id, so one viewer's private
+    labels never surface to another (user_id=None -> personas/ids only)."""
     empty = {
         "teammates": [], "opponents": [],
         "overall": {"games": 0, "wins": 0, "winrate": None},
@@ -802,7 +833,8 @@ def recurring_players(conn: sqlite3.Connection, scope: Scope,
 
     split = split_recurring(queries.recurring_co_players(conn, scope, my_hero_id=hero_id))
     names = queries.resolve_names(
-        conn, [c["account_id"] for c in split["teammates"] + split["opponents"]])
+        conn, [c["account_id"] for c in split["teammates"] + split["opponents"]],
+        user_id)
 
     def _row(co: dict) -> dict:
         row = {
@@ -842,6 +874,66 @@ def played_heroes(conn: sqlite3.Connection, scope: Scope) -> list[dict]:
     ]
     heroes.sort(key=lambda h: h["name"])
     return heroes
+
+
+def hero_records(conn: sqlite3.Connection, scope: Scope) -> dict:
+    """Per-hero win/loss record for the scoped account: {provisional, heroes:[...]}.
+    Each hero row carries games, wins, a Wilson interval, and a verdict against the
+    account's OWN overall in-scope win rate (the tilt/recurring self-baseline, via
+    _stat_fields), plus a per-hero `provisional` flag set when any of that hero's
+    contributing matches is still a discovery summary. The top-level `provisional`
+    is the OR across all heroes.
+
+    Reads v_account_matches (queries.hero_record_rows), so a freshly imported
+    account gets a hero list from its provisional summaries and upgrades in place.
+    Heroes sort by name, like played_heroes; the name/icon fall back to str(id) so
+    a brand-new hero with no asset row yet still lists honestly."""
+    empty = {"provisional": False, "heroes": []}
+    resolved = _resolved(conn, scope)
+    if resolved is None:
+        return empty
+
+    rows = queries.hero_record_rows(conn, resolved)
+    if not rows:
+        return empty
+
+    names = queries.hero_names(conn)
+    images = queries.hero_images(conn)
+    overall_games = sum(r["games"] for r in rows)
+    overall_wins = sum((r["wins"] or 0) for r in rows)
+
+    heroes = []
+    for r in rows:
+        hid = r["hero_id"]
+        wins = r["wins"] or 0
+        row = {
+            "hero_id": hid,
+            "hero_name": names.get(hid, str(hid)),
+            "hero_image_url": images.get(hid),
+            "games": r["games"],
+            "wins": wins,
+            "provisional": bool(r["provisional"]),
+        }
+        row.update(_stat_fields(wins, r["games"], overall_wins, overall_games))
+        heroes.append(row)
+
+    heroes.sort(key=lambda h: h["hero_name"].lower())
+    return {"provisional": any(h["provisional"] for h in heroes), "heroes": heroes}
+
+
+# ── Onboarding progress (polled while a fresh import ingests) ─────────────────
+
+def account_progress(conn: sqlite3.Connection, account_id: int, *, now=utcnow) -> dict:
+    """Ingestion progress for one account, for the onboarding UI's poll: how many
+    matches we already know from discovery summaries (`known`), how many have full
+    metadata analyzed (`analyzed`), and the remaining queue depth by tier
+    (`prioritized_pending`, `backfill_pending`, `deferred`). All cheap indexed
+    counts (queries.account_progress_counts). As the drain loop works, `analyzed`
+    climbs toward `known` and the pending tiers fall."""
+    # Polled while a fresh import ingests, but also whenever an idle account is
+    # reopened -- so nudge the daemon to re-check a stale account (mailbox write).
+    _maybe_request_discovery(conn, account_id, now=now)
+    return {"account_id": account_id, **queries.account_progress_counts(conn, account_id)}
 
 
 # ── Rank tiers (for the rank-range selector) ─────────────────────────────────
@@ -914,6 +1006,35 @@ def me(conn: sqlite3.Connection, user_id: int) -> dict:
     return {"user_id": user_id, "account_id": self_id, "display_name": name}
 
 
+def player_profile(conn: sqlite3.Connection, account_id: int) -> dict:
+    """Public profile header for /api/players/{id}/profile and the link-preview
+    og tags: a label-free display name, the current rank, and whether we hold any
+    data for the account.
+
+    Deliberately viewer-agnostic and side-effect-free: names resolve with
+    user_id=None (Steam persona > bare id, never anyone's private label), and it
+    reads only counts/series -- it never calls overview()/account_progress(),
+    which write a discovery request to the mailbox. That keeps this endpoint safe
+    to serve to anonymous visitors and to crawlers hitting /player/{id}.
+
+    has_data is true when the account appears anywhere in our data (as a tracked
+    self account OR merely as a co-player), so a shared link to any real account
+    renders a profile; an unknown id gets has_data=False and the caller shows a
+    friendly "not tracked here" page instead of empty screens."""
+    display_name = queries.resolve_names(conn, [account_id], user_id=None)[account_id]
+    series = queries.mmr_series(conn, account_id)
+    current_rank = (resolve_badge(series[-1]["badge"], queries.list_ranks(conn))
+                    if series else None)
+    counts = queries.account_progress_counts(conn, account_id)
+    has_data = counts["known"] > 0 or counts["analyzed"] > 0
+    return {
+        "account_id": account_id,
+        "display_name": display_name,
+        "current_rank": current_rank,
+        "has_data": has_data,
+    }
+
+
 def add_account(conn: sqlite3.Connection, identifier: int | str,
                 display_name: str | None = None,
                 *, user_id: int = DEFAULT_USER_ID) -> dict:
@@ -931,9 +1052,25 @@ def add_account(conn: sqlite3.Connection, identifier: int | str,
     stored row unchanged (INSERT OR IGNORE), so the response is always the truth on
     disk.
 
-    Raises ValueError (from to_account_id) on an unparseable identifier; the
-    handler turns that into a 400.
+    Raises ValueError (from to_account_id) on an unparseable identifier (400) and
+    AccountLimitError once the user is at MAX_ACCOUNTS_PER_USER (409). Re-adding an
+    account the user already has is idempotent and never counts against the cap.
     """
+    # Normalize first so the "already linked?" check compares the stored id, not the
+    # raw identifier (which may be a SteamID64 or profile URL).
+    normalized = ingest_accounts.to_account_id(identifier)
+    already_linked = conn.execute(
+        "SELECT 1 FROM user_accounts WHERE user_id = ? AND account_id = ?",
+        (user_id, normalized),
+    ).fetchone() is not None
+    if not already_linked:
+        linked = conn.execute(
+            "SELECT COUNT(*) FROM user_accounts WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+        if linked >= MAX_ACCOUNTS_PER_USER:
+            raise AccountLimitError(
+                f"Account limit reached ({MAX_ACCOUNTS_PER_USER} accounts per user)."
+            )
     account_id = ingest_accounts.add_account(conn, identifier,
                                              display_name=display_name, user_id=user_id)
     # account_labels is the single source of manual names, so an add-with-name also
@@ -983,11 +1120,15 @@ def clear_account_name(conn: sqlite3.Connection, account_id: int,
 
 def sync_status(conn: sqlite3.Connection) -> dict:
     counts = queries.queue_counts(conn)
+    # backfill (the older remainder of a first import) is its own bucket,
+    # visible but excluded from queue_depth like deferred: both are
+    # deprioritized background work, not a fresh backlog a user waits on.
     depth = counts.get("pending", 0) + counts.get("failed", 0)
     status = {
         "queue": counts,
         "queue_depth": depth,
         "fetched": counts.get("fetched", 0),
+        "backfill": counts.get("backfill", 0),
         "unavailable": counts.get("unavailable", 0),
         "last_discovery_at": queries.last_discovery_at(conn),
         "last_maintenance_at": queries.last_maintenance_at(conn),
@@ -998,13 +1139,53 @@ def sync_status(conn: sqlite3.Connection) -> dict:
     return status
 
 
-def overview(conn: sqlite3.Connection, scope: Scope) -> dict:
+# How stale an account's last discovery may be before a web hit asks the daemon
+# to refresh it. Matches the daemon's active cadence: an account checked within
+# the last 30 min is already current, so no request is worth filing.
+STALE_DISCOVERY_S = 30 * 60
+
+
+def _maybe_request_discovery(conn: sqlite3.Connection, account_id: int,
+                             *, now=utcnow) -> None:
+    """When an idle account's owner opens its Overview/progress, ask the daemon to
+    re-check it so returning after days away doesn't show stale data. This is a
+    MAILBOX write, not an API call: the web process must never hit the external
+    API (rate limiting lives only in the daemon), so it inserts a discovery_requests
+    row (INSERT OR IGNORE, keyed by account_id) and the daemon's next discover_due
+    pass treats the account as due, then deletes the row.
+
+    Only fires when the account has actually been synced (last_synced_at NOT NULL)
+    and that sync is older than STALE_DISCOVERY_S -- a never-synced account belongs
+    to the daemon's immediate first-import path, and a freshly-checked one is
+    already current, so neither needs a request."""
+    row = conn.execute(
+        "SELECT last_synced_at FROM sync_state WHERE account_id = ?", (account_id,)
+    ).fetchone()
+    if row is None or row["last_synced_at"] is None:
+        return
+    # ISO UTC timestamps compare lexicographically (same trick as maintenance_due).
+    cutoff = (now() - timedelta(seconds=STALE_DISCOVERY_S)).isoformat()
+    if row["last_synced_at"] >= cutoff:
+        return   # checked recently enough; nothing to request
+    conn.execute(
+        "INSERT OR IGNORE INTO discovery_requests(account_id, requested_at)"
+        " VALUES (?, ?)",
+        (account_id, now().isoformat()),
+    )
+    conn.commit()
+
+
+def overview(conn: sqlite3.Connection, scope: Scope, *, now=utcnow) -> dict:
     sync = sync_status(conn)
     resolved = _resolved(conn, scope)
+    if resolved is not None:
+        # Returning to an idle account should feel current: nudge the daemon to
+        # re-check it (a mailbox write, never a direct API call from the web).
+        _maybe_request_discovery(conn, resolved.account_id, now=now)
     if resolved is None:
         return {
             "account_id": None, "mmr_series": [], "current_rank": None,
-            "last_matches": [], "sync": sync,
+            "last_matches": [], "sync": sync, "provisional": False,
             "message": "No tracked account yet. Add one with:"
                        " python -m ingest add-account <id> --self",
         }
@@ -1027,6 +1208,9 @@ def overview(conn: sqlite3.Connection, scope: Scope) -> dict:
         "current_rank": current_rank,
         "last_matches": recent,
         "sync": sync,
+        # Provisional when any recent row is still a discovery summary; each row
+        # also carries its own `source` so the UI can badge that row individually.
+        "provisional": _is_provisional(recent),
     }
     if not recent:
         result["message"] = "No matches ingested yet — the worker may still be syncing."
@@ -1034,28 +1218,35 @@ def overview(conn: sqlite3.Connection, scope: Scope) -> dict:
 
 
 def match_detail(conn: sqlite3.Connection, match_id: int,
-                 account_id: int | None = None) -> dict | None:
+                 account_id: int | None = None,
+                 *, user_id: int | None = DEFAULT_USER_ID) -> dict | None:
     """One match, parsed for display: the 12-player roster, the perspective
     account's purchases, and the whole-match kill/death feed. None if the match
     isn't stored (the endpoint turns that into a 404).
 
     `account_id` is the "you" perspective -- carried from whichever Overview the
-    click came from -- defaulting to the tracked self account. It decides which
-    player is highlighted and whose purchases are shown, but never which match.
-    The roster and feed are parsed from raw_json (the only place player_slot
-    lives); names/images come from the lookup tables, mirroring overview()."""
+    click came from -- defaulting to the VIEWER's tracked self account. It decides
+    which player is highlighted and whose purchases are shown, but never which
+    match. The roster and feed are parsed from raw_json (the only place player_slot
+    lives); names/images come from the lookup tables, mirroring overview(). Roster
+    names resolve for the viewer (user_id): an anonymous viewer (None) sees personas
+    / bare ids, never another user's private labels, and has no self account to
+    anchor the "you" highlight to."""
     row = queries.match_core(conn, match_id)
     if row is None:
         return None
 
-    meta = json.loads(row["raw_json"]) if row["raw_json"] else {}
+    raw = rawstore.load(row["raw_json"])   # transparently decompresses; legacy TEXT passes through
+    meta = json.loads(raw) if raw else {}
     parsed = detail.parse_detail(meta)
-    perspective = account_id if account_id is not None else queries.resolve_self_account_id(conn)
+    perspective = (account_id if account_id is not None
+                   else queries.resolve_self_account_id(conn, user_id)
+                   if user_id is not None else None)
 
     names = queries.hero_names(conn)
     images = queries.hero_images(conn)
     account_names = queries.resolve_names(
-        conn, [p["account_id"] for p in parsed["players"]])
+        conn, [p["account_id"] for p in parsed["players"]], user_id)
 
     players = []
     for p in parsed["players"]:

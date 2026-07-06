@@ -9,12 +9,12 @@ import sqlite3
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from api import auth, service
-from api.config import auth_enabled, base_url, db_path
+from api import auth, meta, service
+from api.config import auth_enabled, base_url, db_path, demo_account_id, open_writes
 from ingest.util import DEFAULT_USER_ID
 from stats.trends import TRENDS_WINDOW_DEFAULT
 from api.scope import (
@@ -65,23 +65,35 @@ def get_optional_user_id(request: Request,
 
 def require_user(request: Request,
                  conn: sqlite3.Connection = Depends(get_conn)) -> int:
-    """Write gate: a real login (401 otherwise) plus, in auth mode, a valid CSRF
-    double-submit token (403 otherwise). Returns the user id the write is scoped
-    to, so a user can only ever write within their own identity. Replaces the old
-    deploy-time owner flag.
+    """Write gate. Fails CLOSED: three cases, in order.
+
+    - Auth on (DEADLOCK_BASE_URL): a real login (401 otherwise) plus a valid CSRF
+      double-submit token (403 otherwise). Returns the session's user id, so a user
+      can only ever write within their own identity.
+    - Auth off but writes explicitly opened (DEADLOCK_OPEN_WRITES=1): the local/dev
+      workflow -- runs as the single default user, no login.
+    - Neither: 403. A bare deploy that forgot to set either variable must reject
+      writes, not silently run them all as the shared default user.
 
     Double-submit CSRF: login sets a non-httpOnly `csrf` cookie; the SPA echoes it
     in the X-CSRF-Token header. A forged cross-site request can send the cookie but
     can't read it to set the header, so the equality check fails."""
-    user_id = _resolve_user(request, conn)
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="Login required.")
     if auth_enabled():
+        user_id = _resolve_user(request, conn)
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Login required.")
         cookie = request.cookies.get(CSRF_COOKIE)
         header = request.headers.get("X-CSRF-Token")
         if not cookie or not header or not secrets.compare_digest(cookie, header):
             raise HTTPException(status_code=403, detail="Invalid or missing CSRF token.")
-    return user_id
+        return user_id
+    if open_writes():
+        return DEFAULT_USER_ID
+    raise HTTPException(
+        status_code=403,
+        detail="Writes are disabled: set DEADLOCK_BASE_URL to enable Steam login, "
+               "or DEADLOCK_OPEN_WRITES=1 for a private single-user deploy.",
+    )
 
 
 def get_scope(
@@ -116,11 +128,23 @@ def get_heroes(scope: Scope = Depends(get_scope),
     return service.played_heroes(conn, scope)
 
 
+@app.get("/api/hero-records")
+def get_hero_records(scope: Scope = Depends(get_scope),
+                     conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+    """Per-hero win/loss record for the scoped account: games, wins, a Wilson
+    interval, and a verdict against the account's own overall win rate. Returns
+    {"provisional": bool, "heroes": [...]} -- provisional when any contributing
+    match is still a discovery summary awaiting full metadata."""
+    return service.hero_records(conn, scope)
+
+
 @app.get("/api/performance")
 def get_performance(scope: Scope = Depends(get_scope),
-                    conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+                    conn: sqlite3.Connection = Depends(get_conn)) -> dict:
     """Continuous-metric performance (net worth/min, KDA, damage, ...) per hero
-    and overall, each vs a live population baseline at this scope."""
+    and overall, each vs a live population baseline at this scope. Returns
+    {"provisional": bool, "rows": [...]} -- provisional when any contributing match
+    is still a discovery summary awaiting full metadata."""
     return service.performance(conn, scope)
 
 
@@ -191,6 +215,8 @@ def post_account(body: AddAccountBody,
     try:
         return service.add_account(conn, body.account_id, body.display_name,
                                    user_id=user_id)
+    except service.AccountLimitError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -218,6 +244,25 @@ def delete_account_name(account_id: int,
     return service.clear_account_name(conn, account_id, user_id=user_id)
 
 
+@app.get("/api/accounts/{account_id}/progress")
+def get_account_progress(account_id: int,
+                         conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+    """Onboarding progress for one account (polled while a fresh import ingests):
+    matches known from discovery summaries, matches with full metadata analyzed,
+    and the remaining queue depth by tier. Cheap indexed counts; no Scope."""
+    return service.account_progress(conn, account_id)
+
+
+@app.get("/api/players/{account_id}/profile")
+def get_player_profile(account_id: int,
+                       conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+    """Public read-only profile header for /player/{id}: a label-free display
+    name, current rank, and whether we hold any data. No auth (reads are open);
+    no Scope; side-effect-free. An unknown account returns 200 with
+    has_data=False so the frontend renders a friendly page, not empty screens."""
+    return service.player_profile(conn, account_id)
+
+
 @app.get("/api/improvement")
 def get_improvement(hero_id: int | None = None, scope: Scope = Depends(get_scope),
                     conn: sqlite3.Connection = Depends(get_conn)) -> dict:
@@ -234,11 +279,13 @@ def get_tilt(scope: Scope = Depends(get_scope),
 @app.get("/api/recurring-players")
 def get_recurring_players(hero_id: int | None = None,
                           scope: Scope = Depends(get_scope),
+                          user_id: int | None = Depends(get_optional_user_id),
                           conn: sqlite3.Connection = Depends(get_conn)) -> dict:
     """Recurring teammates (win rate with) and opponents (win rate against) for
     the scoped account, judged against its own win rate. `hero_id` re-baselines
-    the whole screen to matches on that hero, like the matchups perspective."""
-    return service.recurring_players(conn, scope, hero_id=hero_id)
+    the whole screen to matches on that hero, like the matchups perspective.
+    Co-player names resolve for the requesting viewer, so labels stay private."""
+    return service.recurring_players(conn, scope, hero_id=hero_id, user_id=user_id)
 
 
 @app.get("/api/overview")
@@ -249,10 +296,13 @@ def get_overview(scope: Scope = Depends(get_scope),
 
 @app.get("/api/matches/{match_id}")
 def get_match_detail(match_id: int, account_id: int | None = None,
+                     user_id: int | None = Depends(get_optional_user_id),
                      conn: sqlite3.Connection = Depends(get_conn)) -> dict:
     """One match's detail. No Scope: this is single-match data, not an aggregate.
-    `account_id` is the optional "you" perspective (defaults to the self account)."""
-    result = service.match_detail(conn, match_id, account_id)
+    `account_id` is the optional "you" perspective (defaults to the viewer's self
+    account). Roster names resolve for the requesting viewer, so labels stay
+    private."""
+    result = service.match_detail(conn, match_id, account_id, user_id=user_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Match not found")
     return result
@@ -316,7 +366,8 @@ def auth_callback(request: Request,
     base = base_url()
     if base is None:
         raise HTTPException(status_code=404, detail="Authentication is not enabled.")
-    account_id = auth.verify_callback(dict(request.query_params))
+    account_id = auth.verify_callback(dict(request.query_params),
+                                      return_to=f"{base}/api/auth/callback")
     if account_id is None:
         raise HTTPException(status_code=400, detail="Steam login could not be verified.")
     user_id = auth.find_or_create_user(conn, account_id)
@@ -352,32 +403,41 @@ def auth_me(user_id: int | None = Depends(get_optional_user_id),
     name. The frontend uses auth_enabled to decide whether to show login controls
     at all -- in local/dev mode it's the default user, authenticated=False."""
     enabled = auth_enabled()
+    # demo_account_id is a route-level field (like auth_enabled): it comes from
+    # deployment config, not the viewer's session, so it rides on every response.
+    demo = demo_account_id()
     if user_id is None:
         return {"auth_enabled": enabled, "authenticated": False,
-                "user_id": None, "account_id": None, "display_name": None}
+                "user_id": None, "account_id": None, "display_name": None,
+                "demo_account_id": demo}
     return {"auth_enabled": enabled, "authenticated": enabled,
-            **service.me(conn, user_id)}
+            "demo_account_id": demo, **service.me(conn, user_id)}
 
 
 # --- Single-origin static serving -----------------------------------------
 # In production the API and the built React SPA are served from one origin (see
 # frontend/vite.config.ts): every /api/* path above is a real handler, and any
-# other path serves the SPA so React Router can take it client-side. This block
-# is registered LAST, so the /api routes always win, and is guarded on the build
-# existing so the app still imports (and the test suite runs) without a built
-# frontend -- e.g. in CI, where frontend/dist is gitignored and absent.
-_DIST = Path(__file__).parent.parent / "frontend" / "dist"
-
-if _DIST.is_dir():
+# other path serves the SPA so React Router can take it client-side. Registered
+# LAST (so the /api routes always win) and only when the build exists, so the app
+# still imports (and the suite runs) without a built frontend -- e.g. in CI where
+# frontend/dist is gitignored and absent. Extracted into a function so a test can
+# register it on a throwaway app against a temp dist (the module-level call below
+# keeps production behavior identical).
+def _register_spa(target: FastAPI, dist: Path) -> None:
     # Hashed JS/CSS bundles. Mounted before the catch-all (so it wins over it)
     # and after every /api route (so it never shadows the API).
-    _assets = _DIST / "assets"
-    if _assets.is_dir():
-        app.mount("/assets", StaticFiles(directory=_assets), name="assets")
+    assets = dist / "assets"
+    if assets.is_dir():
+        target.mount("/assets", StaticFiles(directory=assets), name="assets")
 
-    @app.get("/{full_path:path}")
-    def spa_fallback(full_path: str):
-        """Serve a real file from the build if present, else index.html.
+    # Read the shell once at registration; per request we only swap its SEO block.
+    index_html = (dist / "index.html").read_text(encoding="utf-8")
+    dist_root = dist.resolve()
+
+    @target.get("/{full_path:path}")
+    def spa_fallback(full_path: str, conn: sqlite3.Connection = Depends(get_conn)):
+        """Serve a real file from the build if present, else the SPA shell with
+        per-request link-preview tags injected (api.meta.render_index).
 
         The index.html fallback is what makes deep links work: hitting /trends
         directly returns the app shell, then React Router renders the route.
@@ -389,7 +449,13 @@ if _DIST.is_dir():
             raise HTTPException(status_code=404, detail="Not found")
         # Serve a real top-level file (favicon, etc.) only if it resolves safely
         # inside the build dir; otherwise hand back the SPA shell.
-        candidate = (_DIST / full_path).resolve()
-        if full_path and candidate.is_file() and _DIST.resolve() in candidate.parents:
+        candidate = (dist / full_path).resolve()
+        if full_path and candidate.is_file() and dist_root in candidate.parents:
             return FileResponse(candidate)
-        return FileResponse(_DIST / "index.html")
+        return HTMLResponse(meta.render_index(index_html, full_path, conn))
+
+
+_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+
+if _DIST.is_dir():
+    _register_spa(app, _DIST)

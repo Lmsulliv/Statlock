@@ -81,6 +81,24 @@ def baseline_version(conn: sqlite3.Connection) -> tuple:
     return (snap["s"] if snap else None, refreshed["r"] if refreshed else None)
 
 
+def ingest_version(conn: sqlite3.Connection) -> tuple:
+    """A cheap token that changes whenever a new match has been ingested. Used to
+    invalidate the LIVE baseline cache (baseline_performance / baseline_laning),
+    which AVGs over every match_players / laning_stats row rather than over the
+    stored snapshot tables, so it moves with ingestion, not the nightly refresh.
+
+    MAX(match_id) is O(1) on the INTEGER PRIMARY KEY and advances on every
+    ingested match; because one match is one transaction (hard rule 4), the
+    match_players / laning_stats / kill_events rows a live baseline reads land
+    together with the matches row this token watches. Known gap: a
+    `reprocess-archive` backfill rewrites kill_events (lane_deaths) WITHOUT moving
+    MAX(match_id), so the live cache would keep serving pre-backfill lane_deaths
+    means until the paired TTL floor lapses or a real match ingests -- an
+    acceptable bound for a population mean over thousands of games."""
+    row = conn.execute("SELECT MAX(match_id) AS m FROM matches").fetchone()
+    return (row["m"] if row else None,)
+
+
 def _era_clause(scope: Scope, column: str) -> tuple[str, list]:
     """Era predicate for PERSONAL rows. All-time (era_ids is None) means no
     filter; otherwise restrict to the chosen era ids."""
@@ -97,14 +115,20 @@ def _baseline_era_ids(scope: Scope) -> tuple[int, ...]:
     return (0,) if scope.era_ids is None else scope.era_ids
 
 
-def _badge_clause(scope: Scope, team_column: str) -> tuple[str, list]:
+def _badge_clause(scope: Scope, team_column: str,
+                  badge_table: str = "m") -> tuple[str, list]:
     """Personal badge predicate on the player's own team average. Dropped at
-    full range so NULL-badge matches still count (see Scope.is_full_badge_range)."""
+    full range so NULL-badge matches still count (see Scope.is_full_badge_range).
+
+    `badge_table` is the alias carrying average_badge_team0/1: the `matches` join
+    alias ("m") for the metadata-only queries, or the v_account_matches alias for
+    the view-backed ones (whose summary rows have NULL badge columns, so a
+    narrowed range drops them -- exactly the honest behaviour we want)."""
     if scope.is_full_badge_range:
         return "", []
     expr = (
-        f"(CASE WHEN {team_column} = 0 THEN m.average_badge_team0"
-        f" ELSE m.average_badge_team1 END)"
+        f"(CASE WHEN {team_column} = 0 THEN {badge_table}.average_badge_team0"
+        f" ELSE {badge_table}.average_badge_team1 END)"
     )
     return f" AND {expr} BETWEEN ? AND ?", [scope.badge_min, scope.badge_max]
 
@@ -362,29 +386,62 @@ def personal_item_stats(conn: sqlite3.Connection, scope: Scope,
 
 
 def account_results(conn: sqlite3.Connection, scope: Scope,
-                    my_hero_id: int | None = None) -> list[dict]:
-    """Every scoped match for the account as {match_id, start_time, won}, ordered
-    oldest-first. This is the raw time-ordered stream tilt analysis groups into
-    sessions (stats.sessions); the same era/badge/mode predicates as the other
+                    my_hero_id: int | None = None,
+                    full_only: bool = True) -> list[dict]:
+    """Every scoped match for the account as {match_id, start_time, won, source},
+    ordered oldest-first. This is the raw time-ordered stream tilt analysis groups
+    into sessions (stats.sessions); the same era/badge/mode predicates as the other
     personal queries keep it consistent with what the rest of the app counts.
 
     `my_hero_id` optionally restricts to matches where the account played that
     hero -- recurring-player analysis uses it so the self-baseline matches the
-    hero-filtered co-occurrence set (the rest of the app's "my hero" filter)."""
-    era_sql, era_params = _era_clause(scope, "m.era_id")
-    badge_sql, badge_params = _badge_clause(scope, "mp.team")
+    hero-filtered co-occurrence set (the rest of the app's "my hero" filter).
+
+    Reads v_account_matches. `full_only` controls whether provisional summaries
+    are included: tilt (which only needs win/loss and match time) passes False so
+    a fresh import gets a session view immediately, while recurring-players keeps
+    the default True so its self-baseline stays aligned with its metadata-only
+    co-player counts (recurring can't see co-players from a summary). Either way a
+    summary row with an unknown result is dropped (`won IS NOT NULL`): it can't
+    join a win/loss stream without being silently miscounted as a loss."""
+    era_sql, era_params = _era_clause(scope, "mp.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "mp.team", badge_table="mp")
     hero_sql, hero_params = ("", [])
     if my_hero_id is not None:
         hero_sql, hero_params = " AND mp.hero_id = ?", [my_hero_id]
+    full_sql = " AND mp.source = 'full'" if full_only else ""
     sql = (
-        "SELECT mp.match_id, m.start_time, mp.won"
-        " FROM match_players mp"
-        " JOIN matches m ON m.match_id = mp.match_id"
-        " WHERE mp.account_id = ? AND m.game_mode = ?"
-        + era_sql + badge_sql + hero_sql +
-        " ORDER BY m.start_time ASC, mp.match_id ASC"
+        "SELECT mp.match_id, mp.start_time, mp.won, mp.source"
+        " FROM v_account_matches mp"
+        " WHERE mp.account_id = ? AND mp.game_mode = ? AND mp.won IS NOT NULL"
+        + full_sql + era_sql + badge_sql + hero_sql +
+        " ORDER BY mp.start_time ASC, mp.match_id ASC"
     )
     params = [scope.account_id, scope.game_mode] + era_params + badge_params + hero_params
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def hero_record_rows(conn: sqlite3.Connection, scope: Scope) -> list[dict]:
+    """Per-hero win/loss record for the scoped account, as {hero_id, games, wins,
+    provisional}. Reads v_account_matches so a fresh import gets a hero list from
+    its provisional summaries; `provisional` is 1 for a hero any of whose
+    contributing rows is summary-backed (MAX over the boolean), so the service can
+    flag heroes still awaiting metadata. Same era/badge/game-mode predicates as the
+    rest of the personal reads. A summary row with an unknown result (won IS NULL)
+    can't be scored win/loss and is dropped; a NULL hero_id (shouldn't happen) is
+    excluded so it never forms a bogus bucket."""
+    era_sql, era_params = _era_clause(scope, "mp.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "mp.team", badge_table="mp")
+    sql = (
+        "SELECT mp.hero_id AS hero_id, COUNT(*) AS games, SUM(mp.won) AS wins,"
+        " MAX(mp.source = 'summary') AS provisional"
+        " FROM v_account_matches mp"
+        " WHERE mp.account_id = ? AND mp.game_mode = ?"
+        "   AND mp.won IS NOT NULL AND mp.hero_id IS NOT NULL"
+        + era_sql + badge_sql +
+        " GROUP BY mp.hero_id"
+    )
+    params = [scope.account_id, scope.game_mode] + era_params + badge_params
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
@@ -496,15 +553,17 @@ def baseline_item_stats(conn: sqlite3.Connection, scope: Scope, hero_id: int,
 # ── Continuous-metric performance ────────────────────────────────────────────
 #
 # The single source of truth for the continuous metrics surfaced on the
-# Performance screen. SQL exprs reference the `mp` (match_players) and `m`
-# (matches) aliases both queries below use, so one formula serves the personal
-# per-match values AND the population AVG -- they can never drift. `label` and
-# `higher_is_better` are presentation metadata, not statistics math: the verdict
-# itself is computed in stats/ (CLAUDE.md hard rule 1); higher_is_better only
-# tells the service which direction counts as "good" (see api.service).
+# Performance screen. Every SQL expr references ONLY the `mp` alias, so one
+# formula serves both the personal per-match values and the population AVG -- and
+# the same expr reads correctly whether `mp` is match_players (metadata) or the
+# v_account_matches view (which carries duration_s too, so net worth / min needs
+# no `matches` join). `label` and `higher_is_better` are presentation metadata,
+# not statistics math: the verdict itself is computed in stats/ (CLAUDE.md hard
+# rule 1); higher_is_better only tells the service which direction counts as
+# "good" (see api.service).
 PERF_METRICS = [
     {"key": "net_worth_per_min", "label": "Net worth / min",
-     "expr": "mp.net_worth * 60.0 / m.duration_s", "higher_is_better": True},
+     "expr": "mp.net_worth * 60.0 / mp.duration_s", "higher_is_better": True},
     {"key": "kills", "label": "Kills", "expr": "mp.kills", "higher_is_better": True},
     {"key": "deaths", "label": "Deaths", "expr": "mp.deaths", "higher_is_better": False},
     {"key": "assists", "label": "Assists", "expr": "mp.assists", "higher_is_better": True},
@@ -521,20 +580,26 @@ PERF_METRICS = [
 
 
 def personal_performance(conn: sqlite3.Connection, scope: Scope) -> list[dict]:
-    """One row per scoped match the account played: hero_id plus each metric's
-    per-match value (PERF_METRICS). Raw rows, not aggregates -- the service buckets
-    them per hero and overall and hands the value lists to stats.mean_interval /
-    mean_verdict (which need the spread, not just a mean). Same era/badge/game-mode
-    predicates as personal_matchups, plus duration_s > 0 so net-worth-per-minute is
-    always defined."""
-    era_sql, era_params = _era_clause(scope, "m.era_id")
-    badge_sql, badge_params = _badge_clause(scope, "mp.team")
+    """One row per scoped match the account played: hero_id, source, plus each
+    metric's per-match value (PERF_METRICS). Raw rows, not aggregates -- the
+    service buckets them per hero and overall and hands the value lists to
+    stats.mean_interval / mean_verdict (which need the spread, not just a mean).
+
+    Reads v_account_matches, so a freshly imported account's provisional history
+    summaries feed the screen before full metadata is drained (and drop out under
+    a narrowed era/badge scope, whose NULL columns fail the predicates). The
+    duration guard allows NULL (a summary row may not know its duration): the row
+    still contributes its known metrics, and net-worth-per-minute is NULL for it
+    (x / NULL) rather than a fabricated number. Same era/badge/game-mode
+    predicates as personal_matchups."""
+    era_sql, era_params = _era_clause(scope, "mp.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "mp.team", badge_table="mp")
     select = ", ".join(f"({mdef['expr']}) AS {mdef['key']}" for mdef in PERF_METRICS)
     sql = (
-        f"SELECT mp.hero_id AS hero_id, {select}"
-        " FROM match_players mp"
-        " JOIN matches m ON m.match_id = mp.match_id"
-        " WHERE mp.account_id = ? AND m.game_mode = ? AND m.duration_s > 0"
+        f"SELECT mp.hero_id AS hero_id, mp.source AS source, {select}"
+        " FROM v_account_matches mp"
+        " WHERE mp.account_id = ? AND mp.game_mode = ?"
+        "   AND (mp.duration_s IS NULL OR mp.duration_s > 0)"
         + era_sql + badge_sql
     )
     params = [scope.account_id, scope.game_mode] + era_params + badge_params
@@ -548,22 +613,28 @@ def performance_series(conn: sqlite3.Connection, scope: Scope,
     oldest-first. Trends buckets this single stream into rolling windows and
     calendar buckets (stats.trends), so win rate and the continuous metrics are
     always aligned to the same matches. Same era/badge/game-mode predicates and
-    the same duration_s > 0 guard as personal_performance; `my_hero_id` optionally
-    restricts to one hero, the trends analogue of the matchups perspective."""
-    era_sql, era_params = _era_clause(scope, "m.era_id")
-    badge_sql, badge_params = _badge_clause(scope, "mp.team")
+    the same duration guard as personal_performance; `my_hero_id` optionally
+    restricts to one hero, the trends analogue of the matchups perspective.
+
+    Reads v_account_matches like personal_performance, so summaries feed the
+    series too. `AND mp.won IS NOT NULL` drops a summary row whose result is
+    unknown: the win-rate series sums `won`, and a NULL there can neither win nor
+    lose a bucket -- it must not silently count as a loss."""
+    era_sql, era_params = _era_clause(scope, "mp.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "mp.team", badge_table="mp")
     hero_sql, hero_params = ("", [])
     if my_hero_id is not None:
         hero_sql, hero_params = " AND mp.hero_id = ?", [my_hero_id]
     select = ", ".join(f"({mdef['expr']}) AS {mdef['key']}" for mdef in PERF_METRICS)
     sql = (
-        f"SELECT mp.match_id AS match_id, m.start_time AS start_time,"
-        f" mp.hero_id AS hero_id, mp.won AS won, {select}"
-        " FROM match_players mp"
-        " JOIN matches m ON m.match_id = mp.match_id"
-        " WHERE mp.account_id = ? AND m.game_mode = ? AND m.duration_s > 0"
+        f"SELECT mp.match_id AS match_id, mp.start_time AS start_time,"
+        f" mp.hero_id AS hero_id, mp.won AS won, mp.source AS source, {select}"
+        " FROM v_account_matches mp"
+        " WHERE mp.account_id = ? AND mp.game_mode = ?"
+        "   AND (mp.duration_s IS NULL OR mp.duration_s > 0)"
+        "   AND mp.won IS NOT NULL"
         + era_sql + badge_sql + hero_sql +
-        " ORDER BY m.start_time ASC, mp.match_id ASC"
+        " ORDER BY mp.start_time ASC, mp.match_id ASC"
     )
     params = [scope.account_id, scope.game_mode] + era_params + badge_params + hero_params
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
@@ -585,14 +656,21 @@ def baseline_performance(conn: sqlite3.Connection, scope: Scope,
     "overall" entry pooled across exactly the heroes you played (my_hero_ids) --
     the continuous analogue of matchups()'s hero-mix-matched overall baseline.
     A metric that is NULL for the whole population comes back as None, which the
-    service reads as "no baseline" and shows personal-only."""
-    era_sql, era_params = _era_clause(scope, "m.era_id")
-    badge_sql, badge_params = _badge_clause(scope, "mp.team")
+    service reads as "no baseline" and shows personal-only.
+
+    Reads v_account_matches restricted to source = 'full': a population baseline
+    must rest only on real ingested metadata, never on another account's
+    provisional summary (which carries no damage/badge context anyway). That
+    `source = 'full'` slice is byte-for-byte the old match_players JOIN matches, so
+    baseline numbers are unchanged; the view is used only so PERF_METRICS' single
+    duration expr (mp.duration_s) resolves here exactly as on the personal side."""
+    era_sql, era_params = _era_clause(scope, "mp.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "mp.team", badge_table="mp")
     avg_select = ", ".join(f"AVG({mdef['expr']}) AS {mdef['key']}" for mdef in PERF_METRICS)
     base_from = (
-        " FROM match_players mp"
-        " JOIN matches m ON m.match_id = mp.match_id"
-        " WHERE mp.account_id != ? AND m.game_mode = ? AND m.duration_s > 0"
+        " FROM v_account_matches mp"
+        " WHERE mp.source = 'full' AND mp.account_id != ? AND mp.game_mode = ?"
+        "   AND mp.duration_s > 0"
         + era_sql + badge_sql
     )
     base_params = [scope.account_id, scope.game_mode] + era_params + badge_params
@@ -766,9 +844,11 @@ def item_names(conn: sqlite3.Connection) -> dict[int, str]:
 
 # ── Name resolution (manual label > Steam persona > bare account id) ─────────
 
-# Manual labels are keyed by user_id (account_labels). resolve_names() and the
-# rename writes (api.service) default to DEFAULT_USER_ID, the local/dev user, until
-# real auth threads a session user through (Phase 2). Names are private to a user.
+# Manual labels are keyed by user_id (account_labels) and are PRIVATE to that user.
+# resolve_names() defaults to DEFAULT_USER_ID (the local/dev user) so the CLI and
+# local mode read their own labels, but every request-scoped caller must thread the
+# viewer's own user_id -- and pass None for an anonymous viewer (auth on, nobody
+# logged in), which skips labels entirely so one user's names never leak to another.
 
 
 def _labels_for(conn: sqlite3.Connection, account_ids: list[int],
@@ -801,13 +881,17 @@ def _persona_names(conn: sqlite3.Connection, account_ids: list[int]) -> dict[int
 
 
 def resolve_names(conn: sqlite3.Connection, account_ids,
-                  user_id: int = DEFAULT_USER_ID) -> dict[int, str]:
+                  user_id: int | None = DEFAULT_USER_ID) -> dict[int, str]:
     """{account_id: name} for every requested id, with precedence: this user's
     manual label > steam_personas.persona_name > str(account_id). Every id resolves
     to a string (never None), so callers can surface co-players and opponents --
-    mostly untracked -- by their best name."""
+    mostly untracked -- by their best name.
+
+    user_id=None means an anonymous viewer (auth on, nobody logged in): skip the
+    private labels entirely and resolve from Steam personas / bare ids only, so one
+    user's labels are never shown to another viewer."""
     ids = list(dict.fromkeys(account_ids))   # dedupe, preserve order
-    labels = _labels_for(conn, ids, user_id)
+    labels = _labels_for(conn, ids, user_id) if user_id is not None else {}
     personas = _persona_names(conn, ids)
     return {
         aid: (labels.get(aid) or personas.get(aid) or str(aid))
@@ -846,13 +930,17 @@ def mmr_series(conn: sqlite3.Connection, account_id: int) -> list[dict]:
 
 
 def last_matches(conn: sqlite3.Connection, account_id: int, limit: int = 10) -> list[dict]:
+    """The account's most recent matches for the Overview card. Reads
+    v_account_matches so a freshly imported account sees its latest games at once
+    (from provisional summaries), each row carrying `source` so the UI can badge a
+    summary-backed row as provisional and upgrade it in place once metadata lands.
+    No game_mode filter: Overview shows the raw recent history across modes."""
     rows = conn.execute(
         "SELECT mp.match_id, mp.hero_id, mp.won, mp.kills, mp.deaths, mp.assists,"
-        " mp.net_worth, m.start_time, m.game_mode"
-        " FROM match_players mp"
-        " JOIN matches m ON m.match_id = mp.match_id"
+        " mp.net_worth, mp.start_time, mp.game_mode, mp.source"
+        " FROM v_account_matches mp"
         " WHERE mp.account_id = ?"
-        " ORDER BY m.start_time DESC, mp.match_id DESC"
+        " ORDER BY mp.start_time DESC, mp.match_id DESC"
         " LIMIT ?",
         (account_id, limit),
     ).fetchall()
@@ -900,6 +988,49 @@ def match_kill_trades(conn: sqlite3.Connection, match_id: int) -> list[dict]:
         (match_id,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def account_progress_counts(conn: sqlite3.Connection, account_id: int) -> dict[str, int]:
+    """The onboarding-progress counts for one account, for the polled progress
+    endpoint. Every query is a single indexed COUNT -- cheap enough to poll:
+
+    - known:    summary rows we hold (discovery materialized them). idx_ams_account_start.
+    - analyzed: matches with full metadata ingested. idx_mp_account_match -- this
+                is the view's source='full' count for the account, read without
+                paying for the UNION.
+    - prioritized_pending / backfill_pending / deferred: this account's remaining
+      queue depth by tier, keyed on discovered_for_account (the first discoverer;
+      schema v18). All hit the idx_fetch_queue_account(status, discovered_for_account)
+      prefix. 'pending' is split by priority so the fresh, user-facing tier
+      (priority > 0) is distinguished from any legacy priority-0 pending rows."""
+    known = conn.execute(
+        "SELECT COUNT(*) AS n FROM account_match_summaries WHERE account_id = ?",
+        (account_id,),
+    ).fetchone()["n"]
+    analyzed = conn.execute(
+        "SELECT COUNT(*) AS n FROM match_players WHERE account_id = ?",
+        (account_id,),
+    ).fetchone()["n"]
+    prioritized_pending = conn.execute(
+        "SELECT COUNT(*) AS n FROM fetch_queue"
+        " WHERE discovered_for_account = ? AND status = 'pending' AND priority > 0",
+        (account_id,),
+    ).fetchone()["n"]
+    backfill_pending = conn.execute(
+        "SELECT COUNT(*) AS n FROM fetch_queue"
+        " WHERE discovered_for_account = ? AND status = 'backfill'",
+        (account_id,),
+    ).fetchone()["n"]
+    deferred = conn.execute(
+        "SELECT COUNT(*) AS n FROM fetch_queue"
+        " WHERE discovered_for_account = ? AND status = 'deferred'",
+        (account_id,),
+    ).fetchone()["n"]
+    return {
+        "known": known, "analyzed": analyzed,
+        "prioritized_pending": prioritized_pending,
+        "backfill_pending": backfill_pending, "deferred": deferred,
+    }
 
 
 def queue_counts(conn: sqlite3.Connection) -> dict[str, int]:

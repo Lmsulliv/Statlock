@@ -26,8 +26,9 @@ def _client(follow_redirects=True):
 
 
 def _login(client, monkeypatch, account_id=STEAM_ACCOUNT_ID):
-    """Drive the callback with Steam verification mocked; cookies land in the jar."""
-    monkeypatch.setattr(api.auth, "verify_callback", lambda params: account_id)
+    """Drive the callback with Steam verification mocked; cookies land in the jar.
+    The lambda takes **kw because verify_callback now also receives return_to."""
+    monkeypatch.setattr(api.auth, "verify_callback", lambda params, **kw: account_id)
     resp = client.get("/api/auth/callback?openid.claimed_id=x", follow_redirects=False)
     assert resp.status_code == 303
     return resp
@@ -39,21 +40,68 @@ def _csrf(client) -> dict:
 
 # ── verify_callback (OpenID validation, network injected) ─────────────────────
 _CLAIMED = "https://steamcommunity.com/openid/id/76561198851497247"
+RETURN_TO = "http://stats.example.com/api/auth/callback"
+
+
+def _signed_params(**overrides) -> dict:
+    """A well-formed Steam callback: claimed_id and return_to are both in the
+    signed set and return_to points back at us. Overrides mutate one field so a
+    test can forge exactly one thing."""
+    params = {
+        "openid.signed": "signed,claimed_id,return_to",
+        "openid.claimed_id": _CLAIMED,
+        "openid.return_to": RETURN_TO,
+        "openid.sig": "abc",
+    }
+    params.update(overrides)
+    return params
+
+
+def _boom(data):
+    raise AssertionError("verify_callback contacted Steam before validating signed fields")
 
 
 def test_verify_callback_returns_account_id_when_steam_confirms():
-    params = {"openid.claimed_id": _CLAIMED, "openid.sig": "abc"}
-    account_id = api.auth.verify_callback(params, post=lambda data: "ns:...\nis_valid:true\n")
+    account_id = api.auth.verify_callback(
+        _signed_params(), return_to=RETURN_TO, post=lambda data: "ns:...\nis_valid:true\n")
     assert account_id == 891231519     # SteamID64 normalized to 32-bit
 
 
 def test_verify_callback_none_when_steam_rejects():
-    params = {"openid.claimed_id": _CLAIMED}
-    assert api.auth.verify_callback(params, post=lambda data: "is_valid:false\n") is None
+    assert api.auth.verify_callback(
+        _signed_params(), return_to=RETURN_TO, post=lambda data: "is_valid:false\n") is None
 
 
 def test_verify_callback_none_when_claimed_id_missing():
-    assert api.auth.verify_callback({}, post=lambda data: "is_valid:true\n") is None
+    # claimed_id is in the signed set, but its value doesn't resolve to a SteamID.
+    params = _signed_params(**{"openid.claimed_id": "not-a-steam-id"})
+    assert api.auth.verify_callback(
+        params, return_to=RETURN_TO, post=lambda data: "is_valid:true\n") is None
+
+
+# ── verify_callback: forged-signature hardening (openid.signed + return_to) ───
+def test_verify_callback_rejects_claimed_id_not_in_signed():
+    # The attack: strip claimed_id from the signed set so an unsigned, forged
+    # claimed_id would be trusted. Must reject WITHOUT even contacting Steam.
+    params = _signed_params(**{"openid.signed": "signed,return_to"})
+    assert api.auth.verify_callback(params, return_to=RETURN_TO, post=_boom) is None
+
+
+def test_verify_callback_rejects_return_to_not_in_signed():
+    params = _signed_params(**{"openid.signed": "signed,claimed_id"})
+    assert api.auth.verify_callback(params, return_to=RETURN_TO, post=_boom) is None
+
+
+def test_verify_callback_rejects_missing_signed():
+    params = _signed_params()
+    del params["openid.signed"]
+    assert api.auth.verify_callback(params, return_to=RETURN_TO, post=_boom) is None
+
+
+def test_verify_callback_rejects_foreign_return_to():
+    # A signed assertion minted for another relying party, replayed against us.
+    params = _signed_params(**{"openid.return_to": "http://evil.example.com/api/auth/callback"})
+    assert api.auth.verify_callback(params, return_to=RETURN_TO, post=_boom) is None
 
 
 # ── login redirect ────────────────────────────────────────────────────────────
@@ -100,7 +148,7 @@ def test_callback_creates_user_session_and_cookies(api_db, monkeypatch):
 
 def test_callback_rejects_unverified_login(api_db, monkeypatch):
     monkeypatch.setenv("DEADLOCK_BASE_URL", BASE)
-    monkeypatch.setattr(api.auth, "verify_callback", lambda params: None)
+    monkeypatch.setattr(api.auth, "verify_callback", lambda params, **kw: None)
     resp = _client().get("/api/auth/callback?openid.claimed_id=x", follow_redirects=False)
     assert resp.status_code == 400
 
@@ -120,7 +168,7 @@ def test_me_anonymous_when_logged_out(api_db, monkeypatch):
     monkeypatch.setenv("DEADLOCK_BASE_URL", BASE)
     body = _client().get("/api/auth/me").json()
     assert body == {"auth_enabled": True, "authenticated": False, "user_id": None,
-                    "account_id": None, "display_name": None}
+                    "account_id": None, "display_name": None, "demo_account_id": None}
 
 
 def test_me_after_login(api_db, monkeypatch):
@@ -139,6 +187,21 @@ def test_me_reports_local_mode(api_db):
     assert body["auth_enabled"] is False
     assert body["authenticated"] is False
     assert body["user_id"] == 1
+
+
+def test_me_surfaces_demo_account_id_when_set(api_db, monkeypatch):
+    # The demo id is deployment config, so it rides on the /me response for both
+    # the logged-out and the local-default-user branches.
+    monkeypatch.setenv("DEMO_ACCOUNT_ID", "424242")
+    monkeypatch.setenv("DEADLOCK_BASE_URL", BASE)
+    assert _client().get("/api/auth/me").json()["demo_account_id"] == 424242
+    monkeypatch.delenv("DEADLOCK_BASE_URL", raising=False)
+    assert _client().get("/api/auth/me").json()["demo_account_id"] == 424242
+
+
+def test_me_demo_account_id_null_when_unset(api_db):
+    # Autouse _no_demo_account clears the var; the field is present but null.
+    assert _client().get("/api/auth/me").json()["demo_account_id"] is None
 
 
 # ── write gating: session + CSRF ──────────────────────────────────────────────
@@ -191,9 +254,26 @@ def test_logout_revokes_session(api_db, monkeypatch):
 
 # ── local/dev mode: no login needed, runs as the default user ─────────────────
 def test_local_mode_write_open_as_default_user(api_db):
-    # No DEADLOCK_BASE_URL: the write succeeds with no session and lands on user 1.
+    # DEADLOCK_OPEN_WRITES=1 (set by the conftest _open_writes fixture), no base
+    # URL: the write succeeds with no session and lands on user 1.
     resp = _client().put("/api/accounts/900/name", json={"display_name": "LocalName"})
     assert resp.status_code == 200
     assert api_db.execute(
         "SELECT display_name FROM account_labels WHERE user_id = 1 AND account_id = 900"
     ).fetchone()["display_name"] == "LocalName"
+
+
+# ── fail closed: neither variable set -> writes 403, reads still 200 ──────────
+def test_write_403_when_neither_variable_set(api_db, monkeypatch):
+    # Undo the conftest opt-in: no DEADLOCK_BASE_URL and no DEADLOCK_OPEN_WRITES.
+    monkeypatch.delenv("DEADLOCK_OPEN_WRITES", raising=False)
+    resp = _client().put("/api/accounts/900/name", json={"display_name": "x"})
+    assert resp.status_code == 403
+    # The message names both escape hatches so an operator knows how to proceed.
+    detail = resp.json()["detail"]
+    assert "DEADLOCK_BASE_URL" in detail and "DEADLOCK_OPEN_WRITES" in detail
+
+
+def test_reads_still_open_when_neither_variable_set(api_db, monkeypatch):
+    monkeypatch.delenv("DEADLOCK_OPEN_WRITES", raising=False)
+    assert _client().get("/api/matchups").status_code == 200

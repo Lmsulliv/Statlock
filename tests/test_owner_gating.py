@@ -52,3 +52,12 @@ def test_confirm_requires_login_in_auth_mode(api_db, monkeypatch):
     # No session cookie -> the gate rejects before any candidate lookup.
     resp = TestClient(app).post("/api/eras/candidates/1/confirm")
     assert resp.status_code == 401
+
+
+# ── fail closed: neither variable set -> era writes 403 ───────────────────────
+def test_confirm_403_when_neither_variable_set(api_db, monkeypatch):
+    # Undo the conftest opt-in: no base URL and no open-writes flag.
+    monkeypatch.delenv("DEADLOCK_OPEN_WRITES", raising=False)
+    # The gate rejects before any candidate lookup, so a real id isn't needed.
+    resp = TestClient(app).post("/api/eras/candidates/1/confirm")
+    assert resp.status_code == 403

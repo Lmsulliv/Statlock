@@ -53,9 +53,27 @@ def _post_to_steam(data: dict) -> str:
         return resp.read().decode()
 
 
-def verify_callback(params: dict, *, post=_post_to_steam) -> int | None:
+def verify_callback(params: dict, *, return_to: str, post=_post_to_steam) -> int | None:
     """Validate the OpenID callback params with Steam and return the user's 32-bit
-    account id, or None if verification fails. `post` is injectable for tests."""
+    account id, or None if verification fails. `return_to` is our own callback URL;
+    `post` is injectable for tests.
+
+    Two checks guard the fields we trust BEFORE asking Steam to confirm the
+    signature:
+
+    - openid.signed lists (comma-separated, without the `openid.` prefix) exactly
+      which fields Steam actually signed. We require both `claimed_id` and
+      `return_to` to be in it. Without this a forger can strip `claimed_id` from the
+      signed set and hand us any SteamID: check_authentication would still return
+      is_valid:true (it only vouches for the signed fields), and we'd read an
+      unsigned, attacker-controlled claimed_id -- authenticating as anyone.
+    - openid.return_to must point back at our own callback, so a signed assertion
+      minted for another relying party can't be replayed against us."""
+    signed = set(params.get("openid.signed", "").split(","))
+    if "claimed_id" not in signed or "return_to" not in signed:
+        return None
+    if not params.get("openid.return_to", "").startswith(return_to):
+        return None
     # Re-send every returned param with mode flipped to check_authentication; Steam
     # replies with a body containing "is_valid:true" only if it really signed them.
     data = {k: v for k, v in params.items() if k.startswith("openid.")}
@@ -123,6 +141,19 @@ def delete_session(conn: sqlite3.Connection, token: str | None) -> None:
     if token:
         conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
         conn.commit()
+
+
+def delete_expired_sessions(conn: sqlite3.Connection, *, now=utcnow) -> int:
+    """Sweep every expired session in one pass and return how many were removed.
+
+    user_for_session only deletes an expired row when that exact token is
+    presented, so abandoned sessions (the user never comes back) linger forever.
+    The nightly maintenance job calls this to keep the table from growing without
+    bound."""
+    cursor = conn.execute("DELETE FROM sessions WHERE expires_at <= ?",
+                          (now().isoformat(),))
+    conn.commit()
+    return cursor.rowcount
 
 
 def new_csrf_token() -> str:
