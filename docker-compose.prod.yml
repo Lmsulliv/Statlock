@@ -1,0 +1,135 @@
+# Production stack for a single VPS (see docs/deploy-production.md).
+#
+# This is a STANDALONE compose file, not an override of docker-compose.yml -- run
+# it explicitly:  docker compose -f docker-compose.prod.yml up -d --build
+# The dev file (docker-compose.yml) is unchanged and still works on its own.
+#
+# What prod adds over dev:
+#   caddy       -- HTTPS reverse proxy on :80/:443, automatic Let's Encrypt certs
+#   litestream  -- continuous SQLite backup to S3-compatible storage
+#   healthchecks + restart policies on every service
+#   the api port is NOT published to the host: Caddy is the only entrypoint
+#
+# Config/secrets come from a sibling .env (Compose reads it automatically). See
+# .env.example for every variable, including the fail-closed write-auth rules.
+
+services:
+  # ── Reverse proxy: terminates TLS, forwards to the api on the compose network ──
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Substituted into deploy/Caddyfile as {$DOMAIN}. Real hostname -> Let's
+      # Encrypt; "localhost" -> Caddy's internal self-signed CA (local testing).
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persist issued certificates + ACME account across restarts so Caddy does
+      # not re-request a cert (and risk Let's Encrypt rate limits) every boot.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # ── API + built SPA on one origin (same image/entrypoint as dev) ──────────────
+  api:
+    build: .
+    image: deadlock-stats
+    # No host port mapping: the api is reachable only as api:8000 on the compose
+    # network, behind Caddy. `expose` is documentation -- it publishes nothing to
+    # the host, it just records the container port other services dial.
+    expose:
+      - "8000"
+    volumes:
+      - deadlock-data:/data
+    environment:
+      DEADLOCK_DB: /data/tracker.db
+      # Worker/CLI state files (rate-limit stamps, heartbeat) live on the volume
+      # so cross-restart politeness survives. Also set on the worker below.
+      DEADLOCK_STATE_DIR: /data
+      # Public origin -> Steam login required on writes. Set this in prod.
+      DEADLOCK_BASE_URL: ${DEADLOCK_BASE_URL:-}
+      # Private single-user escape hatch (writes open, no login). Leave unset in a
+      # public deploy; see the warning in .env.example.
+      DEADLOCK_OPEN_WRITES: ${DEADLOCK_OPEN_WRITES:-}
+    # Override the image CMD to trust the proxy's forwarded headers. --proxy-headers
+    # makes uvicorn read X-Forwarded-*; --forwarded-allow-ips=* trusts them from any
+    # peer (safe here because only Caddy can reach this port). This is what lets the
+    # app see the real client IP and the https scheme (Secure cookies, Steam redirect).
+    command:
+      - uvicorn
+      - api.app:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+    healthcheck:
+      # python:3.12-slim has no curl, so probe /api/sync-status (an always-open
+      # read) with the stdlib. Non-200 or an exception -> unhealthy.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/sync-status', timeout=5).status==200 else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Cover the boot-time DB migration before the first probe counts against us.
+      start_period: 30s
+    restart: unless-stopped
+
+  # ── Ingestion daemon (same image, --db points at the shared volume) ───────────
+  worker:
+    image: deadlock-stats
+    depends_on:
+      - api
+    volumes:
+      - deadlock-data:/data
+    environment:
+      DEADLOCK_STATE_DIR: /data
+      STEAM_API_KEY: ${STEAM_API_KEY:-}
+    command: ["python", "-m", "ingest", "--db", "/data/tracker.db", "run-daemon"]
+    healthcheck:
+      # Liveness via the heartbeat file the daemon touches every loop. A worker
+      # that is running but wedged goes stale here even though it never crashed
+      # (which restart-on-crash could never catch). 900s = 15 min of slack over
+      # the ~4-min worst-case idle baseline span.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os,time,sys; sys.exit(0 if time.time()-os.path.getmtime('/data/.worker_heartbeat')<900 else 1)"
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      # First heartbeat lands after migration + the first loop; give it room.
+      start_period: 60s
+    restart: unless-stopped
+
+  # ── Continuous backup sidecar: streams the WAL to S3-compatible storage ───────
+  litestream:
+    image: litestream/litestream:0.3
+    depends_on:
+      # The api entrypoint creates + migrates the DB on first boot; Litestream
+      # needs the file to exist before it can replicate it.
+      - api
+    volumes:
+      - deadlock-data:/data
+      - ./deploy/litestream.yml:/etc/litestream.yml:ro
+    environment:
+      LITESTREAM_BUCKET: ${LITESTREAM_BUCKET:-}
+      LITESTREAM_ENDPOINT: ${LITESTREAM_ENDPOINT:-}
+      LITESTREAM_ACCESS_KEY_ID: ${LITESTREAM_ACCESS_KEY_ID:-}
+      LITESTREAM_SECRET_ACCESS_KEY: ${LITESTREAM_SECRET_ACCESS_KEY:-}
+    command: ["replicate", "-config", "/etc/litestream.yml"]
+    restart: unless-stopped
+
+volumes:
+  deadlock-data: {}
+  caddy-data: {}
+  caddy-config: {}

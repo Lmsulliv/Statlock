@@ -18,18 +18,22 @@ from pathlib import Path
 
 from tracker.db import connect
 from tracker.migrate import migrate
+from tracker.paths import deadlock_stamp_path
 from tracker.reference import load_heroes, load_items
 
 BASE = "https://api.deadlock-api.com"
 _UA  = "deadlock-stat-tracker/0.1 (personal project)"
 _MIN_INTERVAL_S = 5.0
-_STAMP = Path(__file__).parent.parent / "data" / ".last_deadlock_request"
 
 
 def _wait_for_slot() -> None:
-    """Block until 5 s have elapsed since the last request (cross-run via disk stamp)."""
+    """Block until 5 s have elapsed since the last request (cross-run via disk stamp).
+
+    Shares the same stamp file as ingest's TokenBucket (deadlock_stamp_path), so
+    this CLI and the worker stay under one combined 1-req/5-s budget."""
+    stamp = deadlock_stamp_path()
     try:
-        last = float(_STAMP.read_text())
+        last = float(stamp.read_text())
     except (FileNotFoundError, ValueError):
         last = 0.0
     wait = _MIN_INTERVAL_S - (time.time() - last)
@@ -39,7 +43,8 @@ def _wait_for_slot() -> None:
     # Jitter: 0–2 extra seconds to avoid perfectly periodic traffic.
     jitter = random.uniform(0, 2)
     time.sleep(jitter)
-    _STAMP.write_text(str(time.time()))
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(str(time.time()))
 
 
 def _get(url: str) -> tuple[int, str]:
@@ -72,7 +77,6 @@ def main() -> None:
     migrate(conn)
 
     fetched_at = datetime.now(timezone.utc).isoformat()
-    _STAMP.parent.mkdir(parents=True, exist_ok=True)
 
     heroes_url = f"{BASE}/v1/assets/heroes"
     status, body = _get(heroes_url)

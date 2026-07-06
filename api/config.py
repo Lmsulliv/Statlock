@@ -48,3 +48,32 @@ def steam_api_key() -> str | None:
     fresh on every call (like db_path) so tests can monkeypatch it per-test.
     """
     return os.environ.get("STEAM_API_KEY", "").strip() or None
+
+
+def demo_account_id() -> int | None:
+    """The account id the logged-out landing highlights as a live demo, from
+    DEMO_ACCOUNT_ID, or None if unset/blank/non-integer.
+
+    Optional by design: when None the demo button simply never renders, so an
+    unconfigured deploy degrades cleanly. Read fresh on every call (like db_path)
+    so tests can monkeypatch it per-test.
+    """
+    raw = os.environ.get("DEMO_ACCOUNT_ID", "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+# Writes fail closed by default. With auth on (DEADLOCK_BASE_URL) they require a
+# Steam login; with auth off they require this explicit opt-in. The point is that
+# a bare deploy with neither variable set rejects writes instead of silently
+# running them all as the shared default user -- an env omission must never turn a
+# public site into a shared admin panel.
+def open_writes() -> bool:
+    """Explicit local/dev opt-in (DEADLOCK_OPEN_WRITES=1): writes run as the
+    default user without login. Ignored when auth is enabled. Read fresh on every
+    call (like db_path) so tests can monkeypatch it per-test."""
+    return os.environ.get("DEADLOCK_OPEN_WRITES", "").strip() == "1"

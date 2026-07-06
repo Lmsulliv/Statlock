@@ -4,7 +4,13 @@
 #
 # Secrets/config come from a sibling `.env` file (Compose reads it automatically):
 #   DEADLOCK_BASE_URL=https://stats.example.com  # public origin; turns Steam login on
+#   DEADLOCK_OPEN_WRITES=1                        # private single-user deploy; opens writes with no login
 #   STEAM_API_KEY=xxxxxxxx                        # optional; persona enrichment (no-op when unset)
+#
+# Writes fail CLOSED: set exactly one of the first two. Neither set -> reads work
+# but every write returns 403 (so a forgotten env can't expose a shared admin
+# panel). DEADLOCK_BASE_URL -> Steam login required. DEADLOCK_OPEN_WRITES=1 ->
+# no login, single local user (ignored when DEADLOCK_BASE_URL is also set).
 
 services:
   api:
@@ -16,9 +22,11 @@ services:
       - deadlock-data:/data
     environment:
       DEADLOCK_DB: /data/tracker.db
-      # Set to the public origin to require Steam login on writes; unset -> the app
-      # runs as a single local user with writes open (see docs/deploy.md).
+      # Set to the public origin to require Steam login on writes (see docs/deploy.md).
       DEADLOCK_BASE_URL: ${DEADLOCK_BASE_URL:-}
+      # Set to 1 for a private single-user deploy (writes open, no login). Leave both
+      # this and DEADLOCK_BASE_URL unset and writes fail closed (403).
+      DEADLOCK_OPEN_WRITES: ${DEADLOCK_OPEN_WRITES:-}
     restart: unless-stopped
 
   worker:

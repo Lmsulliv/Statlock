@@ -1,0 +1,26 @@
+# Caddy reverse proxy for the production stack (docker-compose.prod.yml).
+#
+# {$DOMAIN} is substituted from the DOMAIN env var the caddy service receives.
+# For a real hostname Caddy provisions a Let's Encrypt certificate automatically
+# (ports 80/443 must be reachable from the internet and DNS must already point
+# here). For DOMAIN=localhost it serves its own internal self-signed CA instead,
+# which is what the local prod-boot acceptance test uses -- expect a browser
+# "not trusted" warning there; that is normal.
+#
+# The app is single-origin: the api service serves BOTH the JSON API (/api/*) and
+# the built SPA (everything else) on :8000, so one reverse_proxy handles it all.
+# The api port is NOT published to the host in prod -- it is reachable only as
+# api:8000 on the compose network, and this proxy is its only entrypoint.
+#
+# NOTE: there is deliberately no per-IP rate limit here. The stock Caddy image
+# ships no rate-limit handler (the caddy-ratelimit module needs a custom xcaddy
+# build); see docs/deploy-production.md "Optional: per-IP rate limiting".
+
+{$DOMAIN} {
+	encode gzip
+
+	# Preserve the real client IP and https scheme for uvicorn (which runs with
+	# --proxy-headers). This is what lets Secure login cookies and Steam's
+	# redirect URL see the outside origin rather than the container's.
+	reverse_proxy api:8000
+}

@@ -1,0 +1,24 @@
+# Litestream continuous-replication config for the production stack.
+#
+# Litestream is a sidecar that streams the SQLite WAL to S3-compatible object
+# storage as it is written, so a crash loses at most a second or two of data
+# rather than everything since the last snapshot. It runs in its own container
+# (docker-compose.prod.yml) and watches the DB through the shared /data volume;
+# no application code is involved.
+#
+# The ${VAR} placeholders are expanded by Litestream from the container's
+# environment; docker-compose.prod.yml passes the four LITESTREAM_* vars from the
+# root .env. See .env.example for Backblaze B2 / Cloudflare R2 endpoint formats,
+# and docs/deploy-production.md for the restore + disaster-recovery drills.
+
+dbs:
+  - path: /data/tracker.db
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        # Key prefix inside the bucket. Keep it stable: the restore command
+        # reads back from this same path.
+        path: tracker.db
+        endpoint: ${LITESTREAM_ENDPOINT}
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
