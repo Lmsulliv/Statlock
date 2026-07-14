@@ -35,6 +35,7 @@ from stats.sessions import (
     group_sessions,
 )
 from stats.deaths import build_timeline
+from stats import ability_order
 from stats.recurring import MIN_CO_OCCURRENCE, split_recurring
 from stats.trends import (
     TRENDS_WINDOW_DEFAULT,
@@ -310,6 +311,57 @@ def items(conn: sqlite3.Connection, scope: Scope, hero_id: int) -> list[dict]:
                              -(abs(r["delta"]) if r["delta"] is not None else 0.0),
                              -r["games"], r["item_id"]))
     return rows
+
+
+def hero_skill_order(conn: sqlite3.Connection, scope: Scope, hero_id: int) -> dict:
+    """The scoped account's skill order on one hero: its most common opening
+    sequence and first-maxed ability, plus a wins/losses split when each side
+    clears the sample-size floor. Descriptive only -- raw sequences and game
+    counts, no verdict (there is no baseline for skill order). Empty games=0 state
+    when the account/hero has no ability data."""
+    scope = _resolved(conn, scope)
+    empty = {"hero_id": hero_id, "games": 0, "opening": None,
+             "first_maxed": None, "split": None}
+    if scope is None:
+        return empty
+
+    rows = queries.personal_ability_points(conn, scope, hero_id)
+    # Group the flat point rows into one ordered sequence per match. The query
+    # already orders by (match_id, point_number), so points append in skill order.
+    games_by_match: dict[int, dict] = {}
+    for r in rows:
+        g = games_by_match.setdefault(r["match_id"], {"won": bool(r["won"]), "points": []})
+        g["points"].append(r["ability_id"])
+    games = [ability_order.Game(won=g["won"], points=tuple(g["points"]))
+             for g in games_by_match.values()]
+
+    summary = ability_order.summarize(games)
+    lookup = queries.ability_assets(conn)
+
+    def _ability(ability_id: int) -> dict:
+        asset = lookup.get(ability_id, {})
+        return {"ability_id": ability_id,
+                "ability_name": asset.get("name") or str(ability_id),
+                "ability_type": asset.get("ability_type"),
+                "image_url": asset.get("image_url")}
+
+    def _decorate(facts: dict) -> dict:
+        opening, first_maxed = facts["opening"], facts["first_maxed"]
+        return {
+            "games": facts["games"],
+            "opening": None if opening is None else {
+                "sequence": [_ability(a) for a in opening["sequence"]],
+                "games": opening["games"], "considered": opening["considered"]},
+            "first_maxed": None if first_maxed is None else {
+                "ability": _ability(first_maxed["ability_id"]),
+                "games": first_maxed["games"], "considered": first_maxed["considered"]},
+        }
+
+    out = {"hero_id": hero_id, **_decorate(summary), "split": None}
+    if summary["split"] is not None:
+        out["split"] = {"wins": _decorate(summary["split"]["wins"]),
+                        "losses": _decorate(summary["split"]["losses"])}
+    return out
 
 
 # ── Performance (continuous metrics per hero and overall) ────────────────────
@@ -1290,6 +1342,21 @@ def match_detail(conn: sqlite3.Connection, match_id: int,
                 "item_image_url": item_images.get(b["item_id"]),
             })
 
+    # The perspective player's ability level-up order (skill order), decorated with
+    # names/icons from the abilities reference table. Descriptive only: raw sequence
+    # in game order, no verdict (there is no baseline for skill order).
+    ability_lookup = queries.ability_assets(conn)
+    abilities = []
+    if perspective_slot is not None:
+        for e in queries.match_ability_events(conn, match_id, perspective_slot):
+            asset = ability_lookup.get(e["ability_id"], {})
+            abilities.append({
+                **e,
+                "ability_name": asset.get("name") or str(e["ability_id"]),
+                "ability_type": asset.get("ability_type"),
+                "image_url": asset.get("image_url"),
+            })
+
     # Per-match kill trades vs each opponent (design note 2): raw counts in both
     # directions, attributed by slot off kill_events so an anonymized opponent
     # (account_id = 0) is still counted, with its hero surfaced for labelling.
@@ -1329,6 +1396,7 @@ def match_detail(conn: sqlite3.Connection, match_id: int,
         "account_id": perspective,
         "players": players,
         "purchases": purchases,
+        "abilities": abilities,
         "deaths": deaths,
         "trades": trades,
     }

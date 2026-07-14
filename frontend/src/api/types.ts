@@ -312,6 +312,41 @@ export interface ItemRow extends StatFields {
   purchase_timing_delta_s: number | null
 }
 
+// Skill order for one hero (api/service.hero_skill_order). Descriptive only:
+// modal sequences with raw game counts, NO StatFields / verdict — there is no
+// baseline for skill order. `considered` is how many games qualified for the fact
+// (a game needs 4 points for an opening, a maxed ability for first-maxed).
+export interface SkillAbility {
+  ability_id: number
+  ability_name: string
+  ability_type: string | null
+  image_url: string | null
+}
+
+export interface SkillOpening {
+  sequence: SkillAbility[]
+  games: number
+  considered: number
+}
+
+export interface SkillFirstMaxed {
+  ability: SkillAbility
+  games: number
+  considered: number
+}
+
+export interface SkillFacts {
+  games: number
+  opening: SkillOpening | null
+  first_maxed: SkillFirstMaxed | null
+}
+
+export interface HeroSkillOrder extends SkillFacts {
+  hero_id: number
+  // Present only when each side clears the sample-size floor.
+  split: { wins: SkillFacts; losses: SkillFacts } | null
+}
+
 // The improvement digest (api/service.improvement). The server flattens matchup
 // and item rows into one entry shape, tagging each with `kind` + a display
 // `subject` (the enemy hero name or item name), then groups them into three

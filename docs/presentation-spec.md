@@ -116,6 +116,10 @@ Same table pattern, one row per item for the selected hero:
 
 Items are inherently per-hero (`hero_id` is required by the endpoint); the most-played default means the section always has a concrete hero, so the old "pick a hero" prompt no longer exists.
 
+#### Skill order (per hero)
+
+Your own skill-up habits on the selected hero, from `/api/hero-skill-order?hero_id=`: the most common **opening sequence** (first four points) and the ability you **max first**, each with the game count it rests on, then the same two facts split by **wins vs losses**. **Descriptive, not a verdict** — there is no population baseline for skill order, so this is a record of *what you did*, presented as raw sequences and counts with no Wilson interval or verdict color (an InfoTip says so). The wins/losses split appears only once **each** side clears the sample-size floor (`VERDICT_FLOOR`); below it, a note explains why. Empty state when the hero has no ability data (old or summary-only matches). Underlying rows come from `ability_events` (see data-model.md); the aggregation is pure `stats.ability_order`.
+
 #### Laning and Performance sections
 
 The hero's row of `/api/laning` and `/api/performance`, rendered with the same metric-table component the Performance tab uses (see below), so a hero's early game and per-game numbers sit beside its matchups and items.
@@ -236,6 +240,7 @@ All endpoints are GET, all take the scope params (`account_id`, `era_ids`, `badg
 GET /api/overview
 GET /api/matchups?hero_id=optional
 GET /api/items?hero_id=required
+GET /api/hero-skill-order?hero_id=required   (your opening sequence + first-maxed ability on a hero, wins/losses split; descriptive, no verdict)
 GET /api/performance            (continuous metrics per hero + overall, population-baselined)
 GET /api/laning                 (net worth / last hits / denies at the lane-end mark, population-baselined)
 GET /api/death-patterns         (deaths by enemy hero [raw], + death timing per game-minute vs live population)

@@ -66,6 +66,40 @@ def load_items(conn: sqlite3.Connection, items_json: list[dict], fetched_at: str
     conn.commit()
 
 
+def load_abilities(conn: sqlite3.Connection, items_json: list[dict], fetched_at: str) -> None:
+    """Upsert hero abilities (type=='ability') from /v1/assets/items into abilities.
+
+    Sibling of load_items: the SAME /v1/assets/items response carries shop items
+    (type=='upgrade', loaded by load_items) and hero abilities (type=='ability',
+    loaded here). Abilities have no tier/slot_type; we keep name, ability_type
+    (the slot: signature/ultimate/…), and an icon. Prefer image over image_webp;
+    both may be absent (NULL, never fabricated). Non-ability entries are skipped.
+    Idempotent upsert: re-running with the same data is a no-op.
+    """
+    rows = [
+        (
+            item["id"],
+            item["name"],
+            item.get("ability_type"),
+            item.get("image") or item.get("image_webp"),
+            fetched_at,
+        )
+        for item in items_json
+        if item.get("type") == "ability"
+    ]
+    conn.executemany(
+        """INSERT INTO abilities(ability_id, name, ability_type, image_url, fetched_at)
+           VALUES(?, ?, ?, ?, ?)
+           ON CONFLICT(ability_id) DO UPDATE SET
+               name         = excluded.name,
+               ability_type = excluded.ability_type,
+               image_url    = excluded.image_url,
+               fetched_at   = excluded.fetched_at""",
+        rows,
+    )
+    conn.commit()
+
+
 def load_ranks(conn: sqlite3.Connection, ranks_json: list[dict], fetched_at: str) -> None:
     """Upsert rank tiers from the /v1/assets/ranks response into the ranks table.
 

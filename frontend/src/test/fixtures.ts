@@ -56,6 +56,15 @@ export const heroRecords = {
   heroes: [heroRecord(5, 'Haze', 30), heroRecord(7, 'Abrams', 5)],
 }
 
+// A hero with no ability data yet — the empty skill-order state.
+export const emptySkillOrder = {
+  hero_id: 0,
+  games: 0,
+  opening: null,
+  first_maxed: null,
+  split: null,
+}
+
 // Everything App + ScopeBar + header touch on any route; individual tests
 // spread their target screen's endpoints on top.
 export const baseRoutes = {
@@ -66,6 +75,7 @@ export const baseRoutes = {
   '/api/ranks': [],
   '/api/sync-status': sync,
   '/api/hero-records': heroRecords,
+  '/api/hero-skill-order': emptySkillOrder,
 }
 
 export const emptyTilt = {

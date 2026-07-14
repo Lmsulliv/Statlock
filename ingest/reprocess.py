@@ -8,8 +8,9 @@ stored there and NOT duplicated into raw_api_responses; see CLAUDE.md hard rule
 2). So this rebuild has two sources, in priority order:
 
   1. PRIMARY -- matches.raw_json. For every stored match we (re)materialize its
-     derived tables (kill_events + laning_stats + damage_taken_sources) from the
-     archived body, and backfill the match_players.player_damage_taken column a
+     derived tables (kill_events + laning_stats + damage_taken_sources +
+     ability_events) from the archived body, and backfill the
+     match_players.player_damage_taken column a
      later schema added. raw_json is read through tracker.rawstore, so both
      compressed (new) and legacy uncompressed rows work.
 
@@ -30,6 +31,7 @@ import json
 import logging
 
 from ingest.parse import (
+    derive_ability_events,
     derive_damage_taken_sources,
     derive_kill_events,
     derive_laning_stats,
@@ -37,6 +39,7 @@ from ingest.parse import (
     finals_from_stats,
     insert_match,
     parse_metadata,
+    replace_ability_events,
     replace_damage_taken_sources,
     replace_kill_events,
     replace_laning_stats,
@@ -91,8 +94,8 @@ def _backfill_damage_taken_column(conn, meta: dict) -> None:
         )
 
 
-def _derived_counts(conn, match_id: int) -> tuple[int, int, int]:
-    """(kill_events, laning_stats, damage_taken_sources) row counts for a match."""
+def _derived_counts(conn, match_id: int) -> tuple[int, int, int, int]:
+    """(kill_events, laning_stats, damage_taken_sources, ability_events) counts."""
     kills = conn.execute(
         "SELECT COUNT(*) FROM kill_events WHERE match_id = ?", (match_id,)
     ).fetchone()[0]
@@ -102,7 +105,10 @@ def _derived_counts(conn, match_id: int) -> tuple[int, int, int]:
     damage = conn.execute(
         "SELECT COUNT(*) FROM damage_taken_sources WHERE match_id = ?", (match_id,)
     ).fetchone()[0]
-    return kills, laning, damage
+    abilities = conn.execute(
+        "SELECT COUNT(*) FROM ability_events WHERE match_id = ?", (match_id,)
+    ).fetchone()[0]
+    return kills, laning, damage, abilities
 
 
 def reprocess_archive(conn, *, now=utcnow) -> dict:
@@ -110,10 +116,13 @@ def reprocess_archive(conn, *, now=utcnow) -> dict:
     unstorable matches) from the archive. Returns counts per rebuilt artifact."""
     shop_item_ids = {r["item_id"] for r in
                      conn.execute("SELECT item_id FROM items").fetchall()}
+    ability_item_ids = {r["ability_id"] for r in
+                        conn.execute("SELECT ability_id FROM abilities").fetchall()}
     recovered = 0
     rebuilt = 0
     laning_rebuilt = 0
     damage_rebuilt = 0
+    ability_rebuilt = 0
 
     # ── Source 1: rebuild every stored match from matches.raw_json ──────────
     # Fetch ids first (cheap), then read one body at a time -- the bodies are
@@ -138,19 +147,23 @@ def reprocess_archive(conn, *, now=utcnow) -> dict:
             replace_laning_stats(conn, match_id, derive_laning_stats(meta))
             replace_damage_taken_sources(conn, match_id,
                                          derive_damage_taken_sources(meta))
+            replace_ability_events(conn, match_id,
+                                   derive_ability_events(meta, ability_item_ids))
             _backfill_damage_taken_column(conn, meta)
 
-        kills, laning, damage = _derived_counts(conn, match_id)
+        kills, laning, damage, abilities = _derived_counts(conn, match_id)
         rebuilt += kills
         laning_rebuilt += laning
         damage_rebuilt += damage
+        ability_rebuilt += abilities
 
     # ── Source 2: recover matches that never made it into the matches table ──
     for match_id, body in _archive_only_bodies(conn, stored_ids).items():
         meta = json.loads(body)
         start_iso = unix_to_iso(meta["match_info"]["start_time"])
         era_id = era_id_for(conn, start_iso)
-        parsed = parse_metadata(meta, body, shop_item_ids, era_id, now().isoformat())
+        parsed = parse_metadata(meta, body, shop_item_ids, era_id, now().isoformat(),
+                                ability_item_ids)
 
         # One match = one transaction: the inserts and the queue flip commit together.
         with conn:
@@ -164,14 +177,17 @@ def reprocess_archive(conn, *, now=utcnow) -> dict:
             )
         recovered += 1
 
-        kills, laning, damage = _derived_counts(conn, match_id)
+        kills, laning, damage, abilities = _derived_counts(conn, match_id)
         rebuilt += kills
         laning_rebuilt += laning
         damage_rebuilt += damage
+        ability_rebuilt += abilities
 
     log.info("reprocess-archive: %d match(es) recovered, %d kill event(s) rebuilt,"
-             " %d laning row(s) rebuilt, %d damage-source row(s) rebuilt",
-             recovered, rebuilt, laning_rebuilt, damage_rebuilt)
+             " %d laning row(s) rebuilt, %d damage-source row(s) rebuilt,"
+             " %d ability event(s) rebuilt",
+             recovered, rebuilt, laning_rebuilt, damage_rebuilt, ability_rebuilt)
     return {"matches_recovered": recovered, "kill_events_rebuilt": rebuilt,
             "laning_rows_rebuilt": laning_rebuilt,
-            "damage_source_rows_rebuilt": damage_rebuilt}
+            "damage_source_rows_rebuilt": damage_rebuilt,
+            "ability_events_rebuilt": ability_rebuilt}

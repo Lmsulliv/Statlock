@@ -385,6 +385,30 @@ def personal_item_stats(conn: sqlite3.Connection, scope: Scope,
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
+def personal_ability_points(conn: sqlite3.Connection, scope: Scope,
+                            hero_id: int) -> list[dict]:
+    """Every ability point the scoped account spent on one hero, as {match_id, won,
+    ability_id, point_number}, ordered by match then skill-up order. The won flag
+    comes from joining match_players (the played hero's win/loss), so the stats
+    layer can split the skill order by result. Same era/badge/game_mode predicates
+    as personal_item_stats keep it consistent with the rest of the app."""
+    era_sql, era_params = _era_clause(scope, "m.era_id")
+    badge_sql, badge_params = _badge_clause(scope, "mp.team")
+    sql = (
+        "SELECT ae.match_id AS match_id, mp.won AS won, ae.ability_id AS ability_id,"
+        " ae.point_number AS point_number"
+        " FROM match_players mp"
+        " JOIN ability_events ae"
+        "   ON ae.match_id = mp.match_id AND ae.player_slot = mp.player_slot"
+        " JOIN matches m ON m.match_id = mp.match_id"
+        " WHERE mp.account_id = ? AND mp.hero_id = ? AND m.game_mode = ?"
+        + era_sql + badge_sql +
+        " ORDER BY ae.match_id, ae.point_number"
+    )
+    params = [scope.account_id, hero_id, scope.game_mode] + era_params + badge_params
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
 def account_results(conn: sqlite3.Connection, scope: Scope,
                     my_hero_id: int | None = None,
                     full_only: bool = True) -> list[dict]:
@@ -906,6 +930,18 @@ def item_images(conn: sqlite3.Connection) -> dict[int, str | None]:
             conn.execute("SELECT item_id, image_url FROM items").fetchall()}
 
 
+def ability_assets(conn: sqlite3.Connection) -> dict[int, dict]:
+    """ability_id -> {name, ability_type, image_url} from the abilities reference
+    table (loaded by tracker.reference.load_abilities). Abilities live nowhere in
+    the items table, so this is the only name/icon source for a skill-up. name/type/
+    image may be None for a sparse asset row -- callers fall back to str(id)."""
+    return {r["ability_id"]: {"name": r["name"], "ability_type": r["ability_type"],
+                              "image_url": r["image_url"]}
+            for r in conn.execute(
+                "SELECT ability_id, name, ability_type, image_url FROM abilities"
+            ).fetchall()}
+
+
 def list_ranks(conn: sqlite3.Connection) -> list[dict]:
     """Rank tiers ordered low to high (name + color; art derived in service)."""
     return [dict(r) for r in
@@ -970,6 +1006,21 @@ def match_purchases(conn: sqlite3.Connection, match_id: int,
         "SELECT item_id, purchase_time_s, sold_time_s"
         " FROM match_item_purchases WHERE match_id = ? AND player_slot = ?"
         " ORDER BY purchase_time_s",
+        (match_id, player_slot),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def match_ability_events(conn: sqlite3.Connection, match_id: int,
+                         player_slot: int) -> list[dict]:
+    """One player's ability points in a match, in skill-up order (point_number).
+    Keyed on player_slot like match_purchases, so an anonymized account_id = 0
+    row is still isolated to one player. ability_id joins the abilities reference
+    table for name/icon at the service layer."""
+    rows = conn.execute(
+        "SELECT ability_id, point_number, game_time_s"
+        " FROM ability_events WHERE match_id = ? AND player_slot = ?"
+        " ORDER BY point_number",
         (match_id, player_slot),
     ).fetchall()
     return [dict(r) for r in rows]

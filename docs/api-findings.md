@@ -337,6 +337,15 @@ Item purchases (`players[].items[]`, ~40 entries/player):
   membership in `/v1/assets/items` shop items before inserting into
   `match_item_purchases`.
 
+> **Expansion (spike 13, 2026-07-07):** the mixed-array semantics are now
+> fully characterised — see "Ability level-up entries" below. Two corrections
+> to the caution above: (1) the clean discriminator is the assets
+> `type == "ability"` field, not "recurring item_id"; (2) `imbued_ability_id`
+> is a property of *shop* entries (it names the ability an imbue item is bonded
+> to), **not** of ability level-up entries — those always carry
+> `imbued_ability_id == 0`. So `imbued_ability_id` does not help identify or
+> order ability level-ups.
+
 Also present and worth knowing about (lives in `raw_json` for later):
 `death_details[]` (timestamps + killer + positions), `stats[]` time series
 (net worth, damage, healing, accuracy every ~3 min), `damage_matrix`,
@@ -712,3 +721,85 @@ trigger that.
   proven gone," but "recoverable ones recover within the retry window; the rest
   age out." The existing `unavailable` rows are therefore left as-is (no requeue
   migration); the nightly revive still re-probes them slowly.
+
+## Ability level-up entries in `players[].items[]` (verified 2026-07-07, spike 13)
+
+Evidence: 480 stored matches decoded from `matches.raw_json` (301 contain the
+tracked self player), classified against the archived assets response
+`spikes/out/06_assets_items.json`. No API calls. Reproduce with
+`python spikes/13_ability_levelups.py`.
+
+**Separation.** Each `players[].items[]` entry is classified purely by the
+assets `type` of its `item_id`: `"upgrade"` = shop purchase, `"ability"` =
+ability level-up, `"weapon"` = hero gun item. Separation is clean — across all
+301 self matches only **2 distinct `item_id`s (9 occurrences)** were absent
+from the assets archive (deprecated items), and self players carried 7–16
+ability entries each (median 13). Ordering by `game_time_s` gives a valid
+level-up timeline in every match.
+
+**One entry = one ability point.** Each `"ability"` entry is a single ability
+point spent. The count of entries sharing an `item_id` = points invested in
+that ability, always **1–4** (observed distribution: 1×19, 2×183, 3×494,
+4×502 — never exceeds 4, i.e. unlock + up to 3 upgrades). The sequence of
+`item_id`s ordered by `game_time_s` **is** the player's skill-up order.
+
+**Ability identity (question 2 — yes).** The assets entry for an ability
+`item_id` gives:
+
+- `name` (e.g. "Bullet Dance", "Shining Wonder"),
+- `ability_type` (slot: `signature`, `ultimate`, …),
+- `heroes` (list of hero_ids that can train it).
+
+A match's distinct ability `item_id`s belong to the played `hero_id`: **1196 of
+1198** ability item_ids across the sample matched the player's hero via the
+`heroes` list (99.8%). Almost every match has exactly **4 distinct abilities**
+(292 of 301; 8 matches had 3, one anomalous match had 6 with 2 non-matching
+ids — a rare hero-ability-swap / bad-data case, ~0.3%). So the specific ability
+and its slot are reliably identifiable; the level reached = its entry count.
+
+**`upgrade_id` is an opaque node token, NOT a level integer.** The first point
+of an ability carries `upgrade_id == 0` (a plain level-up) in only ~61% of
+matches (184 of 301); in the rest the first point already carries a non-zero
+`upgrade_id` (a specific upgrade modifier node was chosen). So `upgrade_id`
+cannot be read as an ordinal level — use the entry *count* for level and
+`game_time_s` for order. (Mapping `upgrade_id` values to named upgrade nodes is
+unverified and out of scope.)
+
+**`imbued_ability_id` belongs to shop entries, not ability entries.** It is
+`0` on every one of the 3900+ ability entries examined; it is non-zero on 493
+*shop* entries, where it names the ability an imbue item (e.g. "Quicksilver
+Reload", "Surge of Power") is bonded to. It is irrelevant to ability-level
+tracking.
+
+**Caveat — banked points share a timestamp.** 327 abilities across the sample
+had ≥2 points recorded at the *same* `game_time_s` (points banked and spent
+together). Ordering is unambiguous *between* distinct timestamps but arbitrary
+*within* a tie, so a strict "Nth ability point" order can reorder same-second
+points. Level (count) is unaffected.
+
+**Coverage (question 3 — complete).** Every one of the 301 self matches has ≥1
+ability entry, including the oldest stored match (2024-10-10) through the newest
+(2026-06-26). No older-match gap: the data has been present in `raw_json` for
+the full history. (The 179 stored matches without a self player are co-player /
+recurring-player matches; ability data is present for all their players too, it
+just isn't the tracked account.)
+
+## Ability level-up extraction rule (verified 2026-07-08)
+
+The concrete rule the ingest code (`ingest.parse.derive_ability_events`)
+implements, re-confirmed against the committed test fixture
+`tests/fixtures/match_metadata_86714494.json` cross-referenced with the assets
+archive: for each `players[].items[]` entry, keep it as one **ability point**
+iff its `item_id` is an assets `type == "ability"` id (the same discriminator as
+the shop-purchase filter, inverted). Within a player, sort the kept entries by
+`game_time_s` ascending and assign `point_number` = 1-based ordinal over that
+sorted sequence. The ordinal is **derived**, not from the payload — the payload
+guarantees only `game_time_s`, and same-second "banked" points therefore **tie**:
+their relative order is arbitrary within a tie but exact between distinct
+timestamps (matches the banked-points caveat above). The ability reached level
+*k* = the count of its entries (1–4). The ability's display name / slot come
+from the assets entry (`name`, `ability_type`), loaded into the `abilities`
+reference table; the played `hero_id` is stored per event from the player row,
+never inferred from the ability's `heroes` list. Fixture cross-check: the trimmed
+fixture carries 24 ability entries across its 12 players (2 each) over 16 distinct
+abilities, every one resolving to a named assets `type == "ability"` row.

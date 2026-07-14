@@ -173,6 +173,37 @@ def test_service_orders_and_enriches_your_purchases(db):
     assert buys[0]["sold_time_s"] == 1500 and buys[1]["sold_time_s"] == 0
 
 
+def test_service_orders_and_enriches_your_abilities(db):
+    _seed(db)
+    # Two abilities in the reference table; one point row lacks a matching asset
+    # (id 8003) to prove the str(id) fallback and NULL-safe icon.
+    for aid, name, atype in ((8001, "Splatter", "signature"),
+                             (8002, "Card Trick", "ultimate")):
+        db.execute("INSERT INTO abilities(ability_id, name, ability_type, image_url,"
+                   " fetched_at) VALUES (?, ?, ?, ?, ?)",
+                   (aid, name, atype, f"http://img/a{aid}.png", JUNE))
+    for ability_id, point, t in ((8001, 1, 10), (8002, 2, 60), (8001, 3, 120), (8003, 4, 240)):
+        db.execute("INSERT INTO ability_events(match_id, player_slot, account_id,"
+                   " hero_id, ability_id, point_number, game_time_s)"
+                   " VALUES (?, 1, ?, ?, ?, ?, ?)",
+                   (MATCH_ID, ME, H_ME, ability_id, point, t))
+    db.commit()
+
+    abilities = service.match_detail(db, MATCH_ID)["abilities"]
+    assert [a["point_number"] for a in abilities] == [1, 2, 3, 4]   # skill-up order
+    assert abilities[0]["ability_name"] == "Splatter"
+    assert abilities[0]["ability_type"] == "signature"
+    assert abilities[0]["image_url"] == "http://img/a8001.png"
+    # Unknown ability id falls back to str(id) with a NULL icon, never crashes.
+    assert abilities[3]["ability_name"] == "8003" and abilities[3]["image_url"] is None
+
+
+def test_service_abilities_empty_when_perspective_absent(db):
+    _seed(db)
+    # ALLY never played -> no ability rows, and the strip renders nothing.
+    assert service.match_detail(db, MATCH_ID, account_id=ALLY)["abilities"] == []
+
+
 def test_service_marks_your_kills_and_deaths(db):
     _seed(db)
     deaths = service.match_detail(db, MATCH_ID)["deaths"]

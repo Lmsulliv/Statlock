@@ -122,6 +122,15 @@ def get_items(hero_id: int, scope: Scope = Depends(get_scope),
     return service.items(conn, scope, hero_id)
 
 
+@app.get("/api/hero-skill-order")
+def get_hero_skill_order(hero_id: int, scope: Scope = Depends(get_scope),
+                         conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+    """The scoped account's own skill order on one hero: most common opening
+    sequence + first-maxed ability, with a wins/losses split when each side clears
+    the sample-size floor. Descriptive (what you did), never a verdict."""
+    return service.hero_skill_order(conn, scope, hero_id)
+
+
 @app.get("/api/heroes")
 def get_heroes(scope: Scope = Depends(get_scope),
                conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:

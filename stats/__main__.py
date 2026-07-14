@@ -225,6 +225,46 @@ def render_deaths(result: dict, scope: Scope) -> str:
     return "\n".join(lines)
 
 
+def _skill_facts_lines(facts: dict, indent: str = "") -> list[str]:
+    """The two descriptive facts (opening sequence + first-maxed) for a game set."""
+    lines = []
+    opening = facts["opening"]
+    if opening is None:
+        lines.append(f"{indent}Opening (first 4): (no games with a full opening)")
+    else:
+        seq = " -> ".join(a["ability_name"] for a in opening["sequence"])
+        lines.append(f"{indent}Opening (first 4): {seq}"
+                     f"  ({opening['games']}/{opening['considered']} games)")
+    first = facts["first_maxed"]
+    if first is None:
+        lines.append(f"{indent}First maxed: (no ability reached level 4)")
+    else:
+        lines.append(f"{indent}First maxed: {first['ability']['ability_name']}"
+                     f"  ({first['games']}/{first['considered']} games)")
+    return lines
+
+
+def render_skill_order(result: dict, scope: Scope) -> str:
+    """Descriptive skill order for a hero: opening sequence + first-maxed ability,
+    with a wins/losses split when each side clears the floor. No verdict."""
+    hero_id = result["hero_id"]
+    lines = [_scope_label(scope, hero_id, result["games"])]
+    lines.append("")
+    lines.append("Skill order (descriptive -- what you did, not a verdict):")
+    lines.extend(_skill_facts_lines(result))
+    split = result["split"]
+    if split is None:
+        lines.append("")
+        lines.append("(Wins-vs-losses split hidden: needs enough games on each side.)")
+    else:
+        lines.append("")
+        lines.append(f"In wins ({split['wins']['games']} games):")
+        lines.extend(_skill_facts_lines(split["wins"], indent="  "))
+        lines.append(f"In losses ({split['losses']['games']} games):")
+        lines.extend(_skill_facts_lines(split["losses"], indent="  "))
+    return "\n".join(lines)
+
+
 def _open_db(path: str):
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -286,6 +326,11 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("deaths",
                        help="print death patterns (by enemy hero + timing) for a scope")
     _add_scope_args(d)
+
+    so = sub.add_parser("skill-order",
+                        help="print your skill order (opening + first-maxed) for a hero")
+    so.add_argument("--hero", type=int, required=True, help="the hero to summarize")
+    _add_scope_args(so)
     return parser
 
 
@@ -315,6 +360,10 @@ def main(argv=None) -> None:
             scope = _scope_from_args(args)
             result = service.death_patterns(conn, scope)
             print(render_deaths(result, scope))
+        elif args.command == "skill-order":
+            scope = _scope_from_args(args)
+            result = service.hero_skill_order(conn, scope, args.hero)
+            print(render_skill_order(result, scope))
     finally:
         conn.close()
 

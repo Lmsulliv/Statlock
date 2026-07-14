@@ -227,7 +227,10 @@ class DrainWorker:
             era_id = era_id_for(self.conn, start_time_iso)
             shop_item_ids = {r["item_id"] for r in
                              self.conn.execute("SELECT item_id FROM items").fetchall()}
-            parsed = parse_metadata(meta, body, shop_item_ids, era_id, fetched_at)
+            ability_item_ids = {r["ability_id"] for r in
+                                self.conn.execute("SELECT ability_id FROM abilities").fetchall()}
+            parsed = parse_metadata(meta, body, shop_item_ids, era_id, fetched_at,
+                                    ability_item_ids)
             unknown = self._unknown_hero_ids(parsed)
 
             # One transaction: the match rows, any hero placeholders, and the queue

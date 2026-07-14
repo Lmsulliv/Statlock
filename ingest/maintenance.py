@@ -24,7 +24,7 @@ from ingest.eras import detect_era_candidates
 from ingest.personas import build_steam_client, refresh_personas
 from ingest.util import iso_to_unix, utcnow
 from tracker import rawstore
-from tracker.reference import load_heroes, load_items, load_ranks
+from tracker.reference import load_abilities, load_heroes, load_items, load_ranks
 
 log = logging.getLogger(__name__)
 
@@ -337,16 +337,21 @@ def _fetch_era_baselines(conn, client, snapshot_id: int, span: EraSpan,
 
 
 def refresh_assets(conn, client, *, now=utcnow) -> None:
-    """Reload heroes and items from the assets API (archive raw first)."""
+    """Reload heroes, items, abilities and ranks from the assets API (archive raw
+    first). The /v1/assets/items response feeds BOTH load_items (type=="upgrade")
+    and load_abilities (type=="ability"), so one fetch populates both tables -- no
+    extra request."""
     fetched_at = now().isoformat()
-    for path, loader in (("/v1/assets/heroes", load_heroes),
-                         ("/v1/assets/items", load_items),
-                         ("/v1/assets/ranks", load_ranks)):
+    for path, loaders in (("/v1/assets/heroes", (load_heroes,)),
+                          ("/v1/assets/items", (load_items, load_abilities)),
+                          ("/v1/assets/ranks", (load_ranks,))):
         url = f"{BASE_URL}{path}"
         status, _headers, body = client.get(url)
         archive_response(conn, url, status, body, fetched_at)
         if status == 200:
-            loader(conn, json.loads(body), fetched_at)
+            parsed = json.loads(body)
+            for loader in loaders:
+                loader(conn, parsed, fetched_at)
         else:
             log.warning("assets: %s HTTP %s", path, status)
 

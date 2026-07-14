@@ -25,6 +25,7 @@ class ParsedMatch:
     kill_events: list[tuple]  # (match_id, game_time_s, victim_slot, killer_slot)
     laning_stats: list[tuple]  # (match_id, player_slot, net_worth, last_hits, denies, sampled_at_s)
     damage_taken_sources: list[tuple]  # (match_id, victim_slot, source_slot, damage_taken)
+    ability_events: list[tuple]  # (match_id, player_slot, account_id, hero_id, ability_id, point_number, game_time_s)
 
 
 def finals_from_stats(
@@ -71,6 +72,39 @@ def derive_kill_events(meta: dict) -> list[tuple]:
             events.append((match_id, d.get("game_time_s"), victim_slot, killer_slot))
     events.sort(key=lambda e: (e[1] is None, e[1]))
     return events
+
+
+def derive_ability_events(meta: dict, ability_item_ids: set[int]) -> list[tuple]:
+    """Per-ability-point rows from each player's items[]. Pure, no DB/HTTP.
+
+    The storage-facing reader of the ability-level-up finding (api-findings,
+    "Ability level-up extraction rule"). players[].items[] mixes shop purchases
+    with ability points; an entry is an ability point iff its item_id is a known
+    ability id (assets type=="ability"), the inverse of the shop-purchase filter.
+    For every player we keep those entries, order them by game_time_s, and number
+    them 1..N -- point_number is a DERIVED ordinal (the payload guarantees only
+    game_time_s; same-second banked points tie, arbitrary within a tie). hero_id
+    is the player's played hero, stored straight from the roster row, never
+    inferred from the ability's heroes list. Stored for ALL players, mirroring
+    match_item_purchases.
+
+    Every field is read with .get() so a sparse or empty ('{}') payload yields an
+    empty list instead of raising. Each row: (match_id, player_slot, account_id,
+    hero_id, ability_id, point_number, game_time_s), matching ability_events.
+    """
+    info = meta.get("match_info") or {}
+    match_id = info.get("match_id")
+    rows: list[tuple] = []
+    for p in info.get("players") or []:
+        kept = [e for e in sorted(p.get("items") or [],
+                                  key=lambda e: (e.get("game_time_s") is None,
+                                                 e.get("game_time_s") or 0))
+                if e.get("item_id") in ability_item_ids]
+        for point_number, e in enumerate(kept, start=1):
+            rows.append((match_id, p.get("player_slot"), p.get("account_id"),
+                         p.get("hero_id"), e.get("item_id"), point_number,
+                         e.get("game_time_s")))
+    return rows
 
 
 def derive_laning_stats(meta: dict) -> list[tuple]:
@@ -142,7 +176,8 @@ def derive_damage_taken_sources(meta: dict) -> list[tuple]:
 
 
 def parse_metadata(meta: dict, raw_body: str, shop_item_ids: set[int],
-                   era_id: int | None, ingested_at: str) -> ParsedMatch:
+                   era_id: int | None, ingested_at: str,
+                   ability_item_ids: set[int] | None = None) -> ParsedMatch:
     info = meta["match_info"]
     match_id = info["match_id"]
     winning_team = info["winning_team"]
@@ -194,7 +229,8 @@ def parse_metadata(meta: dict, raw_body: str, shop_item_ids: set[int],
                                   entry.get("game_time_s"), entry.get("sold_time_s", 0)))
 
     return ParsedMatch(match_row, players, purchases, derive_kill_events(meta),
-                       derive_laning_stats(meta), derive_damage_taken_sources(meta))
+                       derive_laning_stats(meta), derive_damage_taken_sources(meta),
+                       derive_ability_events(meta, ability_item_ids or set()))
 
 
 def era_id_for(conn: sqlite3.Connection, start_time_iso: str) -> int | None:
@@ -241,6 +277,7 @@ def insert_match(conn: sqlite3.Connection, parsed: ParsedMatch) -> None:
     replace_kill_events(conn, m["match_id"], parsed.kill_events)
     replace_laning_stats(conn, m["match_id"], parsed.laning_stats)
     replace_damage_taken_sources(conn, m["match_id"], parsed.damage_taken_sources)
+    replace_ability_events(conn, m["match_id"], parsed.ability_events)
 
 
 def replace_kill_events(conn: sqlite3.Connection, match_id: int,
@@ -255,6 +292,22 @@ def replace_kill_events(conn: sqlite3.Connection, match_id: int,
         "INSERT INTO kill_events(match_id, game_time_s, victim_slot, killer_slot)"
         " VALUES (?, ?, ?, ?)",
         events,
+    )
+
+
+def replace_ability_events(conn: sqlite3.Connection, match_id: int,
+                           rows: list[tuple]) -> None:
+    """Idempotently write a match's ability_events: clear this match's rows, then
+    insert the derived ones. Delete-then-insert (like replace_kill_events) because
+    event_id is an autoincrement surrogate with no natural key to dedupe on, so the
+    archive backfill can re-run without piling up duplicates. On first ingest the
+    DELETE matches nothing. Caller owns the transaction (hard rule 4)."""
+    conn.execute("DELETE FROM ability_events WHERE match_id = ?", (match_id,))
+    conn.executemany(
+        "INSERT INTO ability_events(match_id, player_slot, account_id, hero_id,"
+        " ability_id, point_number, game_time_s)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        rows,
     )
 
 
@@ -291,6 +344,7 @@ def replace_damage_taken_sources(conn: sqlite3.Connection, match_id: int,
 # Re-exported for convenience: tests and callers treat parse as the module
 # that knows how metadata timestamps become ISO strings.
 __all__ = ["ParsedMatch", "finals_from_stats", "derive_kill_events",
-           "derive_laning_stats", "derive_damage_taken_sources", "parse_metadata",
-           "era_id_for", "insert_match", "replace_kill_events", "replace_laning_stats",
-           "replace_damage_taken_sources", "unix_to_iso"]
+           "derive_laning_stats", "derive_damage_taken_sources", "derive_ability_events",
+           "parse_metadata", "era_id_for", "insert_match", "replace_kill_events",
+           "replace_laning_stats", "replace_damage_taken_sources",
+           "replace_ability_events", "unix_to_iso"]

@@ -25,7 +25,11 @@ def meta():
 
 @pytest.fixture
 def shop_ids():
-    return {item["id"] for item in load_fixture("assets_items_match.json")}
+    # Mirror production: shop_item_ids come from the items table, which holds
+    # only assets type=="upgrade". The fixture is now a realistic mixed
+    # /v1/assets/items response (upgrades + abilities), so filter by type.
+    return {item["id"] for item in load_fixture("assets_items_match.json")
+            if item.get("type") == "upgrade"}
 
 
 def parse(meta, shop_ids, era_id=None):

@@ -7,6 +7,7 @@ import type {
   DeathPatternsResponse,
   ErasResponse,
   HeroRecordsResponse,
+  HeroSkillOrder,
   Improvement,
   ItemRow,
   LaningRow,
@@ -46,6 +47,18 @@ export function useItems(scope: Scope) {
   return useQuery({
     queryKey: ['items', params],
     queryFn: () => fetchJson<ItemRow[]>('/api/items', params),
+    enabled: scope.heroId !== null,
+  })
+}
+
+// The scoped account's own skill order on one chosen hero: most common opening
+// sequence + first-maxed ability, with a wins/losses split when each side clears
+// the floor. hero_id is required, so gate the fetch on it like useItems.
+export function useHeroSkillOrder(scope: Scope) {
+  const params = scopeParams(scope)
+  return useQuery({
+    queryKey: ['hero-skill-order', params],
+    queryFn: () => fetchJson<HeroSkillOrder>('/api/hero-skill-order', params),
     enabled: scope.heroId !== null,
   })
 }

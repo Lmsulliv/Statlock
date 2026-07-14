@@ -38,6 +38,7 @@ _STEPS = [
     _DB_DIR / "migrations" / "018_drain_priority.sql",  # 17 -> 18: drain priority + fairness columns
     _DB_DIR / "migrations" / "019_account_matches_view.sql",  # 18 -> 19: v_account_matches union view
     _DB_DIR / "migrations" / "020_discovery_cadence.sql",  # 19 -> 20: next_discovery_at + discovery_requests
+    _DB_DIR / "migrations" / "021_ability_events.sql",  # 20 -> 21: abilities ref + ability_events derived table
 ]
 
 

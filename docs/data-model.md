@@ -36,6 +36,14 @@ CREATE TABLE patch_eras (
     started_at   TEXT NOT NULL
 );
 
+CREATE TABLE abilities (               -- schema v21; hero abilities from /v1/assets/items
+    ability_id   INTEGER PRIMARY KEY,   -- assets id where type=="ability"
+    name         TEXT NOT NULL,
+    ability_type TEXT,                  -- slot: signature / ultimate / innate / …
+    image_url    TEXT,
+    fetched_at   TEXT NOT NULL
+);
+
 ```
 
 Refresh heroes/items on a schedule (weekly is plenty) and after any patch. `patches` can be seeded manually at first; the match metadata includes a game version you can map to it.
@@ -483,6 +491,19 @@ Two views, both from `raw_json` (docs/api-findings.md, "Damage taken"), both bac
 
 - **`match_players.player_damage_taken`** — the **net**, post-mitigation total you took, read from the last `stats[]` entry exactly like `player_damage` / `healing`. It is a continuous Performance metric (lower-is-better) compared to a **live population baseline** derived from the column itself, no stored baseline — the same machinery as `deaths`. Historical rows stay NULL until `reprocess-archive` UPDATEs them (a new column can't be back-filled by the `replace_*` helpers, which only touch the derived tables).
 - **`damage_taken_sources(match_id, victim_slot, source_slot, damage_taken)`** — which enemy dealt how much damage **to** you per match, from `match_info.damage_matrix`. Each `(dealer → victim)` chain carries a cumulative `damage[]` series; we keep the final value, summed per `(victim, source)` pair. `source_slot` is NULL for environment / non-roster dealers (creeps, towers, boss), exactly like `kill_events.killer_slot`; hero / team are resolved by joining `match_players` on `(match_id, source_slot)` at read time. This is **gross, pre-mitigation** damage — it does **not** reconcile with the net `player_damage_taken` total — so it backs only a **relative** per-enemy-hero ranking on the Deaths screen (average gross damage per game, no verdict, no baseline), never an absolute total.
+
+### Ability events (schema v21)
+
+Backs the Match Detail "Ability order" strip and the Heroes-tab "Skill order" section. Each `players[].items[]` entry is either a shop purchase or an ability point (docs/api-findings.md, "Ability level-up entries" + "Ability level-up extraction rule"); ingest keeps the shop ids and drops the ability points, which then survive only in `raw_json`. `ability_events(match_id, player_slot, account_id, hero_id, ability_id, point_number, game_time_s)` materializes one row per ability point, for **all** players (mirroring `match_item_purchases`).
+
+Choices mirror `kill_events`:
+
+- **Derived, backfillable.** An autoincrement surrogate + delete-then-insert (`replace_ability_events`) so `reprocess-archive` rebuilds it idempotently from the archive with zero API calls, exactly like `kill_events` / `laning_stats`.
+- **`point_number` is a derived ordinal.** The payload guarantees only `game_time_s`; we sort a player's kept `type=="ability"` entries by it and number them 1..N. Same-second "banked" points tie — order arbitrary within a tie, exact between ties. Level reached on an ability = its entry count (1–4).
+- **`hero_id` is the played hero**, stored from the roster row (never inferred from the ability's `heroes` list); `account`/`team`/`won` resolve by joining `match_players` on `(match_id, player_slot)` at read time.
+- **Ability name / slot / icon** come from the `abilities` reference table (loaded from the same `/v1/assets/items` response as `items`), since `items` holds only shop upgrades.
+
+**No baseline, no verdict.** Skill order has no population baseline; both readers present raw sequences and game counts descriptively, gating any wins-vs-losses split behind the usual `VERDICT_FLOOR` — never a Wilson verdict (`stats/ability_order.py` is pure aggregation, no significance math).
 
 ### Caching the live baselines
 

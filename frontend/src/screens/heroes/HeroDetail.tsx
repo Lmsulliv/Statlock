@@ -1,6 +1,13 @@
-import { useItems, useLaning, useMatchups, usePerformance } from '../../api/queries'
-import type { HeroRecord, PerformanceRow } from '../../api/types'
+import {
+  useHeroSkillOrder,
+  useItems,
+  useLaning,
+  useMatchups,
+  usePerformance,
+} from '../../api/queries'
+import type { HeroRecord, PerformanceRow, SkillFacts } from '../../api/types'
 import { HeroIcon } from '../../components/HeroIcon'
+import { InfoTip } from '../../components/InfoTip'
 import { IntervalBar } from '../../components/IntervalBar'
 import { MetricScopeBlock } from '../../components/MetricScopeBlock'
 import { ProvisionalBadge } from '../../components/ProvisionalBadge'
@@ -31,6 +38,7 @@ export function HeroDetail({
 
   const matchups = useMatchups(heroScope)
   const items = useItems(heroScope)
+  const skillOrder = useHeroSkillOrder(heroScope)
   const laning = useLaning(heroScope)
   const performance = usePerformance(heroScope)
 
@@ -100,6 +108,60 @@ export function HeroDetail({
       </section>
 
       <section className="card">
+        <h2 className="card-title">
+          Skill order{' '}
+          <InfoTip tip="Descriptive — what you leveled and when, across your own games on this hero. There's no baseline for skill order, so this is a record of what you did, not a verdict.">
+            <span className="skill-info">What's this?</span>
+          </InfoTip>
+        </h2>
+        <p className="muted improve-hint">
+          Your most common opening (first four points) and the ability you max
+          first on {heroName}, split by wins and losses once each side has enough
+          games.
+        </p>
+        <QueryBoundary query={skillOrder}>
+          {(data) =>
+            data.games === 0 ? (
+              <p className="muted">No ability data for this hero in the current scope.</p>
+            ) : (
+              <div className="skill-order">
+                <div className="skill-block">
+                  <div className="skill-block-head">
+                    <span className="skill-scope-label">All games</span>
+                    <SampleSize games={data.games} />
+                  </div>
+                  <SkillFactsView facts={data} />
+                </div>
+                {data.split ? (
+                  <>
+                    <div className="skill-block">
+                      <div className="skill-block-head">
+                        <span className="skill-scope-label">In wins</span>
+                        <SampleSize games={data.split.wins.games} />
+                      </div>
+                      <SkillFactsView facts={data.split.wins} />
+                    </div>
+                    <div className="skill-block">
+                      <div className="skill-block-head">
+                        <span className="skill-scope-label">In losses</span>
+                        <SampleSize games={data.split.losses.games} />
+                      </div>
+                      <SkillFactsView facts={data.split.losses} />
+                    </div>
+                  </>
+                ) : (
+                  <p className="muted skill-split-note">
+                    Wins-vs-losses split appears once you have enough games on each
+                    side.
+                  </p>
+                )}
+              </div>
+            )
+          }
+        </QueryBoundary>
+      </section>
+
+      <section className="card">
         <h2 className="card-title">Laning</h2>
         <p className="muted improve-hint">
           Net worth, last hits, denies, and deaths to your lane opponent at the
@@ -135,6 +197,59 @@ export function HeroDetail({
           }}
         </QueryBoundary>
       </section>
+    </div>
+  )
+}
+
+// The two descriptive skill-order facts (opening sequence + first-maxed) for one
+// set of games. Raw counts, no verdict — just what you did, and in how many games.
+function SkillFactsView({ facts }: { facts: SkillFacts }) {
+  return (
+    <div className="skill-facts">
+      <div className="skill-line">
+        <span className="skill-fact-label">Opening (first 4)</span>
+        {facts.opening ? (
+          <>
+            <span className="skill-seq">
+              {facts.opening.sequence.map((a, i) => (
+                <span key={i} className="skill-ability">
+                  <HeroIcon name={a.ability_name} url={a.image_url} />
+                  <span className="skill-ability-name">{a.ability_name}</span>
+                  {i < facts.opening!.sequence.length - 1 && (
+                    <span className="skill-arrow" aria-hidden="true">→</span>
+                  )}
+                </span>
+              ))}
+            </span>
+            <span className="muted skill-count">
+              {facts.opening.games} of {facts.opening.considered} games
+            </span>
+          </>
+        ) : (
+          <span className="muted">Not enough points recorded.</span>
+        )}
+      </div>
+      <div className="skill-line">
+        <span className="skill-fact-label">First maxed</span>
+        {facts.first_maxed ? (
+          <>
+            <span className="skill-ability">
+              <HeroIcon
+                name={facts.first_maxed.ability.ability_name}
+                url={facts.first_maxed.ability.image_url}
+              />
+              <span className="skill-ability-name">
+                {facts.first_maxed.ability.ability_name}
+              </span>
+            </span>
+            <span className="muted skill-count">
+              {facts.first_maxed.games} of {facts.first_maxed.considered} games
+            </span>
+          </>
+        ) : (
+          <span className="muted">No ability reached level 4.</span>
+        )}
+      </div>
     </div>
   )
 }

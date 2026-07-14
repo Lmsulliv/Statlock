@@ -13,13 +13,14 @@ EXPECTED_TABLES = {
     "tracked_accounts", "sync_state", "fetch_queue", "raw_api_responses",
     "era_candidates", "worker_meta", "kill_events", "steam_personas", "account_labels",
     "laning_stats", "users", "user_accounts", "sessions", "account_match_summaries",
-    "discovery_requests",
+    "discovery_requests", "abilities", "ability_events",
 }
 EXPECTED_VIEWS   = {"v_my_matchups", "v_my_item_stats"}
 EXPECTED_INDEXES = {"idx_mp_account", "idx_mp_hero",
                     "idx_ke_match_victim", "idx_ke_match_killer",
                     "idx_ls_match_slot", "idx_fetch_queue_drain",
-                    "idx_ams_account_start", "idx_fetch_queue_account"}
+                    "idx_ams_account_start", "idx_fetch_queue_account",
+                    "idx_ae_match_slot", "idx_ae_account_hero"}
 
 
 def names_of_type(conn: sqlite3.Connection, obj_type: str) -> set[str]:
@@ -41,9 +42,9 @@ def test_all_indexes_created(db):
     assert EXPECTED_INDEXES <= names_of_type(db, "index")
 
 
-def test_user_version_is_20(db):
+def test_user_version_is_21(db):
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 20
+    assert version == 21
 
 
 def test_v20_discovery_cadence_schema(tmp_path):
@@ -60,14 +61,38 @@ def test_v20_discovery_cadence_schema(tmp_path):
     conn.execute("INSERT INTO sync_state(account_id, last_synced_at) VALUES (5, 't')")
     conn.commit()
 
-    migrate(conn)  # applies 020
+    migrate(conn)  # applies 020 (and everything after, up to head)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 20
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 21
     # Legacy synced account comes out "due now" (NULL), so it's visited once.
     state = conn.execute("SELECT * FROM sync_state WHERE account_id = 5").fetchone()
     assert state["next_discovery_at"] is None
     req_cols = {r[1] for r in conn.execute("PRAGMA table_info(discovery_requests)")}
     assert req_cols == {"account_id", "requested_at"}
+
+
+def test_v21_ability_events_schema(tmp_path):
+    """v21 adds the abilities reference table and the ability_events derived table
+    (one row per ability point, all players). Purely additive: two CREATE TABLEs
+    and two indexes, no rebuild."""
+    from tracker.migrate import _STEPS
+
+    conn = connect(tmp_path / "v20.db")
+    for sql_file in _STEPS[:20]:                # build the schema up to v20
+        conn.executescript(sql_file.read_text(encoding="utf-8"))
+    conn.execute("PRAGMA user_version = 20")
+    conn.commit()
+
+    migrate(conn)  # applies 021
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 21
+    ability_cols = {r[1] for r in conn.execute("PRAGMA table_info(abilities)")}
+    assert ability_cols == {"ability_id", "name", "ability_type", "image_url", "fetched_at"}
+    event_cols = {r[1] for r in conn.execute("PRAGMA table_info(ability_events)")}
+    assert event_cols == {"event_id", "match_id", "player_slot", "account_id",
+                          "hero_id", "ability_id", "point_number", "game_time_s"}
+    indexes = {r[1] for r in conn.execute("PRAGMA index_list(ability_events)")}
+    assert {"idx_ae_match_slot", "idx_ae_account_hero"} <= indexes
 
 
 def test_v19_account_matches_view_dedupes_by_anti_join(db):
@@ -170,7 +195,7 @@ def test_migrate_is_idempotent(tmp_path):
     migrate(conn)
     migrate(conn)  # second call must not raise
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 20
+    assert version == 21
 
 
 def test_steam_personas_columns(db):
@@ -208,7 +233,7 @@ def test_v9_copies_tracked_display_names_into_labels(tmp_path):
 
     migrate(conn)  # applies 009 (and onward to the latest version)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 20
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 21
     labels = {r["account_id"]: r["display_name"] for r in
               conn.execute("SELECT account_id, display_name FROM account_labels"
                            " WHERE user_id = 1")}
@@ -254,7 +279,7 @@ def test_v11_links_tracked_accounts_to_first_user(tmp_path):
 
     migrate(conn)  # applies 011
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 20
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 21
     links = {r["account_id"]: r["is_self"] for r in
              conn.execute("SELECT account_id, is_self FROM user_accounts WHERE user_id = 1")}
     assert links == {50: 1, 60: 0}
@@ -300,7 +325,7 @@ def test_upgrade_from_v1_preserves_data(tmp_path):
 
     migrate(conn)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 20
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 21
     assert conn.execute("SELECT COUNT(*) FROM tracked_accounts").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM era_candidates").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM ranks").fetchone()[0] == 0
@@ -343,7 +368,7 @@ def test_v5_backfills_player_slot_from_raw_json(tmp_path):
 
     migrate(conn)  # applies 005 (and onward)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 20
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 21
     slots = {r["account_id"]: r["player_slot"] for r in
              conn.execute("SELECT account_id, player_slot FROM match_players WHERE match_id = 1")}
     assert slots == {500: 4, 0: 7, 600: 9}
@@ -431,7 +456,7 @@ def test_v13_reseeds_curated_eras(tmp_path):
 
     migrate(conn)  # applies 013
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 20
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 21
 
     eras = conn.execute(
         "SELECT label, started_at FROM patch_eras ORDER BY started_at"

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tracker.reference import load_heroes, load_items, seed_patch_eras
+from tracker.reference import load_abilities, load_heroes, load_items, seed_patch_eras
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FETCHED_AT = "2026-06-11T00:00:00Z"
@@ -79,6 +79,49 @@ def test_load_items_idempotent(db, items_json):
     load_items(db, items_json, FETCHED_AT)
     count = db.execute("SELECT COUNT(*) FROM items").fetchone()[0]
     assert count == len(items_json)
+
+
+# ── abilities ─────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def mixed_items_json():
+    # assets_items_match.json is a realistic mixed /v1/assets/items response
+    # (shop upgrades + hero abilities).
+    return json.loads((FIXTURES / "assets_items_match.json").read_text(encoding="utf-8"))
+
+
+def test_load_abilities_keeps_only_ability_type(db, mixed_items_json):
+    load_abilities(db, mixed_items_json, FETCHED_AT)
+    n_abilities = sum(1 for i in mixed_items_json if i.get("type") == "ability")
+    assert db.execute("SELECT COUNT(*) FROM abilities").fetchone()[0] == n_abilities
+    # No shop upgrade leaked in: an upgrade id must be absent from abilities.
+    upgrade_id = next(i["id"] for i in mixed_items_json if i.get("type") == "upgrade")
+    assert db.execute("SELECT COUNT(*) FROM abilities WHERE ability_id = ?",
+                      (upgrade_id,)).fetchone()[0] == 0
+
+
+def test_load_abilities_fields_and_image_fallback(db):
+    items = [
+        {"id": 1, "name": "Splatter", "type": "ability", "ability_type": "signature",
+         "image": "https://cdn/splatter.png"},
+        {"id": 2, "name": "Webless", "type": "ability", "ability_type": "ultimate",
+         "image": None, "image_webp": "https://cdn/webless.webp"},
+        {"id": 3, "name": "Monster Rounds", "type": "upgrade", "item_tier": 1},  # skipped
+    ]
+    load_abilities(db, items, FETCHED_AT)
+    rows = {r["ability_id"]: r for r in db.execute(
+        "SELECT ability_id, name, ability_type, image_url FROM abilities").fetchall()}
+    assert set(rows) == {1, 2}                              # upgrade skipped
+    assert rows[1]["ability_type"] == "signature"
+    assert rows[1]["image_url"] == "https://cdn/splatter.png"
+    assert rows[2]["image_url"] == "https://cdn/webless.webp"   # falls back to webp
+
+
+def test_load_abilities_idempotent(db, mixed_items_json):
+    load_abilities(db, mixed_items_json, FETCHED_AT)
+    load_abilities(db, mixed_items_json, FETCHED_AT)
+    n_abilities = sum(1 for i in mixed_items_json if i.get("type") == "ability")
+    assert db.execute("SELECT COUNT(*) FROM abilities").fetchone()[0] == n_abilities
 
 
 # ── patch_eras seed ──────────────────────────────────────────────────────────
