@@ -387,9 +387,10 @@ Each `match_info.players[].stats[]` snapshot carries the cumulative state at a
   Note the per-snapshot **`last_hits` field is `null`**; `creep_kills` is the
   in-series last-hit proxy. (The flat per-player `last_hits` total still exists;
   it just isn't broken down inside `stats[]`.) Each snapshot also has the full
-  gold breakdown (`gold_lane_creep`, `gold_player`, `gold_neutral_creep`, …),
-  `level`, `kills`/`deaths`/`assists`, and the damage/healing totals finding 5
-  reads from the last entry.
+  gold breakdown (`gold_lane_creep`, `gold_player`, `gold_neutral_creep`, plus a
+  structured `gold_sources[]` array — enumerated in full below under
+  "`stats[]` gold breakdown fields"), `level`, `kills`/`deaths`/`assists`, and
+  the damage/healing totals finding 5 reads from the last entry.
 - **No exact 600 s sample.** Because samples land on the cadence above, there is
   no snapshot at exactly 10:00 — the nearest are 540 s and 720 s. A consumer
   wanting "net worth at the 10-minute mark" must pick a snapshot rather than read
@@ -400,6 +401,56 @@ Each `match_info.players[].stats[]` snapshot carries the cumulative state at a
 **Consequence:** the laning report derives its lane-end net worth / last hits /
 denies straight from `stats[]` in `raw_json`, backfilling historical matches via
 `reprocess-archive` with no API calls (the same pattern as `kill_events`).
+
+---
+
+## `stats[]` gold breakdown fields (verified 2026-07-09, spike 14)
+
+Spike to scope a later "souls over time vs your rank" feature: what soul-income
+breakdown do the `stats[]` snapshots actually carry, and is it a complete
+decomposition of `net_worth`? Answered entirely from already-archived data — no
+live call, **zero rate-limit budget**. Verified over the 480 stored matches
+(5,160 player-timelines / 44,624 snapshots) and cross-checked against the
+git-tracked fixtures `out/02_match_metadata_86714494.json` and
+`out/05_match_metadata_86707774.json`. **It is a two-layer breakdown, and a
+complete decomposition of net worth for real (game_mode 1) matches.**
+
+- **Scalar fields (11).** Every snapshot carries these, **100% present, 0% null,
+  100% monotone non-decreasing** across all 44,624 snapshots:
+  `gold_lane_creep`, `gold_lane_creep_orbs`, `gold_player`, `gold_player_orbs`,
+  `gold_neutral_creep`, `gold_neutral_creep_orbs`, `gold_boss`, `gold_boss_orb`,
+  `gold_treasure`, `gold_denied`, and `gold_death_loss`. All are income *credits*
+  except **`gold_death_loss`, which is a debit** (souls lost on death).
+- **`gold_sources[]` array.** Each snapshot also carries `gold_sources[]`, one
+  entry per income `source` (an integer enum **1–13**) shaped
+  `{source, kills, damage, gold, gold_orbs}`. This is **strictly richer** than
+  the scalar fields: the scalars are roll-ups of sources 1–7, while the small
+  passive sources **8–13 appear only here** (present 94.7% for 8–12, 56.4% for
+  13). Source → meaning, from the observed kills/damage profile:
+  `1` = hero kills, `6` = assist share (kills but no damage) → together these
+  are `gold_player`; `2` = lane creep; `3` = neutral creep; `4` = boss;
+  `5` = **treasure** (urn/idol/sacrifice-style, no kills/damage) → `gold_treasure`;
+  `7` = denies → `gold_denied`; `8`–`13` = passive/non-combat income
+  (comeback, ability, etc.), not surfaced by any scalar field. Verified
+  `gold_player = source 1 + source 6` on the fixtures (`5159 + 4522 = 9681`).
+- **Sum vs `net_worth`:** `Σ gold_sources(gold + gold_orbs)` reconstructs
+  `net_worth` **within 5% for 97% of player-timelines in `game_mode == 1`**
+  (median residual ~1%) — an effectively-exact decomposition. The scalar credits
+  alone undercount by ~5% because they omit sources 8–13. **`game_mode == 4`**
+  (a bot-like mode; 150 matches / 1,199 timelines here) carries a **synthetic
+  `net_worth` ramp with an all-zero gold breakdown** — 0% reconcile — so any
+  income baseline must **filter on game_mode** (its fields are present and
+  non-null but *zero*, so a presence check does not catch it).
+- **Coverage across match age:** the scalar set is present & non-null in 100% of
+  snapshots in every month (2024-08 → 2026-06) and every era; `gold_sources[]`
+  present for 100% of players in every era; anonymized `account_id == 0` players
+  carry the full breakdown too. Cadence is the standard 180 s → 300 s.
+
+**Consequence:** a future souls-over-time feature can read cumulative income by
+source straight from `stats[]` (income *by source* is given, not derived),
+backfilling history via `reprocess-archive` with no API calls — provided it
+excludes `game_mode == 4`. Design and effort estimate live in
+`spikes/14_gold_breakdown.md`.
 
 ---
 
