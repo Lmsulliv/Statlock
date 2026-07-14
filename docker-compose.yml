@@ -27,6 +27,10 @@ services:
       # Set to 1 for a private single-user deploy (writes open, no login). Leave both
       # this and DEADLOCK_BASE_URL unset and writes fail closed (403).
       DEADLOCK_OPEN_WRITES: ${DEADLOCK_OPEN_WRITES:-}
+      # deadlock-api politeness config -- only the worker uses these, but they're
+      # harmless on api. Leave both unset for the default unauthenticated 1 req/5 s.
+      DEADLOCK_API_KEY: ${DEADLOCK_API_KEY:-}
+      DEADLOCK_REQUESTS_PER_SECOND: ${DEADLOCK_REQUESTS_PER_SECOND:-}
     restart: unless-stopped
 
   worker:
@@ -40,6 +44,10 @@ services:
       # The worker reads the DB via the --db flag (its CLI contract), not
       # DEADLOCK_DB -- point it at the same file on the shared volume.
       STEAM_API_KEY: ${STEAM_API_KEY:-}
+      # deadlock-api key + rate ceiling (both optional). See .env.example -- the
+      # rate must only be raised with the deadlock-api maintainers' blessing.
+      DEADLOCK_API_KEY: ${DEADLOCK_API_KEY:-}
+      DEADLOCK_REQUESTS_PER_SECOND: ${DEADLOCK_REQUESTS_PER_SECOND:-}
     command: ["python", "-m", "ingest", "--db", "/data/tracker.db", "run-daemon"]
     restart: unless-stopped
 

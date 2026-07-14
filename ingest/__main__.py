@@ -21,6 +21,7 @@ from ingest.maintenance import compress_legacy_raw_json, prune_metadata_archive
 from ingest.ratelimit import TokenBucket
 from ingest.reprocess import reprocess_archive
 from ingest.runner import run_daemon, run_once
+from tracker.config import deadlock_api_key, deadlock_requests_per_second
 from tracker.db import connect
 from tracker.migrate import migrate
 from tracker.paths import deadlock_stamp_path
@@ -29,8 +30,10 @@ DEFAULT_DB = Path("data") / "tracker.db"
 
 
 def _build_client() -> Client:
-    bucket = TokenBucket(stamp_path=deadlock_stamp_path())
-    return Client(bucket)
+    # Rate and key are deployment config (tracker.config). An invalid rate raises
+    # here, so the worker dies loudly at startup instead of silently defaulting.
+    bucket = TokenBucket(rate=deadlock_requests_per_second(), stamp_path=deadlock_stamp_path())
+    return Client(bucket, api_key=deadlock_api_key())
 
 
 def _open_db(db_path: str):

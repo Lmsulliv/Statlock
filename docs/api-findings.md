@@ -8,6 +8,18 @@ spec docs.
 Base URL: `https://api.deadlock-api.com`. All calls below succeeded
 unauthenticated at 1 request / 5 s; no 429 or `Retry-After` was ever seen.
 
+## Authentication header (choice, not yet verified — 2026-07-06)
+
+No auth convention has been *observed* on the live API — every request above
+worked with no key. To make a granted key deployable without a code change
+(`DEADLOCK_API_KEY`, sent by `ingest/client.py`), we chose the **`X-API-Key`**
+request header. This is a convention pick, not a verified fact: no key has been
+issued to test with. **Verify against deadlock-api's own docs when a key is
+actually granted** — if their scheme differs (e.g. `Authorization: Bearer` or a
+query param), update `Client.get` and this note. Until then the header only
+matters when `DEADLOCK_API_KEY` is set; unset, traffic stays unauthenticated
+exactly as verified here.
+
 ---
 
 ## Contradictions with the spec docs

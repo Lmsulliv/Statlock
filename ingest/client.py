@@ -24,16 +24,30 @@ class NetworkError(Exception):
 
 
 class Client:
-    def __init__(self, bucket: TokenBucket, *, user_agent: str = USER_AGENT, timeout: float = 30):
+    def __init__(
+        self,
+        bucket: TokenBucket,
+        *,
+        user_agent: str = USER_AGENT,
+        timeout: float = 30,
+        api_key: str | None = None,
+    ):
         self._bucket = bucket
         self._user_agent = user_agent
         self._timeout = timeout
+        self._api_key = api_key
 
     def get(self, url: str) -> tuple[int, dict, str]:
         """GET url, rate-limited. Returns (status, headers, body)."""
         self._bucket.acquire()
         log.debug("GET %s", url)
-        request = urllib.request.Request(url, headers={"User-Agent": self._user_agent})
+        headers = {"User-Agent": self._user_agent}
+        # Only deadlock-api clients are given a key; when set it rides every
+        # request. The Steam persona client passes none, so its traffic never
+        # carries this header.
+        if self._api_key:
+            headers["X-API-Key"] = self._api_key
+        request = urllib.request.Request(url, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=self._timeout) as response:
                 return response.status, dict(response.headers), response.read().decode("utf-8")

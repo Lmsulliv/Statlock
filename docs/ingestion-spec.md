@@ -243,7 +243,7 @@ A worker that runs silently in the background will fail silently in the backgrou
 | Knob | Default | Why |
 |---|---|---|
 | Discovery interval | 30 min | Matches your match length; faster is waste |
-| Drain rate | 1 req / 5 s + jitter | Polite to a donation-funded API |
+| Drain rate | 1 req / 5 s + jitter (default) | Polite to a donation-funded API; configurable via `DEADLOCK_REQUESTS_PER_SECOND` — raise ONLY with the maintainers' blessing |
 | Max attempts | 5 | Past 5, it's a throttle problem, not a retry problem |
 | Backoff base / cap | 10 min / 24 h | Spans "blip" to "wait for Valve" |
 | Re-queue window | 24 h | Matches the unlock-throttle rhythm |

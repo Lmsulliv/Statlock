@@ -55,6 +55,10 @@ services:
       # Private single-user escape hatch (writes open, no login). Leave unset in a
       # public deploy; see the warning in .env.example.
       DEADLOCK_OPEN_WRITES: ${DEADLOCK_OPEN_WRITES:-}
+      # deadlock-api politeness config -- only the worker uses these, but they're
+      # harmless on api. Leave both unset for the default unauthenticated 1 req/5 s.
+      DEADLOCK_API_KEY: ${DEADLOCK_API_KEY:-}
+      DEADLOCK_REQUESTS_PER_SECOND: ${DEADLOCK_REQUESTS_PER_SECOND:-}
     # Override the image CMD to trust the proxy's forwarded headers. --proxy-headers
     # makes uvicorn read X-Forwarded-*; --forwarded-allow-ips=* trusts them from any
     # peer (safe here because only Caddy can reach this port). This is what lets the
@@ -93,6 +97,10 @@ services:
     environment:
       DEADLOCK_STATE_DIR: /data
       STEAM_API_KEY: ${STEAM_API_KEY:-}
+      # deadlock-api key + rate ceiling (both optional). See .env.example -- the
+      # rate must only be raised with the deadlock-api maintainers' blessing.
+      DEADLOCK_API_KEY: ${DEADLOCK_API_KEY:-}
+      DEADLOCK_REQUESTS_PER_SECOND: ${DEADLOCK_REQUESTS_PER_SECOND:-}
     command: ["python", "-m", "ingest", "--db", "/data/tracker.db", "run-daemon"]
     healthcheck:
       # Liveness via the heartbeat file the daemon touches every loop. A worker

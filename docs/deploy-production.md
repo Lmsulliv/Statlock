@@ -110,6 +110,8 @@ Minimum production `.env`:
 DOMAIN=stats.example.com
 DEADLOCK_BASE_URL=https://stats.example.com   # turns Steam login on (writes protected)
 STEAM_API_KEY=...                             # optional; persona display names
+DEADLOCK_API_KEY=...                          # optional; sent to deadlock-api if you have a key
+# DEADLOCK_REQUESTS_PER_SECOND=0.2            # optional; default 1 req/5 s -- raise ONLY with maintainers' blessing
 # Litestream (see step 8 to create the bucket/keys):
 LITESTREAM_BUCKET=deadlock-tracker-backups
 LITESTREAM_ENDPOINT=https://s3.us-west-004.backblazeb2.com

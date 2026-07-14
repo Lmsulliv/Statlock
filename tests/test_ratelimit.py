@@ -55,6 +55,19 @@ def test_capacity_one_means_no_bursts():
     assert clock.t - first >= 5.0
 
 
+def test_configured_rate_spaces_requests_accordingly():
+    # A maintainer-blessed higher rate moves the ceiling by config: at 1 req/s
+    # consecutive requests space ~1 s apart, not the default 5 s.
+    clock = SimClock()
+    bucket = TokenBucket(rate=1.0, capacity=1, clock=clock, sleep=clock.sleep,
+                         jitter=lambda: 0.0)
+    bucket.acquire()
+    first = clock.t
+    bucket.acquire()
+    gap = clock.t - first
+    assert 1.0 <= gap < 5.0, gap
+
+
 def test_jitter_added_after_acquire():
     clock = SimClock()
     bucket = TokenBucket(rate=0.2, capacity=1, clock=clock, sleep=clock.sleep,

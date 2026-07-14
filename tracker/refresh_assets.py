@@ -6,56 +6,39 @@ Usage:
 Two requests, spaced at least 5 seconds apart (hard rule: 1 req / 5 s to
 deadlock-api). Each response is archived in raw_api_responses before parsing
 (hard rule 2: archive raw before any parsing).
+
+Requests go through the same ingest.client.Client + TokenBucket the worker uses,
+so this CLI and the worker share one HTTP path: one combined rate ceiling (the
+deadlock_stamp_path stamp file), one jitter policy, and the same optional
+DEADLOCK_API_KEY / DEADLOCK_REQUESTS_PER_SECOND deployment config.
 """
 import json
-import random
 import sys
-import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ingest.client import Client
+from ingest.ratelimit import TokenBucket
+from tracker.config import deadlock_api_key, deadlock_requests_per_second
 from tracker.db import connect
 from tracker.migrate import migrate
 from tracker.paths import deadlock_stamp_path
-from tracker.reference import load_heroes, load_items
+from tracker.reference import load_abilities, load_heroes, load_items
 
 BASE = "https://api.deadlock-api.com"
-_UA  = "deadlock-stat-tracker/0.1 (personal project)"
-_MIN_INTERVAL_S = 5.0
 
 
-def _wait_for_slot() -> None:
-    """Block until 5 s have elapsed since the last request (cross-run via disk stamp).
-
-    Shares the same stamp file as ingest's TokenBucket (deadlock_stamp_path), so
-    this CLI and the worker stay under one combined 1-req/5-s budget."""
-    stamp = deadlock_stamp_path()
-    try:
-        last = float(stamp.read_text())
-    except (FileNotFoundError, ValueError):
-        last = 0.0
-    wait = _MIN_INTERVAL_S - (time.time() - last)
-    if wait > 0:
-        print(f"  rate-limit: sleeping {wait:.1f}s …")
-        time.sleep(wait)
-    # Jitter: 0–2 extra seconds to avoid perfectly periodic traffic.
-    jitter = random.uniform(0, 2)
-    time.sleep(jitter)
-    stamp.parent.mkdir(parents=True, exist_ok=True)
-    stamp.write_text(str(time.time()))
+def _build_client() -> Client:
+    """The same rate-limited, optionally-keyed client the worker builds. An
+    invalid DEADLOCK_REQUESTS_PER_SECOND raises here, failing loudly at startup."""
+    bucket = TokenBucket(rate=deadlock_requests_per_second(), stamp_path=deadlock_stamp_path())
+    return Client(bucket, api_key=deadlock_api_key())
 
 
-def _get(url: str) -> tuple[int, str]:
-    _wait_for_slot()
+def _get(client: Client, url: str) -> tuple[int, str]:
     print(f"  GET {url}")
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return resp.status, resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8", errors="replace")
+    status, _headers, body = client.get(url)
+    return status, body
 
 
 def _archive(conn, url: str, status: int, body: str, fetched_at: str) -> None:
@@ -76,10 +59,11 @@ def main() -> None:
     conn = connect(db_path)
     migrate(conn)
 
+    client = _build_client()
     fetched_at = datetime.now(timezone.utc).isoformat()
 
     heroes_url = f"{BASE}/v1/assets/heroes"
-    status, body = _get(heroes_url)
+    status, body = _get(client, heroes_url)
     _archive(conn, heroes_url, status, body, fetched_at)
     if status == 200:
         heroes_json = json.loads(body)
@@ -90,13 +74,16 @@ def main() -> None:
         sys.exit(1)
 
     items_url = f"{BASE}/v1/assets/items"
-    status, body = _get(items_url)
+    status, body = _get(client, items_url)
     _archive(conn, items_url, status, body, fetched_at)
     if status == 200:
         items_json = json.loads(body)
         upgrades = [i for i in items_json if i.get("type") == "upgrade"]
+        abilities = [i for i in items_json if i.get("type") == "ability"]
         load_items(conn, items_json, fetched_at)
-        print(f"  loaded {len(upgrades)} shop items (out of {len(items_json)} total)")
+        load_abilities(conn, items_json, fetched_at)  # same response, no extra request
+        print(f"  loaded {len(upgrades)} shop items and {len(abilities)} abilities"
+              f" (out of {len(items_json)} total)")
     else:
         print(f"  items request failed: HTTP {status}", file=sys.stderr)
         sys.exit(1)
