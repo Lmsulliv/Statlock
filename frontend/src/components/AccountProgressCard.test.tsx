@@ -13,6 +13,7 @@ function progress(p: Partial<AccountProgress>): AccountProgress {
     prioritized_pending: 0,
     backfill_pending: 0,
     deferred: 0,
+    unavailable: 0,
     ...p,
   }
 }
@@ -67,5 +68,45 @@ describe('AccountProgressCard', () => {
       await screen.findByText(/Full history loading in the background/),
     ).toBeInTheDocument()
     expect(screen.getByText(/50 of 220 matches analyzed/)).toBeInTheDocument()
+  })
+
+  it('hints at the ingest tool when matches are stuck, and not otherwise', async () => {
+    // Some matches parked as deferred/unavailable: show the quiet submission
+    // hint linking to the community ingest tool.
+    mockFetch({
+      '/api/accounts/1/progress': progress({
+        analyzed: 40,
+        known: 50,
+        backfill_pending: 5,
+        deferred: 3,
+        unavailable: 2,
+      }),
+    })
+    const { unmount } = renderWithProviders(<AccountProgressCard accountId={1} />)
+    const link = await screen.findByRole('link', {
+      name: /data submission to deadlock-api/,
+    })
+    expect(link).toHaveAttribute(
+      'href',
+      'https://github.com/deadlock-api/deadlock-api-ingest',
+    )
+    unmount()
+
+    // Nothing stuck: no hint, even while the backfill is still running.
+    vi.unstubAllGlobals()
+    mockFetch({
+      '/api/accounts/1/progress': progress({
+        analyzed: 40,
+        known: 50,
+        backfill_pending: 10,
+      }),
+    })
+    renderWithProviders(<AccountProgressCard accountId={1} />)
+    expect(
+      await screen.findByText(/Full history loading in the background/),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/waiting on/),
+    ).not.toBeInTheDocument()
   })
 })

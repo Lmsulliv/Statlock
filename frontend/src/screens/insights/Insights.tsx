@@ -1,11 +1,18 @@
 import { useEffect, useRef } from 'react'
 import { useParams } from 'react-router-dom'
+import { SectionNav, type SectionNavItem } from '../../components/SectionNav'
 import { GAME_MODE_NORMAL, useScope } from '../../scope/useScope'
 import { DeathsSection } from './DeathsSection'
 import { PlayersSection } from './PlayersSection'
 import { SessionsSection } from './SessionsSection'
 
 type SectionId = 'deaths' | 'sessions' | 'players'
+
+const SECTIONS: SectionNavItem[] = [
+  { id: 'deaths', title: 'Deaths' },
+  { id: 'sessions', title: 'Do you tilt?' },
+  { id: 'players', title: 'Recurring players' },
+]
 
 // The Insights tab: the three coaching analyses that aren't hero- or
 // metric-shaped — death patterns, session/tilt analysis, and recurring
@@ -40,23 +47,27 @@ export function Insights() {
         or a loss streak really changes how you play, and which recurring
         teammates and opponents shift your results.
       </p>
-      <div className="insights">
-        <section ref={refs.deaths} id="deaths" className="card insight-section">
-          <h2 className="card-title">Deaths</h2>
-          {brawl ? <SectionModeNote /> : <DeathsSection scope={scope} />}
-        </section>
+      <div className="sectionnav-layout">
+        <div className="insights sectionnav-content">
+          <section ref={refs.deaths} id="deaths" className="card insight-section">
+            <h2 className="card-title">Deaths</h2>
+            {brawl ? <SectionModeNote /> : <DeathsSection scope={scope} />}
+          </section>
 
-        {/* Session analysis reads win/loss + match times, which Brawl summaries
-            already carry, so it renders under Street Brawl too. */}
-        <section ref={refs.sessions} id="sessions" className="card insight-section">
-          <h2 className="card-title">Do you tilt?</h2>
-          <SessionsSection scope={scope} />
-        </section>
+          {/* Session analysis reads win/loss + match times, which Brawl summaries
+              already carry, so it renders under Street Brawl too. */}
+          <section ref={refs.sessions} id="sessions" className="card insight-section">
+            <h2 className="card-title">Do you tilt?</h2>
+            <SessionsSection scope={scope} />
+          </section>
 
-        <section ref={refs.players} id="players" className="card insight-section">
-          <h2 className="card-title">Recurring players</h2>
-          {brawl ? <SectionModeNote /> : <PlayersSection scope={scope} />}
-        </section>
+          <section ref={refs.players} id="players" className="card insight-section">
+            <h2 className="card-title">Recurring players</h2>
+            {brawl ? <SectionModeNote /> : <PlayersSection scope={scope} />}
+          </section>
+        </div>
+
+        <SectionNav sections={SECTIONS} />
       </div>
     </section>
   )

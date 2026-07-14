@@ -15,6 +15,11 @@ export function AccountProgressCard({ accountId }: { accountId: number | null })
   const { done, total, phase } = progressCounts(data)
   if (phase === 'done') return null
 
+  // Matches parked as deferred/unavailable are usually stuck because their salts
+  // were never submitted to deadlock-api. Point at the community ingest tool so
+  // the user can close that gap rather than wait on data that isn't coming.
+  const stuck = data.deferred + data.unavailable
+
   return (
     <section className="card progress-card">
       {phase === 'recent' ? (
@@ -36,6 +41,19 @@ export function AccountProgressCard({ accountId }: { accountId: number | null })
             Your recent matches are ready; older games keep filling in.
           </p>
         </>
+      )}
+      {stuck > 0 && (
+        <p className="muted progress-note">
+          Some matches are waiting on{' '}
+          <a
+            href="https://github.com/deadlock-api/deadlock-api-ingest"
+            target="_blank"
+            rel="noreferrer"
+          >
+            data submission to deadlock-api
+          </a>
+          .
+        </p>
       )}
     </section>
   )

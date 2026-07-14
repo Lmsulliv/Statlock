@@ -154,7 +154,9 @@ describe('App routes', () => {
     for (const legacy of ['/deaths', '/tilt', '/recurring-players']) {
       mockFetch(routes)
       const view = renderWithProviders(<App />, { route: legacy })
-      expect(await screen.findByText('Do you tilt?')).toBeInTheDocument()
+      // "Do you tilt?" is now both a section heading and a SectionNav link, so
+      // scope the assertion to the heading.
+      expect(await screen.findByRole('heading', { name: 'Do you tilt?' })).toBeInTheDocument()
       expect(screen.getByRole('heading', { name: 'Insights' })).toBeInTheDocument()
       view.unmount()
       vi.unstubAllGlobals()

@@ -1049,11 +1049,14 @@ def account_progress_counts(conn: sqlite3.Connection, account_id: int) -> dict[s
     - analyzed: matches with full metadata ingested. idx_mp_account_match -- this
                 is the view's source='full' count for the account, read without
                 paying for the UNION.
-    - prioritized_pending / backfill_pending / deferred: this account's remaining
-      queue depth by tier, keyed on discovered_for_account (the first discoverer;
-      schema v18). All hit the idx_fetch_queue_account(status, discovered_for_account)
-      prefix. 'pending' is split by priority so the fresh, user-facing tier
-      (priority > 0) is distinguished from any legacy priority-0 pending rows."""
+    - prioritized_pending / backfill_pending / deferred / unavailable: this
+      account's remaining queue depth by tier, keyed on discovered_for_account
+      (the first discoverer; schema v18). All hit the
+      idx_fetch_queue_account(status, discovered_for_account) prefix. 'pending'
+      is split by priority so the fresh, user-facing tier (priority > 0) is
+      distinguished from any legacy priority-0 pending rows. 'unavailable' is
+      included so the UI can hint that the match salts were likely never
+      submitted to deadlock-api (the ingest-coverage note)."""
     known = conn.execute(
         "SELECT COUNT(*) AS n FROM account_match_summaries WHERE account_id = ?",
         (account_id,),
@@ -1077,10 +1080,16 @@ def account_progress_counts(conn: sqlite3.Connection, account_id: int) -> dict[s
         " WHERE discovered_for_account = ? AND status = 'deferred'",
         (account_id,),
     ).fetchone()["n"]
+    unavailable = conn.execute(
+        "SELECT COUNT(*) AS n FROM fetch_queue"
+        " WHERE discovered_for_account = ? AND status = 'unavailable'",
+        (account_id,),
+    ).fetchone()["n"]
     return {
         "known": known, "analyzed": analyzed,
         "prioritized_pending": prioritized_pending,
         "backfill_pending": backfill_pending, "deferred": deferred,
+        "unavailable": unavailable,
     }
 
 

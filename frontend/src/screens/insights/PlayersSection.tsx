@@ -89,6 +89,7 @@ function RecurringTable({ rows, firstHeader }: { rows: RecurringPlayer[]; firstH
     )
   }
   return (
+    <div className="table-scroll">
     <table className="data-table">
       <thead>
         <tr>
@@ -140,6 +141,7 @@ function RecurringTable({ rows, firstHeader }: { rows: RecurringPlayer[]; firstH
         ))}
       </tbody>
     </table>
+    </div>
   )
 }
 

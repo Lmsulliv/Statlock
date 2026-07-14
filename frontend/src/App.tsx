@@ -97,6 +97,15 @@ function AppChrome({ pinned }: { pinned: boolean }) {
           <Route path="/*" element={<ScreenRoutes />} />
         </Routes>
       </main>
+
+      {/* Data-source attribution; deliberately on every screen, public or not. */}
+      <footer className="app-footer">
+        Data from{' '}
+        <a href="https://deadlock-api.com" target="_blank" rel="noreferrer">
+          deadlock-api.com
+        </a>
+        . Not affiliated with Valve.
+      </footer>
     </div>
   )
 }

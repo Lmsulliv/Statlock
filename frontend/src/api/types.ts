@@ -502,6 +502,7 @@ export interface AccountProgress {
   prioritized_pending: number
   backfill_pending: number
   deferred: number
+  unavailable: number
 }
 
 // ── Match detail (api/service.match_detail) ──────────────────────────────────
@@ -534,6 +535,18 @@ export interface MatchPurchase {
   item_image_url: string | null
   purchase_time_s: number | null
   sold_time_s: number // 0 = never sold
+}
+
+// One ability point in the perspective player's skill-up order for a match.
+// point_number is the 1-based ordinal by game time (server-derived); game_time_s
+// may be null. Descriptive only — no verdict; there is no baseline for skill order.
+export interface AbilityLevelUp {
+  ability_id: number
+  ability_name: string
+  ability_type: string | null // slot: signature / ultimate / innate / …
+  image_url: string | null
+  point_number: number
+  game_time_s: number | null
 }
 
 // One death in the whole-match feed. Killer fields are null for a non-player
@@ -581,6 +594,7 @@ export interface MatchDetail {
   account_id: number | null // the resolved "you" perspective
   players: MatchDetailPlayer[]
   purchases: MatchPurchase[]
+  abilities: AbilityLevelUp[]
   deaths: DeathEvent[]
   trades: KillTrade[]
 }

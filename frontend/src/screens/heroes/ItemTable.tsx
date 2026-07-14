@@ -122,6 +122,7 @@ export function ItemTable({ rows }: { rows: ItemRow[] }) {
   }, [rows, sort])
 
   return (
+    <div className="table-scroll">
     <table className="data-table">
       <thead>
         <tr>
@@ -186,5 +187,6 @@ export function ItemTable({ rows }: { rows: ItemRow[] }) {
         ))}
       </tbody>
     </table>
+    </div>
   )
 }

@@ -60,6 +60,15 @@ code {
   z-index: 20;
 }
 
+/* Same escape trick for the header's gear menu: the .app > * rule traps its
+   dropdown inside the header's z-index:1 context, so it would paint behind the
+   scope bar (20) and infotips (60) below it. Lift the whole header above every
+   other layer so the menu can overlay the page. (After the rule above, so it
+   wins at equal specificity.) */
+.app > .app-header {
+  z-index: 100;
+}
+
 /* ── Header / nav ─────────────────────────────────────────────────────────── */
 
 .app-header {
@@ -122,6 +131,21 @@ a.btn {
 
 .app-main {
   padding-top: 22px;
+}
+
+/* One-line data-source attribution at the bottom of every screen. Muted on
+   purpose: present, readable, never competing with the content. */
+.app-footer {
+  margin-top: 36px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.app-footer a {
+  color: inherit;
+  text-decoration: underline;
 }
 
 /* ── Scope bar ────────────────────────────────────────────────────────────── */
@@ -243,6 +267,14 @@ a.btn {
 }
 
 /* ── Data table ───────────────────────────────────────────────────────────── */
+
+/* Wraps a wide table (any with the 300px interval column) so it scrolls inside
+   its card on narrow widths instead of bleeding over the card's right edge.
+   The parent must allow shrinking (min-width:0) for this to engage. */
+.table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
 
 .data-table {
   width: 100%;
@@ -1585,16 +1617,23 @@ a.btn {
   gap: 16px;
 }
 
-/* Two rosters side by side; collapse to one column when there's no room. */
+/* Two equal columns side by side; collapse to one when there's no room. Used
+   for Match Detail rosters and the paired Insights tables. minmax(0, 1fr) plus
+   min-width:0 on the children lets a wide table shrink and scroll inside its
+   half instead of stretching the column past the card edge. */
 .team-cols {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 18px;
+}
+
+.team-cols > * {
+  min-width: 0;
 }
 
 @media (max-width: 720px) {
   .team-cols {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -1724,6 +1763,123 @@ a.btn {
   color: var(--text-muted);
 }
 
+/* Ability-order strip: one row per point spent, in skill-up order. Descriptive,
+   no verdict — mirrors the purchase list's rhythm with a leading order pip. */
+.ability-order {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ability-point {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ability-pip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.ability-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.ability-slot {
+  text-transform: capitalize;
+}
+
+.ability-time {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Heroes-tab "Skill order" section: descriptive per-hero skill sequences, split
+   by wins/losses. No verdict colour — plain rows, sample sizes, muted counts. */
+.skill-info {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  text-decoration: underline dotted;
+  cursor: help;
+}
+
+.skill-order {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.skill-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.skill-scope-label {
+  font-weight: 600;
+}
+
+.skill-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skill-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.skill-fact-label {
+  flex: none;
+  min-width: 110px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.skill-seq {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.skill-ability {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.skill-arrow {
+  color: var(--text-muted);
+  margin-left: 2px;
+}
+
+.skill-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.skill-split-note {
+  margin: 0;
+}
+
 /* ── Five-tab restructure: header tools, composites, split layouts ────────── */
 
 /* Right cluster of the header: sync pill, management gear, auth controls.
@@ -1793,12 +1949,12 @@ a.btn {
 .menu-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: 100;
 }
 
 .menu-panel {
   position: absolute;
-  z-index: 41;
+  z-index: 101;
   top: calc(100% + 6px);
   right: 0;
   min-width: 170px;
@@ -1917,6 +2073,11 @@ a.toggle-opt.active {
   color: var(--text);
   text-decoration: none;
   font-size: 13px;
+  /* Clip the card's contents to its own box so the interval bar can't spill
+     past the edge — which also keeps the whole <a>'s hit area on the card,
+     not floating over the neighbour. min-width:0 lets it shrink in the grid. */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .hero-card:hover {
@@ -1929,19 +2090,40 @@ a.toggle-opt.active {
   justify-content: space-between;
   gap: 8px;
   font-weight: 600;
+  /* Let a long hero name truncate instead of widening the card. */
+  min-width: 0;
 }
 
-/* Heroes tab: sidebar list beside the detail pane. */
+.hero-card-head .enemy-cell {
+  min-width: 0;
+}
+
+/* The interval bar defaults to a 230px min-width for table cells; inside a
+   card it must instead fit the card, so scope an override here only. */
+.hero-card .interval {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Heroes tab: sidebar list beside the detail pane. The detail track is
+   minmax(0, 1fr), not 1fr: a bare 1fr floors at the content's min width, so a
+   wide table (300px interval column) would push the grid past the viewport and
+   scroll the page sideways. minmax(0, …) lets the track shrink and the table
+   scroll inside its own card instead. */
 .heroes-layout {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 280px minmax(0, 1fr);
   gap: 18px;
   align-items: start;
 }
 
+.heroes-layout > * {
+  min-width: 0;
+}
+
 @media (max-width: 900px) {
   .heroes-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -2032,4 +2214,123 @@ a.toggle-opt.active {
 
 .insight-section {
   scroll-margin-top: 16px;
+}
+
+/* ── SectionNav ───────────────────────────────────────────────────────────── */
+
+/* A page split into a content column and a slim sticky anchor rail. The nav
+   sits in DOM before the content (so keyboard users reach it first) but is
+   placed in the right column via grid. Below 1100px the rail collapses to a
+   compact dropdown that flows above the content. */
+.sectionnav-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px;
+  gap: 18px;
+  align-items: start;
+}
+
+.sectionnav-layout > .sectionnav-content {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  /* Stack the section cards with the same rhythm the standalone screens used. */
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.sectionnav-layout > .section-nav {
+  grid-column: 2;
+  grid-row: 1;
+  position: sticky;
+  top: 16px;
+}
+
+/* Any section reachable by the rail gets the same offset a deep link uses, so
+   its heading lands below the sticky top edge rather than flush against it. */
+.anchor-section {
+  scroll-margin-top: 16px;
+}
+
+.section-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+
+.section-nav-link {
+  padding: 5px 8px;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 12.5px;
+  line-height: 1.3;
+}
+
+.section-nav-link:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.section-nav-link.active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* The narrow-width dropdown; hidden on desktop where the rail shows instead. */
+.section-nav-dropdown {
+  display: none;
+}
+
+.section-nav-dropdown > summary {
+  cursor: pointer;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  list-style: none;
+}
+
+.section-nav-dropdown > summary::-webkit-details-marker {
+  display: none;
+}
+
+.section-nav-dropdown[open] > summary {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.section-nav-dropdown .section-nav-list {
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-bottom-left-radius: var(--radius);
+  border-bottom-right-radius: var(--radius);
+  background: var(--surface);
+}
+
+@media (max-width: 1100px) {
+  .sectionnav-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* Nav first (it's first in DOM), content below it. */
+  .sectionnav-layout > .section-nav {
+    grid-column: 1;
+    grid-row: 1;
+    position: static;
+  }
+  .sectionnav-layout > .sectionnav-content {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .section-nav-rail {
+    display: none;
+  }
+  .section-nav-dropdown {
+    display: block;
+  }
 }

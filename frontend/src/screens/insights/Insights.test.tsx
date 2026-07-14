@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   baseRoutes,
@@ -23,9 +23,17 @@ describe('Insights', () => {
     mockFetch(routes)
     renderWithProviders(<Insights />, { route: '/insights' })
 
-    expect(screen.getByText('Deaths')).toBeInTheDocument()
-    expect(screen.getByText('Do you tilt?')).toBeInTheDocument()
-    expect(screen.getByText('Recurring players')).toBeInTheDocument()
+    // Query by heading role: the titles now also appear as SectionNav links.
+    expect(screen.getByRole('heading', { name: 'Deaths' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Do you tilt?' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Recurring players' })).toBeInTheDocument()
+    // The section nav lists each section as a jump link (rail + dropdown copy).
+    const nav = screen.getByRole('navigation', { name: 'Sections' })
+    expect(within(nav).getAllByRole('link', { name: 'Deaths' }).length).toBeGreaterThan(0)
+    expect(within(nav).getAllByRole('link', { name: 'Do you tilt?' }).length).toBeGreaterThan(0)
+    expect(
+      within(nav).getAllByRole('link', { name: 'Recurring players' }).length,
+    ).toBeGreaterThan(0)
     // Each section owns its explanatory empty state.
     expect(await screen.findByText(/No deaths to show yet/)).toBeInTheDocument()
     expect(await screen.findByText(/No sessions to analyze yet/)).toBeInTheDocument()

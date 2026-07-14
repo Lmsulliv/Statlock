@@ -44,15 +44,44 @@ def test_personalized_title_for_player_path(api_db):
     assert _og_title(out) == f"{ME} — Deadlock Stat Tracker"
 
 
-def test_personalized_title_includes_rank(api_db):
+def _seed_rank(api_db):
+    """Give ME a current rank of Archon 2 (badge 52 = tier 5, subtier 2)."""
     api_db.execute("INSERT INTO ranks(tier, name, color, fetched_at)"
                    " VALUES (5, 'Archon', '#abc', '2026-06-15T12:00:00+00:00')")
     api_db.execute(
         "INSERT INTO account_rank_history(account_id, match_id, badge, recorded_at)"
         " VALUES (?, 900, 52, '2026-06-10T00:00:00+00:00')", (ME,))
     api_db.commit()
+
+
+def test_personalized_title_includes_rank(api_db):
+    _seed_rank(api_db)
     out = meta.render_index(SHELL, f"player/{ME}", api_db)
     assert "Archon 2" in out
+
+
+def test_ranked_player_gets_badge_og_image(api_db):
+    _seed_rank(api_db)
+    out = meta.render_index(SHELL, f"player/{ME}", api_db)
+    assert ('property="og:image" content="https://assets-bucket.deadlock-api.com'
+            '/assets-api-res/images/ranks/rank5/badge_lg.png"') in out
+    assert 'name="twitter:card" content="summary_large_image"' in out
+
+
+def test_unranked_player_omits_og_image(api_db):
+    # Account has data but no rank series: no og:image tag at all (an empty
+    # content="" would render as a broken preview image), plain summary card.
+    out = meta.render_index(SHELL, f"player/{ME}", api_db)
+    assert "og:image" not in out
+    assert 'name="twitter:card" content="summary"' in out
+
+
+def test_generic_block_og_image_follows_static_constant(api_db, monkeypatch):
+    assert "og:image" not in meta.render_index(SHELL, "", api_db)
+    monkeypatch.setattr(meta, "STATIC_OG_IMAGE", "https://cdn.example.com/banner.png")
+    out = meta.render_index(SHELL, "", api_db)
+    assert 'property="og:image" content="https://cdn.example.com/banner.png"' in out
+    assert 'name="twitter:card" content="summary_large_image"' in out
 
 
 def test_player_title_is_label_free(api_db):
@@ -118,6 +147,15 @@ def test_curl_player_link_has_personalized_title(spa_client):
     # The acceptance criterion: raw HTML body's og:title contains the name.
     body = spa_client.get(f"/player/{ME}").text
     assert _og_title(body) == f"{ME} — Deadlock Stat Tracker"
+
+
+def test_curl_ranked_player_link_has_og_image(spa_client, api_db):
+    # Acceptance criterion: a curl on /player/<id> with a known rank sees the
+    # badge art as og:image in the raw HTML.
+    _seed_rank(api_db)
+    body = spa_client.get(f"/player/{ME}").text
+    assert ('property="og:image" content="https://assets-bucket.deadlock-api.com'
+            '/assets-api-res/images/ranks/rank5/badge_lg.png"') in body
 
 
 def test_root_serves_generic_shell(spa_client):

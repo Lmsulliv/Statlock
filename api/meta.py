@@ -18,6 +18,10 @@ from api.config import base_url
 
 SITE_NAME = "Deadlock Stat Tracker"
 _TAGLINE = "Statistically honest Deadlock performance analytics."
+# Preview image for non-player pages. An operator hosting branding art can point
+# this at its absolute URL; None omits og:image entirely (an empty tag would
+# unfurl as a broken image).
+STATIC_OG_IMAGE: str | None = None
 
 # The placeholder block, markers inclusive. Non-greedy so it stops at the first
 # end marker; DOTALL so it spans the newlines between the tags.
@@ -34,18 +38,22 @@ def _named(name: str, value: str) -> str:
     return f'<meta name="{name}" content="{html.escape(value, quote=True)}" />'
 
 
-def _block(title: str, description: str, url: str | None) -> str:
-    """The full marker-wrapped tag block for the given title/description/url."""
+def _block(title: str, description: str, url: str | None,
+           image: str | None = None) -> str:
+    """The full marker-wrapped tag block for the given title/description/url.
+    With an image, the twitter card upgrades to the large-image layout."""
     tags = [
         _named("description", description),
         _prop("og:title", title),
         _prop("og:description", description),
         _prop("og:site_name", SITE_NAME),
         _prop("og:type", "website"),
-        _named("twitter:card", "summary"),
+        _named("twitter:card", "summary_large_image" if image else "summary"),
         _named("twitter:title", title),
         _named("twitter:description", description),
     ]
+    if image:
+        tags.append(_prop("og:image", image))
     if url:
         tags.insert(1, _prop("og:url", url))
     body = "\n    ".join(tags)
@@ -77,11 +85,14 @@ def _player_block(account_id: int, path: str, conn) -> str:
     rank = _rank_phrase(profile["current_rank"])
     title = f"{name} — {SITE_NAME}"
     description = (f"{name} · {rank}. {_TAGLINE}" if rank else f"{name}. {_TAGLINE}")
-    return _block(title, description, _canonical_url(path))
+    # The current rank's badge art makes the unfurl recognizable; unranked
+    # accounts get no image rather than a placeholder.
+    image = (profile["current_rank"] or {}).get("badge_url")
+    return _block(title, description, _canonical_url(path), image)
 
 
 def _generic_block(path: str) -> str:
-    return _block(SITE_NAME, _TAGLINE, _canonical_url(path))
+    return _block(SITE_NAME, _TAGLINE, _canonical_url(path), STATIC_OG_IMAGE)
 
 
 def render_index(html_text: str, path: str, conn) -> str:

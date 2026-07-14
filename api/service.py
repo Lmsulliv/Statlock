@@ -979,7 +979,7 @@ def account_progress(conn: sqlite3.Connection, account_id: int, *, now=utcnow) -
     """Ingestion progress for one account, for the onboarding UI's poll: how many
     matches we already know from discovery summaries (`known`), how many have full
     metadata analyzed (`analyzed`), and the remaining queue depth by tier
-    (`prioritized_pending`, `backfill_pending`, `deferred`). All cheap indexed
+    (`prioritized_pending`, `backfill_pending`, `deferred`, `unavailable`). All cheap indexed
     counts (queries.account_progress_counts). As the drain loop works, `analyzed`
     climbs toward `known` and the pending tiers fall."""
     # Polled while a fresh import ingests, but also whenever an idle account is

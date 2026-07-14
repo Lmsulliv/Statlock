@@ -16,7 +16,7 @@ const overviewData = (extra: Record<string, unknown> = {}) => ({
 
 const noProgress = {
   account_id: 1, known: 0, analyzed: 0,
-  prioritized_pending: 0, backfill_pending: 0, deferred: 0,
+  prioritized_pending: 0, backfill_pending: 0, deferred: 0, unavailable: 0,
 }
 
 const focusEntry = {

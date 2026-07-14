@@ -46,6 +46,7 @@ export function MetricScopeBlock({ row }: { row: PerformanceRow }) {
         )}
         <span className="muted perf-scope-games">{row.games} games</span>
       </h2>
+      <div className="table-scroll">
       <table className="data-table">
         <thead>
           <tr>
@@ -63,6 +64,7 @@ export function MetricScopeBlock({ row }: { row: PerformanceRow }) {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }

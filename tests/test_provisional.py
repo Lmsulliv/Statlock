@@ -236,7 +236,8 @@ def test_progress_counts_track_the_drain(db):
 
     p = service.account_progress(db, ME)
     assert p == {"account_id": ME, "known": 3, "analyzed": 0,
-                 "prioritized_pending": 3, "backfill_pending": 0, "deferred": 0}
+                 "prioritized_pending": 3, "backfill_pending": 0, "deferred": 0,
+                 "unavailable": 0}
 
     # The drain loop fetches one match: full metadata lands, its queue row flips.
     _full(db, 1000, [(1, ME, WRAITH, 0, 1, 3000, 40000)])
@@ -246,6 +247,14 @@ def test_progress_counts_track_the_drain(db):
     p = service.account_progress(db, ME)
     assert p["analyzed"] == 1 and p["prioritized_pending"] == 2
     assert p["known"] == 3                                  # summaries are still held
+
+    # A match the API can't serve (five 404s) parks as 'unavailable'; the
+    # progress payload surfaces it so the UI can hint at the ingest tool.
+    db.execute("UPDATE fetch_queue SET status = 'unavailable' WHERE match_id = 1001")
+    db.commit()
+
+    p = service.account_progress(db, ME)
+    assert p["unavailable"] == 1 and p["prioritized_pending"] == 1
 
 
 # ── Endpoint wiring (the two new routes exist and carry the flag) ─────────────
@@ -269,7 +278,8 @@ def test_empty_account_hero_records_and_progress(db):
     # No matches known yet, no queue rows -> all zeros, no error.
     assert service.account_progress(db, ME) == {
         "account_id": ME, "known": 0, "analyzed": 0,
-        "prioritized_pending": 0, "backfill_pending": 0, "deferred": 0}
+        "prioritized_pending": 0, "backfill_pending": 0, "deferred": 0,
+        "unavailable": 0}
 
 
 def test_not_enough_data_verdict_on_thin_hero(db):

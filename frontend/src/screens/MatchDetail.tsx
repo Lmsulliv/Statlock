@@ -1,6 +1,7 @@
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { useMatchDetail } from '../api/queries'
 import type {
+  AbilityLevelUp,
   DeathEvent,
   KillTrade,
   MatchDetail as MatchDetailData,
@@ -10,6 +11,7 @@ import type {
 import { EmptyState } from '../components/EmptyState'
 import { HeroIcon } from '../components/HeroIcon'
 import { QueryBoundary } from '../components/QueryBoundary'
+import { SectionNav, type SectionNavItem } from '../components/SectionNav'
 import { fmtClock, gameModeLabel } from '../format'
 import { useHref } from '../player/PlayerContext'
 import { useScope } from '../scope/useScope'
@@ -62,28 +64,49 @@ function MatchBody({ data }: { data: MatchDetailData }) {
         <span className="muted">{fmtDateTime(data.start_time)}</span>
       </section>
 
-      <div className="team-cols">
-        <RosterColumn title={label(0)} players={team0} />
-        <RosterColumn title={label(1)} players={team1} />
+      <div className="sectionnav-layout">
+        <div className="sectionnav-content">
+          {/* Kill trades leads: it's the headline "how did the fights go"
+              read, so it sits directly under the match header. */}
+          <section id="kill-trades" className="card anchor-section">
+            <h2 className="card-title">Kill trades</h2>
+            <KillTrades trades={data.trades} />
+          </section>
+
+          <div id="teams" className="team-cols anchor-section">
+            <RosterColumn title={label(0)} players={team0} />
+            <RosterColumn title={label(1)} players={team1} />
+          </div>
+
+          <section id="purchases" className="card anchor-section">
+            <h2 className="card-title">Your purchases</h2>
+            <Purchases purchases={data.purchases} />
+          </section>
+
+          <section id="abilities" className="card anchor-section">
+            <h2 className="card-title">Ability order</h2>
+            <AbilityOrder abilities={data.abilities} />
+          </section>
+
+          <section id="timeline" className="card anchor-section">
+            <h2 className="card-title">Kill / death timeline</h2>
+            <Timeline deaths={data.deaths} />
+          </section>
+        </div>
+
+        <SectionNav sections={MATCH_SECTIONS} />
       </div>
-
-      <section className="card">
-        <h2 className="card-title">Your purchases</h2>
-        <Purchases purchases={data.purchases} />
-      </section>
-
-      <section className="card">
-        <h2 className="card-title">Kill / death timeline</h2>
-        <Timeline deaths={data.deaths} />
-      </section>
-
-      <section className="card">
-        <h2 className="card-title">Kill trades</h2>
-        <KillTrades trades={data.trades} />
-      </section>
     </div>
   )
 }
+
+const MATCH_SECTIONS: SectionNavItem[] = [
+  { id: 'kill-trades', title: 'Kill trades' },
+  { id: 'teams', title: 'Teams' },
+  { id: 'purchases', title: 'Your purchases' },
+  { id: 'abilities', title: 'Ability order' },
+  { id: 'timeline', title: 'Kill / death timeline' },
+]
 
 function RosterColumn({ title, players }: { title: string; players: MatchDetailPlayer[] }) {
   return (
@@ -137,6 +160,31 @@ function Purchases({ purchases }: { purchases: MatchPurchase[] }) {
         </li>
       ))}
     </ul>
+  )
+}
+
+// The perspective player's ability level-up order, one row per point spent, in
+// game order. Descriptive only — a factual record of what you leveled and when,
+// with no verdict (there is no baseline for skill order). Renders nothing broken
+// for matches with no ability data (old/summary-only matches, or another account).
+function AbilityOrder({ abilities }: { abilities: AbilityLevelUp[] }) {
+  if (abilities.length === 0) {
+    return <p className="muted">No ability data recorded for this account in this match.</p>
+  }
+  return (
+    <ol className="ability-order">
+      {abilities.map((a) => (
+        <li key={a.point_number} className="ability-point">
+          <span className="ability-pip" aria-label={`Point ${a.point_number}`}>
+            {a.point_number}
+          </span>
+          <HeroIcon name={a.ability_name} url={a.image_url} />
+          <span className="ability-name">{a.ability_name}</span>
+          {a.ability_type && <span className="muted ability-slot">{a.ability_type}</span>}
+          <span className="muted ability-time">{fmtClock(a.game_time_s)}</span>
+        </li>
+      ))}
+    </ol>
   )
 }
 

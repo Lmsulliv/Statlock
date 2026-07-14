@@ -129,6 +129,7 @@ export function MatchupTable({ rows }: { rows: MatchupRow[] }) {
   }, [rows, sort])
 
   return (
+    <div className="table-scroll">
     <table className="data-table">
       <thead>
         <tr>
@@ -197,5 +198,6 @@ export function MatchupTable({ rows }: { rows: MatchupRow[] }) {
         ))}
       </tbody>
     </table>
+    </div>
   )
 }

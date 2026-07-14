@@ -77,6 +77,7 @@ function TiltBody({ data }: { data: TiltResponse }) {
 // progression is the signal), so this table isn't sortable.
 function TiltTable({ rows, firstHeader }: { rows: TiltBucket[]; firstHeader: string }) {
   return (
+    <div className="table-scroll">
     <table className="data-table">
       <thead>
         <tr>
@@ -123,6 +124,7 @@ function TiltTable({ rows, firstHeader }: { rows: TiltBucket[]; firstHeader: str
         ))}
       </tbody>
     </table>
+    </div>
   )
 }
 
