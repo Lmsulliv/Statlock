@@ -88,10 +88,10 @@ def test_mean_interval_rejects_unsupported_confidence():
         mean_interval([1.0, 2.0, 3.0], confidence=0.99)
 
 
-def test_mean_interval_80_band_is_narrower_than_95():
+def test_mean_interval_70_band_is_narrower_than_95():
     _, low95, high95 = mean_interval([1, 2, 3, 4, 5, 6], confidence=0.95)
-    _, low80, high80 = mean_interval([1, 2, 3, 4, 5, 6], confidence=0.80)
-    assert (high80 - low80) < (high95 - low95)
+    _, low70, high70 = mean_interval([1, 2, 3, 4, 5, 6], confidence=0.70)
+    assert (high70 - low70) < (high95 - low95)
 
 
 # ── mean_interval: property tests ────────────────────────────────────────────
@@ -137,7 +137,7 @@ def test_property_t_interval_never_narrower_than_normal(values):
 
 # A tight cluster around 10: mean 10, sample stdev ≈ 0.577, n 7. Its bands are
 #   95%: 10 ± 0.534 -> (9.466, 10.534)
-#   80%: 10 ± 0.314 -> (9.686, 10.314)
+#   70%: 10 ± 0.247 -> (9.753, 10.247)
 # so a baseline's position relative to those edges pins each verdict tier.
 _CLUSTER = [10, 10, 10, 11, 9, 10, 10]
 
@@ -155,13 +155,13 @@ def test_verdict_clear_weakness_when_95_excludes_above():
     assert mean_verdict(_CLUSTER, baseline_mean=100) == VERDICT_CLEAR_WEAKNESS
 
 
-def test_verdict_leaning_strength_when_only_80_excludes_below():
-    # 9.6 sits inside the 95% band but below the 80% lower edge (9.686).
+def test_verdict_leaning_strength_when_only_70_excludes_below():
+    # 9.6 sits inside the 95% band but below the 70% lower edge (9.753).
     assert mean_verdict(_CLUSTER, baseline_mean=9.6) == VERDICT_LEANING_STRENGTH
 
 
-def test_verdict_leaning_weakness_when_only_80_excludes_above():
-    # 10.4 sits inside the 95% band but above the 80% upper edge (10.314).
+def test_verdict_leaning_weakness_when_only_70_excludes_above():
+    # 10.4 sits inside the 95% band but above the 70% upper edge (10.247).
     assert mean_verdict(_CLUSTER, baseline_mean=10.4) == VERDICT_LEANING_WEAKNESS
 
 

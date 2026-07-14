@@ -209,7 +209,7 @@ def test_verdict_clear_weakness_when_95_excludes_above():
 
 
 def test_verdict_leaning_weakness_small_sample_above_floor():
-    # 1W/5 vs 0.5: the 95% band still includes 0.5 (not clear), but the 80% band
+    # 1W/5 vs 0.5: the 95% band still includes 0.5 (not clear), but the 70% band
     # excludes it and the shrunk rate (0.4) agrees on the direction -> leaning.
     assert verdict(1, 5, 0.5) == VERDICT_LEANING_WEAKNESS
 
@@ -221,6 +221,32 @@ def test_verdict_leaning_strength_small_sample_above_floor():
 def test_verdict_exactly_at_global_is_not_enough_data():
     # No direction at all: sits right on the global rate.
     assert verdict(5, 10, 0.5) == VERDICT_NOT_ENOUGH_DATA
+
+
+def test_verdict_leaning_appears_at_70_band_but_not_80():
+    # Boundary of the loosened band: 5W/7 vs 0.5. The 95% band still includes 0.5
+    # (not clear), and the old 80% band (z=1.2816) still included it too -- so at
+    # 80% this was not_enough_data. The looser 70% band (z=1.0364) excludes 0.5
+    # and the shrunk rate agrees, so it now earns a leaning call.
+    assert not _band_excludes(5, 7, 0.5, Z_CLEAR)      # not clear
+    assert not _band_excludes(5, 7, 0.5, 1.2816)       # old 80% band: no verdict
+    assert _band_excludes(5, 7, 0.5, Z_LEAN)           # new 70% band: excludes
+    assert verdict(5, 7, 0.5) == VERDICT_LEANING_STRENGTH
+
+
+def test_verdict_still_not_enough_data_when_70_band_includes_global():
+    # The other side of the 70% boundary: 6W/10 vs 0.5 leans up (0.6 > 0.5), but
+    # even the loosened 70% Wilson band still touches 0.5, so the record stays
+    # muted -- honesty holds, a looser band is not a free verdict.
+    assert not _band_excludes(6, 10, 0.5, Z_LEAN)
+    assert verdict(6, 10, 0.5) == VERDICT_NOT_ENOUGH_DATA
+
+
+def _band_excludes(wins, n, global_rate, z):
+    """True when the Wilson interval at band z lies wholly to one side of the
+    global rate (i.e. the band would earn a verdict at that confidence)."""
+    low, high = wilson_interval(wins, n, z)
+    return low > global_rate or high < global_rate
 
 
 # ── verdict: property tests ───────────────────────────────────────────────────
@@ -258,8 +284,8 @@ def test_split_tier_clear_when_95_bands_disjoint():
     assert split_tier(90, 100, 10, 100) == "clear"
 
 
-def test_split_tier_leaning_when_only_80_bands_disjoint():
-    # 8/10 vs 3/10: the 95% bands still overlap (not clear), but the looser 80%
+def test_split_tier_leaning_when_only_70_bands_disjoint():
+    # 8/10 vs 3/10: the 95% bands still overlap (not clear), but the looser 70%
     # bands separate -> leaning. Pin the premise so the tier follows from it.
     assert not _disjoint(8, 10, 3, 10, Z_CLEAR)
     assert _disjoint(8, 10, 3, 10, Z_LEAN)

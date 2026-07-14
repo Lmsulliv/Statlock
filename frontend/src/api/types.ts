@@ -3,7 +3,7 @@
 // recomputes a statistic. If a field changes server-side, change it here too.
 
 // Five confidence tiers (see stats/__init__.py). "clear" = the 95% interval
-// excludes the baseline; "leaning" = a softer 80%-band signal; otherwise none.
+// excludes the baseline; "leaning" = a softer 70%-band signal; otherwise none.
 export type Verdict =
   | 'clear_strength'
   | 'leaning_strength'

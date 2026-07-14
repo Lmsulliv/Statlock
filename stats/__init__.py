@@ -10,7 +10,7 @@ from statistics import fmean, stdev
 
 # Confidence-aware verdict vocabulary (five tiers). A row is only "clear" when
 # the 95% Wilson interval excludes the global rate; "leaning" is a softer signal
-# (a looser 80% band excludes it AND the shrinkage estimate agrees on the
+# (a looser 70% band excludes it AND the shrinkage estimate agrees on the
 # direction); everything else, including anything below the sample-size floor,
 # is "not_enough_data".
 VERDICT_CLEAR_STRENGTH = "clear_strength"
@@ -24,7 +24,11 @@ VERDICT_CLEAR_WEAKNESS = "clear_weakness"
 VERDICT_FLOOR = 5
 
 Z_CLEAR = 1.96    # 95% band -> a "clear" call
-Z_LEAN = 1.2816   # 80% band -> a "leaning" call
+# 70% band -> a "leaning" call. Looser than the old 80% band (1.2816): a wider
+# net admits more borderline cases as leanings, trading a slightly higher
+# false-positive rate on thin samples for surfacing tilts that would otherwise
+# read as "not enough data". The VERDICT_FLOOR and shrinkage guards still apply.
+Z_LEAN = 1.0364
 
 
 def wilson_interval(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -66,7 +70,7 @@ def verdict(wins: int, n: int, global_rate: float) -> str:
     Tiers, strongest evidence first:
     - Below VERDICT_FLOOR games -> always not_enough_data (too little to say).
     - "clear" when the 95% Wilson interval excludes the global rate.
-    - "leaning" when only a looser 80% band excludes it AND the shrinkage
+    - "leaning" when only a looser 70% band excludes it AND the shrinkage
       estimate (which pulls thin samples toward the global prior) agrees on the
       direction -- so a sample that shrinks back to the baseline stays muted.
     - otherwise not_enough_data.
@@ -101,7 +105,7 @@ def split_tier(wins_met: int, n_met: int,
     above the other side's high bound.
 
     Returns "clear" (the 95% Wilson bands are disjoint), "leaning" (only the
-    looser 80% bands are disjoint), or None (the bands overlap, or either side
+    looser 70% bands are disjoint), or None (the bands overlap, or either side
     is below VERDICT_FLOOR -- too little to claim a real gap). Direction-
     agnostic: which side is higher is the caller's read off the gap sign.
     """
@@ -131,8 +135,8 @@ def _intervals_disjoint(wins_a: int, n_a: int, wins_b: int, n_b: int,
 # A continuous metric instead gets a Student-t interval on its sample mean.
 
 # Two-sided Student-t critical values, indexed by degrees of freedom (n - 1),
-# for the two confidence bands the verdict uses: 95% (alpha = .05) and 80%
-# (alpha = .20). Degrees of freedom = the number of values free to vary once the
+# for the two confidence bands the verdict uses: 95% (alpha = .05) and 70%
+# (alpha = .30). Degrees of freedom = the number of values free to vary once the
 # mean is pinned, i.e. n - 1. For df >= 31 we fall back to the normal z
 # (Z_CLEAR / Z_LEAN): by df 30 the t critical value is within ~0.05 of the
 # normal, the textbook "t -> z" crossover. Verify against any Student-t table.
@@ -141,20 +145,20 @@ _T_95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365,
          14: 2.145, 15: 2.131, 16: 2.120, 17: 2.110, 18: 2.101, 19: 2.093,
          20: 2.086, 21: 2.080, 22: 2.074, 23: 2.069, 24: 2.064, 25: 2.060,
          26: 2.056, 27: 2.052, 28: 2.048, 29: 2.045, 30: 2.042}
-_T_80 = {1: 3.078, 2: 1.886, 3: 1.638, 4: 1.533, 5: 1.476, 6: 1.440, 7: 1.415,
-         8: 1.397, 9: 1.383, 10: 1.372, 11: 1.363, 12: 1.356, 13: 1.350,
-         14: 1.345, 15: 1.341, 16: 1.337, 17: 1.333, 18: 1.330, 19: 1.328,
-         20: 1.325, 21: 1.323, 22: 1.321, 23: 1.319, 24: 1.318, 25: 1.316,
-         26: 1.315, 27: 1.314, 28: 1.313, 29: 1.311, 30: 1.310}
+_T_70 = {1: 1.963, 2: 1.386, 3: 1.250, 4: 1.190, 5: 1.156, 6: 1.134, 7: 1.119,
+         8: 1.108, 9: 1.100, 10: 1.093, 11: 1.088, 12: 1.083, 13: 1.079,
+         14: 1.076, 15: 1.074, 16: 1.071, 17: 1.069, 18: 1.067, 19: 1.066,
+         20: 1.064, 21: 1.063, 22: 1.061, 23: 1.060, 24: 1.059, 25: 1.058,
+         26: 1.058, 27: 1.057, 28: 1.056, 29: 1.055, 30: 1.055}
 
 
 def _t_critical(df: int, confidence: float) -> float:
     """Two-sided Student-t critical value: table for df 1-30, z for df >= 31."""
     if confidence == 0.95:
         return _T_95.get(df, Z_CLEAR)
-    if confidence == 0.80:
-        return _T_80.get(df, Z_LEAN)
-    raise ValueError("confidence must be 0.95 or 0.80")
+    if confidence == 0.70:
+        return _T_70.get(df, Z_LEAN)
+    raise ValueError("confidence must be 0.95 or 0.70")
 
 
 def mean_interval(
@@ -178,7 +182,7 @@ def mean_interval(
     Edge cases mirror wilson_interval's "no information -> widest interval":
     with n <= 1 the spread of the mean is unknown, so the interval is all of
     (-inf, +inf). An empty sample has no mean and raises ValueError. Only the
-    two tabulated confidence levels (0.95, 0.80) are supported.
+    two tabulated confidence levels (0.95, 0.70) are supported.
     """
     n = len(values)
     if n == 0:
@@ -197,7 +201,7 @@ def mean_verdict(values: Sequence[float], baseline_mean: float) -> str:
     and the same VERDICT_FLOOR philosophy so thin samples never earn a verdict:
     - Below VERDICT_FLOOR values -> always not_enough_data.
     - "clear" when the 95% t-interval of the personal mean excludes the baseline.
-    - "leaning" when only the looser 80% t-interval excludes it.
+    - "leaning" when only the looser 70% t-interval excludes it.
     - otherwise not_enough_data.
 
     "strength" means the personal mean sits *above* the baseline and "weakness"
@@ -222,7 +226,7 @@ def mean_verdict(values: Sequence[float], baseline_mean: float) -> str:
     if high < baseline_mean:
         return VERDICT_CLEAR_WEAKNESS
 
-    _, lean_low, lean_high = mean_interval(values, 0.80)
+    _, lean_low, lean_high = mean_interval(values, 0.70)
     if lean_low > baseline_mean:
         return VERDICT_LEANING_STRENGTH
     if lean_high < baseline_mean:
