@@ -82,8 +82,14 @@ export function IntervalBar({
       </div>
       <div className="interval-labels">
         <span className="interval-rate">{fmt(winrate)}</span>
-        <span>
-          CI {fmt(ciLow)}–{fmt(ciHigh)}
+        {/* One text node for the range, so nothing can break between the bound
+            and the dash; `.interval-ci` is nowrap, which is what actually holds
+            it on one line. `.interval-ci-level` is display:none by default and
+            revealed only on the Overview's hero cards, where the label sits on
+            its own line and has room to say which interval this is. */}
+        <span className="interval-ci">
+          <span className="interval-ci-level">95% </span>
+          {`CI ${fmt(ciLow)}–${fmt(ciHigh)}`}
         </span>
         {globalRate !== null && (
           <span className="interval-baseline-key">baseline {fmt(globalRate)}</span>

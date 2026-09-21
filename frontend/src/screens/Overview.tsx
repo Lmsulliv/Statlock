@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useMe, useOverview, useRanks } from '../api/queries'
 import { useCanManage } from '../api/useCanManage'
@@ -75,7 +75,9 @@ function OverviewBody({ data }: { data: OverviewData }) {
       {normal && <FocusAreas />}
 
       <div className="overview-cols">
-        <section className="card">
+        {/* Stretches to the grid row that the taller hero-cards column defines,
+            so the chart grows into that height instead of leaving it blank. */}
+        <section className="card overview-chart-card">
           <div className="card-head">
             <h2 className="card-title">Rank over time</h2>
             {data.current_rank && <CurrentRankBadge rank={data.current_rank} />}
@@ -138,12 +140,38 @@ function EraCandidateBanner({ count }: { count: number }) {
 // the rank tier name when we can resolve it.
 function MmrChart({ series }: { series: MmrPoint[] }) {
   const ranks = useRanks()
-  if (series.length === 0) {
+
+  // Every hook runs before the empty-series early return below — React requires
+  // a stable hook order, and an early return above them would break it.
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const svgRef = useRef<SVGSVGElement>(null)
+  const [hover, setHover] = useState<number | null>(null)
+  // The viewBox tracks the wrapper's real pixel box instead of a fixed 680x180
+  // ratio, so the chart fills whatever height the card gives it rather than
+  // letterboxing inside it. The fallback covers first paint and jsdom (which
+  // has no ResizeObserver), where the old fixed size is still a sane default.
+  const [box, setBox] = useState({ w: 680, h: 180 })
+
+  // Re-attached when the series arrives, because the wrapper isn't in the DOM
+  // while the empty state is showing.
+  const empty = series.length === 0
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect
+      if (width > 0 && height > 0) setBox({ w: width, h: height })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [empty])
+
+  if (empty) {
     return <p className="muted">No rank history yet. It appears once ranked matches are ingested.</p>
   }
 
-  const W = 680
-  const H = 180
+  const W = box.w
+  const H = box.h
   const padX = 36
   const padY = 18
   const n = series.length
@@ -180,9 +208,6 @@ function MmrChart({ series }: { series: MmrPoint[] }) {
   // rank you were at that time. getScreenCTM().inverse() converts the mouse's
   // screen coordinates into the SVG's own coordinate space, so the math is right
   // regardless of how the responsive SVG is scaled on screen.
-  const svgRef = useRef<SVGSVGElement>(null)
-  const [hover, setHover] = useState<number | null>(null)
-
   const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const svg = svgRef.current
     const ctm = svg?.getScreenCTM()
@@ -205,49 +230,53 @@ function MmrChart({ series }: { series: MmrPoint[] }) {
   const tipY = active ? Math.min(Math.max(y(active.badge) - 26, padY), H - 44) : 0
 
   return (
-    <div>
-      <svg
-        ref={svgRef}
-        className="mmr-chart"
-        viewBox={`0 0 ${W} ${H}`}
-        role="img"
-        aria-label="Rank badge over time"
-        onMouseMove={onMove}
-        onMouseLeave={() => setHover(null)}
-      >
-        <line className="mmr-axis" x1={padX} y1={padY} x2={padX} y2={H - padY} />
-        <line className="mmr-axis" x1={padX} y1={H - padY} x2={W - padX} y2={H - padY} />
-        <polyline className="mmr-line" points={points} />
-        {series.map((p, i) => (
-          <circle key={p.match_id} className="mmr-dot" cx={x(i)} cy={y(p.badge)} r={2.5} />
-        ))}
+    <div className="mmr-chart-block">
+      {/* The observed wrapper holds the SVG alone, so its measured box IS the
+          chart's box — the axis labels sit outside it as a sibling. */}
+      <div className="mmr-chart-wrap" ref={wrapRef}>
+        <svg
+          ref={svgRef}
+          className="mmr-chart"
+          viewBox={`0 0 ${W} ${H}`}
+          role="img"
+          aria-label="Rank badge over time"
+          onMouseMove={onMove}
+          onMouseLeave={() => setHover(null)}
+        >
+          <line className="mmr-axis" x1={padX} y1={padY} x2={padX} y2={H - padY} />
+          <line className="mmr-axis" x1={padX} y1={H - padY} x2={W - padX} y2={H - padY} />
+          <polyline className="mmr-line" points={points} />
+          {series.map((p, i) => (
+            <circle key={p.match_id} className="mmr-dot" cx={x(i)} cy={y(p.badge)} r={2.5} />
+          ))}
 
-        {active && (
-          <g className="mmr-hover" pointerEvents="none">
-            <line className="mmr-hover-line" x1={tipAnchor} y1={padY} x2={tipAnchor} y2={H - padY} />
-            <circle className="mmr-hover-dot" cx={tipAnchor} cy={y(active.badge)} r={4} />
-            <g transform={`translate(${tipX}, ${tipY})`}>
-              <rect className="mmr-tooltip-box" width={tipW} height={36} rx={4} />
-              <text className="mmr-tooltip-rank" x={8} y={15}>
-                {rankLabel(active.badge)}
-              </text>
-              <text className="mmr-tooltip-date" x={8} y={29}>
-                {fmtDate(active.start_time)}
-              </text>
+          {active && (
+            <g className="mmr-hover" pointerEvents="none">
+              <line className="mmr-hover-line" x1={tipAnchor} y1={padY} x2={tipAnchor} y2={H - padY} />
+              <circle className="mmr-hover-dot" cx={tipAnchor} cy={y(active.badge)} r={4} />
+              <g transform={`translate(${tipX}, ${tipY})`}>
+                <rect className="mmr-tooltip-box" width={tipW} height={36} rx={4} />
+                <text className="mmr-tooltip-rank" x={8} y={15}>
+                  {rankLabel(active.badge)}
+                </text>
+                <text className="mmr-tooltip-date" x={8} y={29}>
+                  {fmtDate(active.start_time)}
+                </text>
+              </g>
             </g>
-          </g>
-        )}
+          )}
 
-        {/* A transparent rect over the plot area widens the hover target so the
-            cursor doesn't have to land exactly on the 2px line. */}
-        <rect
-          x={padX}
-          y={padY}
-          width={W - 2 * padX}
-          height={H - 2 * padY}
-          fill="transparent"
-        />
-      </svg>
+          {/* A transparent rect over the plot area widens the hover target so
+              the cursor doesn't have to land exactly on the 2px line. */}
+          <rect
+            x={padX}
+            y={padY}
+            width={W - 2 * padX}
+            height={H - 2 * padY}
+            fill="transparent"
+          />
+        </svg>
+      </div>
       <div className="mmr-axis-labels">
         <span>Low: {loLabel}</span>
         <span>{n} ranked matches</span>

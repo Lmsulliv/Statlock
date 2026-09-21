@@ -2,7 +2,6 @@ import { Link, useLocation } from 'react-router-dom'
 import { useHeroRecords } from '../../api/queries'
 import { HeroIcon } from '../../components/HeroIcon'
 import { IntervalBar } from '../../components/IntervalBar'
-import { ProvisionalBadge } from '../../components/ProvisionalBadge'
 import { SampleSize } from '../../components/SampleSize'
 import { useHref } from '../../player/PlayerContext'
 import { searchWith } from '../../scope/search'
@@ -15,6 +14,11 @@ const TOP_N = 4
 // report on the Heroes tab. Sorting by games and slicing the top few is
 // presentation ordering of server-computed rows; the interval and verdict come
 // straight from /api/hero-records (baselined against your own overall rate).
+//
+// Deliberately no ProvisionalBadge here, unlike HeroList on the Heroes tab: the
+// Overview is a glance surface, and the chip's 48 characters of nowrap text do
+// not fit beside a hero name in a ~180px card. The sample size below the name
+// already carries the "don't over-read this" signal. Heroes keeps the chip.
 export function HeroCards() {
   const { scope } = useScope()
   const { search } = useLocation()
@@ -37,9 +41,13 @@ export function HeroCards() {
           <span className="hero-card-head">
             <span className="enemy-cell">
               <HeroIcon name={h.hero_name} url={h.hero_image_url} />
-              {h.hero_name}
+              {/* The name needs its own element to take text-overflow — a bare
+                  text node can't be ellipsised — and the title keeps the full
+                  name reachable once it is. */}
+              <span className="hero-card-name" title={h.hero_name}>
+                {h.hero_name}
+              </span>
             </span>
-            <ProvisionalBadge show={h.provisional} />
           </span>
           <SampleSize games={h.games} wins={h.wins} />
           <IntervalBar

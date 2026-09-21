@@ -848,6 +848,21 @@ a.btn {
   font-weight: 600;
 }
 
+/* The range is one unit: never break it across lines, least of all at the en
+   dash between the two bounds. A no-op wherever .interval keeps its 230px
+   floor (the labels' widest layout is ~195px, so they never shrink there); it
+   earns its keep inside a hero card, which overrides that floor to 0. */
+.interval-ci {
+  white-space: nowrap;
+}
+
+/* "95% " in front of "CI". Hidden by default so dense tables keep the terse
+   label, revealed on the Overview's hero cards where the range has its own
+   line and room to say which interval it is. */
+.interval-ci-level {
+  display: none;
+}
+
 .interval-baseline-key {
   display: inline-flex;
   align-items: center;
@@ -1114,10 +1129,43 @@ a.btn {
 
 /* ── MMR chart (hand-rolled SVG, Overview) ────────────────────────────────── */
 
+/* Chart + its axis labels, filling whatever height the card has. */
+.mmr-chart-block {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The box the chart fills. A fluid height with a floor and a ceiling rather
+   than a fixed pixel value: it grows into a tall card on a wide screen and
+   stays legible on a squat one. The SVG's viewBox is measured from this box in
+   JS, so the drawing matches it exactly and never letterboxes. */
+.mmr-chart-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: clamp(180px, 24vh, 300px);
+  /* A ceiling as well as a floor: without it the chart inherits whatever height
+     the hero-cards column happens to be, which on a narrow two-column layout
+     can be taller than the chart is wide. */
+  max-height: clamp(280px, 46vh, 460px);
+}
+
+/* With the chart capped, any height left in a stretched card collects below the
+   axis labels rather than between them and the chart. */
+.mmr-chart-block > .mmr-axis-labels {
+  margin-bottom: auto;
+}
+
 .mmr-chart {
+  flex: 1 1 auto;
   width: 100%;
-  height: auto;
+  min-width: 0;
+  min-height: 0;
   display: block;
+  cursor: crosshair;
 }
 
 .mmr-axis {
@@ -1133,10 +1181,6 @@ a.btn {
 
 .mmr-dot {
   fill: var(--baseline);
-}
-
-.mmr-chart {
-  cursor: crosshair;
 }
 
 /* Hover readout: vertical guide + highlighted point + a small tooltip showing
@@ -1170,9 +1214,13 @@ a.btn {
   font-size: 11px;
 }
 
+/* Wraps rather than letting the three endpoint labels collide when the column
+   is narrow. */
 .mmr-axis-labels {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
+  gap: 2px 12px;
   margin-top: 6px;
   font-size: 12px;
   color: var(--text-muted);
@@ -1994,18 +2042,36 @@ a.toggle-opt.active {
   margin-bottom: 16px;
 }
 
-/* Overview: rank chart and hero cards share a row on wide screens. */
+/* Overview: rank chart and hero cards share a row on wide screens. The tracks
+   are minmax(0, …) rather than bare fr for the same reason as .heroes-layout: a
+   bare fr floors at its content's min width, so a wide child would push the
+   grid past the viewport instead of shrinking. */
 .overview-cols {
   display: grid;
-  grid-template-columns: 3fr 2fr;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
   gap: 18px;
   align-items: start;
 }
 
+.overview-cols > * {
+  min-width: 0;
+}
+
 @media (max-width: 900px) {
   .overview-cols {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* The hero-cards column is the taller of the two, so it sets the grid row
+   height and the chart card would otherwise end early and leave the remainder
+   as bare page background. align-self (not align-items on the grid) stretches
+   only this column, so the hero-cards card keeps its start alignment and never
+   grows blank space of its own. */
+.overview-chart-card {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
 }
 
 /* A small right-aligned link in a card head (e.g. "Full digest →"). */
@@ -2055,10 +2121,13 @@ a.toggle-opt.active {
   color: var(--text-muted);
 }
 
-/* Overview hero cards: most-played heroes at a glance. */
+/* Overview hero cards: most-played heroes at a glance. The 150px track (not
+   180px) keeps two cards per row down to a 1024px viewport; at 180px the column
+   dropped to a single stack there, and since the chart card stretches to match
+   this column's height, that turned the chart into an absurdly tall box. */
 .hero-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: var(--gap);
 }
 
@@ -2096,6 +2165,17 @@ a.toggle-opt.active {
 
 .hero-card-head .enemy-cell {
   min-width: 0;
+  overflow: hidden;
+}
+
+/* A long hero name (Mo & Krill, Grey Talon, ...) truncates with an ellipsis
+   rather than spilling out of its zero-width flex box; the element carries a
+   title with the full name. */
+.hero-card-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The interval bar defaults to a 230px min-width for table cells; inside a
@@ -2103,6 +2183,29 @@ a.toggle-opt.active {
 .hero-card .interval {
   min-width: 0;
   max-width: 100%;
+}
+
+/* Overview only: the stat block reads as two lines — the midpoint on top at
+   full size, the interval beneath it small and muted — instead of three labels
+   fighting over one row and each breaking mid-value. */
+.hero-card .interval-labels {
+  flex-wrap: wrap;
+  column-gap: 8px;
+  row-gap: 2px;
+  align-items: baseline;
+}
+
+.hero-card .interval-rate {
+  flex: 1 0 100%;
+  font-size: 15px;
+}
+
+.hero-card .interval-ci-level {
+  display: inline;
+}
+
+.hero-card .interval-baseline-key {
+  white-space: nowrap;
 }
 
 /* Heroes tab: sidebar list beside the detail pane. The detail track is
