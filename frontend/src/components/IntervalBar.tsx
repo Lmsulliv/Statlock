@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import type { Verdict } from '../api/types'
 import { InfoTip } from './InfoTip'
 import { INTERVAL_TIP, VERDICT_TONE } from './verdict'
@@ -14,6 +15,12 @@ interface Props {
   // original win-rate behavior, unchanged for every existing caller.
   domain?: { min: number; max: number }
   format?: (x: number | null) => string
+  // A delta rendered at the end of the bar's label row instead of in its own
+  // table column — same number, one fewer column to scroll past. Optional, so
+  // the callers that don't pass it render exactly as before. `extraTip` adds a
+  // line to the tooltip for a value that no longer has a column of its own.
+  deltaLabel?: ReactNode
+  extraTip?: string
 }
 
 const clamp = (x: number) => Math.max(0, Math.min(1, x))
@@ -35,6 +42,8 @@ export function IntervalBar({
   verdict,
   domain,
   format,
+  deltaLabel,
+  extraTip,
 }: Props) {
   const tone = VERDICT_TONE[verdict]
   const fmt = format ?? pctLabel
@@ -50,9 +59,12 @@ export function IntervalBar({
     `${fmt(winrate)} · 95% CI ${fmt(ciLow)}–${fmt(ciHigh)}` +
     (globalRate !== null ? ` · baseline ${fmt(globalRate)}` : ' · no baseline')
   // The numeric summary leads the tip; the plain-language explainer follows.
+  // `extraTip` sits between them — it carries a figure that used to have its own
+  // column, so it has to be readable, not merely implied.
   const tip = (
     <>
       <strong className="infotip-summary">{summary}</strong>
+      {extraTip && <span className="infotip-extra">{extraTip}</span>}
       {INTERVAL_TIP}
     </>
   )
@@ -93,6 +105,11 @@ export function IntervalBar({
         </span>
         {globalRate !== null && (
           <span className="interval-baseline-key">baseline {fmt(globalRate)}</span>
+        )}
+        {/* Pushed to the far end of the label row, so it reads as "this bar,
+            that far off the baseline" rather than as a separate column. */}
+        {deltaLabel !== undefined && (
+          <span className="interval-delta">{deltaLabel}</span>
         )}
       </div>
     </InfoTip>

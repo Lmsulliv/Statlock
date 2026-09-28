@@ -2,9 +2,7 @@ import { Link, useLocation } from 'react-router-dom'
 import type { HeroRecord } from '../../api/types'
 import { HeroIcon } from '../../components/HeroIcon'
 import { IntervalBar } from '../../components/IntervalBar'
-import { ProvisionalBadge } from '../../components/ProvisionalBadge'
 import { SampleSize } from '../../components/SampleSize'
-import { VerdictBadge } from '../../components/VerdictBadge'
 import { useHref } from '../../player/PlayerContext'
 import { searchWith, searchWithout } from '../../scope/search'
 
@@ -13,6 +11,12 @@ import { searchWith, searchWithout } from '../../scope/search'
 // a hero row writes hero_id into the query string (the same param the scope
 // bar's "My hero" select uses, so the two can never disagree), and "All heroes"
 // switches to the /heroes/all path with hero_id dropped.
+//
+// Deliberately NO text chips here. The verdict and provisional badges both set
+// `white-space: nowrap`, and the provisional one is 48 characters — in a 280px
+// column it can't fit and overflowed its row. Both now live in the detail panel
+// for the selected hero, where there is room to state them in full. What's left
+// is the record and the interval bar, which carry the same signal graphically.
 export function HeroList({
   heroes,
   activeHeroId,
@@ -49,13 +53,16 @@ export function HeroList({
             <span className="hero-list-head">
               <span className="enemy-cell">
                 <HeroIcon name={h.hero_name} url={h.hero_image_url} />
-                {h.hero_name}
+                {/* The name needs its own element to take text-overflow — a
+                    bare text node can't be ellipsised — and the title keeps the
+                    full name reachable once it is. Same pattern as HeroCards. */}
+                <span className="hero-list-name" title={h.hero_name}>
+                  {h.hero_name}
+                </span>
               </span>
-              <VerdictBadge verdict={h.verdict} games={h.games} />
             </span>
             <span className="hero-list-sub">
               <SampleSize games={h.games} wins={h.wins} />
-              <ProvisionalBadge show={h.provisional} />
             </span>
             <IntervalBar
               winrate={h.winrate}

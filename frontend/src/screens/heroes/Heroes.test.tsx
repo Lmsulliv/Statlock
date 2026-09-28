@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   baseRoutes,
   emptyPerformance,
+  heroRecord,
   sync,
 } from '../../test/fixtures'
 import { mockFetch, renderWithProviders } from '../../test/renderWithProviders'
@@ -95,6 +96,63 @@ describe('Heroes', () => {
     const note = await screen.findByText(/split appears once you have enough games/)
     const section = note.closest('section') as HTMLElement
     expect(within(section).queryByText('In wins')).toBeNull()
+  })
+
+  // The selector is a fixed 280px column and both badges are nowrap, so a chip
+  // there can only overflow its row. The detail panel states them instead.
+  it('keeps text chips out of the hero selector and truncates long names', async () => {
+    mockFetch({
+      ...baseRoutes,
+      '/api/hero-records': {
+        provisional: true,
+        heroes: [
+          { ...heroRecord(5, 'Haze', 30), provisional: true },
+          { ...heroRecord(9, 'Mo & Krill', 12), provisional: true },
+        ],
+      },
+      '/api/matchups': [],
+      '/api/items': [],
+      '/api/laning': [],
+      '/api/performance': emptyPerformance,
+    })
+    renderWithProviders(<Heroes />, { route: '/heroes' })
+
+    const list = await screen.findByRole('navigation', { name: 'Played heroes' })
+    // No verdict chip and no provisional chip anywhere in the selector.
+    expect(within(list).queryByText(/Need more games|Neutral|Strength|Weakness/)).toBeNull()
+    expect(within(list).queryByText(/deepening as matches are analyzed/)).toBeNull()
+    // A long name can be ellipsised, and the full name stays reachable.
+    expect(within(list).getByTitle('Mo & Krill')).toHaveTextContent('Mo & Krill')
+
+    // The verdict moved to the detail panel, stated in full rather than as a chip.
+    const record = document.getElementById('hero-record') as HTMLElement
+    expect(within(record).getByText('Neutral')).toBeInTheDocument()
+    expect(within(record).getByText(/still includes the baseline/)).toBeInTheDocument()
+    expect(within(record).getByText(/deepening as matches are analyzed/)).toBeInTheDocument()
+  })
+
+  it('derives the section rail from the rendered sections', async () => {
+    mockFetch({
+      ...baseRoutes,
+      '/api/matchups': [],
+      '/api/items': [],
+      '/api/laning': [],
+      '/api/performance': emptyPerformance,
+    })
+    renderWithProviders(<Heroes />, { route: '/heroes' })
+
+    const nav = await screen.findByRole('navigation', { name: 'Sections' })
+    // Every rail entry points at a section that actually rendered.
+    const links = within(nav).getAllByRole('link')
+    expect(links.length).toBeGreaterThan(0)
+    for (const link of links) {
+      const id = link.getAttribute('href')!.slice(1)
+      expect(document.getElementById(id)).not.toBeNull()
+    }
+    expect(within(nav).getAllByRole('link', { name: 'Laning' })[0]).toHaveAttribute(
+      'href',
+      '#hero-laning',
+    )
   })
 
   it('renders the aggregate matchup grid for the all-heroes view', async () => {

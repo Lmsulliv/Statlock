@@ -35,8 +35,8 @@ function HeroesBody({ scope, allHeroes }: { scope: Scope; allHeroes: boolean }) 
       <h1 className="screen-title">Heroes</h1>
       <p className="screen-sub">
         Every hero you play, with its record judged against your own overall win
-        rate. Pick one for the full report — matchups, items, laning, and
-        per-game performance on that hero — or “All heroes” for the aggregate
+        rate. Pick one for the full report to show matchups, items, laning, and
+        per-game performance on that hero, or “All heroes” for the aggregate
         matchup grid.
       </p>
       <QueryBoundary query={records}>

@@ -35,7 +35,17 @@ export function LaningSection({ scope }: { scope: Scope }) {
             <LaningEmpty />
           ) : (
             shown.map((row) => (
-              <MetricScopeBlock key={`${row.scope}-${row.hero_id ?? 'all'}`} row={row} />
+              // Every laning metric is read at the same lane-end mark, so the
+              // qualifier is hoisted into the column header instead of repeating
+              // on all four rows; the per-metric sample always equals the block's
+              // game count here (a match either has a lane-end snapshot or has no
+              // row at all), so the Sample column would only restate it.
+              <MetricScopeBlock
+                key={`${row.scope}-${row.hero_id ?? 'all'}`}
+                row={row}
+                qualifier="@ lane end"
+                showSample={false}
+              />
             ))
           )
         }}

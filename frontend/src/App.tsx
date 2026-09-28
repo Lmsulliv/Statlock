@@ -45,14 +45,23 @@ export function App() {
   )
 }
 
+// The Heroes tab is the one screen with three columns (hero list, detail, and
+// the section rail) and two wide data tables inside the middle one. At the
+// app's usual 1100px cap the tables have ~550px to work with and scroll
+// sideways at every viewport, which no amount of column trimming fixes. This
+// gives that tab, and only that tab, room to lay its tables out flat.
+// Path-based rather than a prop so it also covers /heroes/all and the
+// /player/:id/heroes public mount.
+const isWideScreen = (pathname: string) => /(^|\/)heroes(\/|$)/.test(pathname)
+
 function AppChrome({ pinned }: { pinned: boolean }) {
   // Carry the scope query string across navigation, so switching screens keeps
   // the active scope (and the URL stays bookmarkable on every screen).
-  const { search } = useLocation()
+  const { search, pathname } = useLocation()
   const base = useBasePath()
 
   return (
-    <div className="app">
+    <div className={isWideScreen(pathname) ? 'app app-wide' : 'app'}>
       {/* Soft light-green frame; purely decorative, never intercepts clicks. */}
       <div className="vignette" aria-hidden="true" />
       <header className="app-header">

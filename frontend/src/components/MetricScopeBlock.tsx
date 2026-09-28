@@ -32,7 +32,31 @@ function domainFor(m: MetricField): { min: number; max: number } {
 // plus a metric table of mean/CI/baseline/delta/verdict rows. Shared so the
 // three callers can't drift apart — it used to live copy-pasted in both the
 // Performance and Laning screens.
-export function MetricScopeBlock({ row }: { row: PerformanceRow }) {
+//
+// `qualifier` hoists a suffix every metric label shares ("@ lane end") out of
+// the rows and into the Metric column header, so it's stated once instead of on
+// every line. `showSample` hides the per-metric sample column where it's known
+// to duplicate the block's own game count.
+export function MetricScopeBlock({
+  row,
+  qualifier,
+  showSample = true,
+}: {
+  row: PerformanceRow
+  qualifier?: string
+  showSample?: boolean
+}) {
+  // Hoist ONLY if every metric in the block actually ends with the qualifier.
+  // If a future metric is measured at a different point, its label keeps its own
+  // inline qualifier and nothing is hoisted — a wrong shared heading would be a
+  // silent lie about when the number was taken.
+  const hoisted =
+    qualifier !== undefined &&
+    row.metrics.length > 0 &&
+    row.metrics.every((m) => m.label.endsWith(qualifier))
+  const labelOf = (m: MetricField) =>
+    hoisted ? m.label.slice(0, m.label.length - qualifier.length).trimEnd() : m.label
+
   return (
     <div className="perf-block">
       <h2 className="perf-scope-title">
@@ -50,8 +74,11 @@ export function MetricScopeBlock({ row }: { row: PerformanceRow }) {
       <table className="data-table">
         <thead>
           <tr>
-            <th>Metric</th>
-            <th>Sample</th>
+            <th>
+              Metric
+              {hoisted && <span className="col-qualifier"> {qualifier}</span>}
+            </th>
+            {showSample && <th>Sample</th>}
             <th className="col-interval">Mean &amp; 95% CI</th>
             <th>Baseline</th>
             <th className="col-delta">Δ vs baseline</th>
@@ -60,7 +87,13 @@ export function MetricScopeBlock({ row }: { row: PerformanceRow }) {
         </thead>
         <tbody>
           {row.metrics.map((m) => (
-            <MetricRow key={m.key} m={m} />
+            <MetricRow
+              key={m.key}
+              m={m}
+              label={labelOf(m)}
+              showSample={showSample}
+              rowGames={row.games}
+            />
           ))}
         </tbody>
       </table>
@@ -69,15 +102,33 @@ export function MetricScopeBlock({ row }: { row: PerformanceRow }) {
   )
 }
 
-function MetricRow({ m }: { m: MetricField }) {
+function MetricRow({
+  m,
+  label,
+  showSample,
+  rowGames,
+}: {
+  m: MetricField
+  label: string
+  showSample: boolean
+  rowGames: number
+}) {
+  // With the column hidden, a metric whose sample is SMALLER than the block's
+  // game count (a sparse metric the API honestly reports its own n for) still
+  // says so inline. The column is only hidden where the two are known to agree,
+  // and this makes that assumption self-checking rather than load-bearing.
+  const oddSample = !showSample && m.games !== rowGames
   return (
     <tr>
       <td title={m.higher_is_better ? 'Higher is better' : 'Lower is better'}>
-        {m.label}
+        {label}
+        {oddSample && <span className="muted metric-odd-sample"> {m.games} games</span>}
       </td>
-      <td>
-        <SampleSize games={m.games} />
-      </td>
+      {showSample && (
+        <td>
+          <SampleSize games={m.games} />
+        </td>
+      )}
       <td className="col-interval">
         <IntervalBar
           winrate={m.mean}

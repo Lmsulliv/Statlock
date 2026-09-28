@@ -24,29 +24,31 @@ interface Column {
   key: SortKey
   label: string
   title?: string
+  // A second sortable value sharing this column's cell, for a figure rendered
+  // on the interval bar rather than in a column of its own.
+  also?: { key: SortKey; label: string; title: string }
 }
 
 // Same column shape as the matchup table, plus the extra purchase-timing column.
-// Titles explain the columns that need interpreting.
+// Titles explain the columns that need interpreting. The two delta columns fold
+// into the win-rate bar exactly as they do there — see MatchupTable.
 const COLUMNS: Column[] = [
   { key: 'name', label: 'Item' },
   { key: 'games', label: 'Record' },
-  { key: 'winrate', label: 'Win rate & 95% CI' },
+  {
+    key: 'winrate',
+    label: 'Win rate & 95% CI',
+    also: {
+      key: 'delta',
+      label: 'Adj. Δ',
+      title:
+        'Shrinkage-adjusted rate minus global; thin samples are pulled toward the baseline first. Shown at the end of the bar.',
+    },
+  },
   {
     key: 'global',
     label: 'Global baseline',
     title: 'The baseline win rate with this item across all tracked games at this scope.',
-  },
-  {
-    key: 'raw_delta',
-    label: 'Global Δ',
-    title: 'Your win rate minus the global baseline (plain difference).',
-  },
-  {
-    key: 'delta',
-    label: 'Adj. Δ',
-    title:
-      'Shrinkage-adjusted rate minus global; thin samples are pulled toward the baseline first.',
   },
   {
     key: 'timing',
@@ -61,6 +63,12 @@ const COLUMNS: Column[] = [
       'Weighs sample size and confidence, so a thin sample reads as inconclusive until a well-supported gap earns a verdict.',
   },
 ]
+
+// The plain global delta no longer has a column, so the bar's tooltip states it.
+const rawDeltaTip = (raw: number | null) =>
+  raw === null
+    ? 'No global baseline at this scope, so there is no plain difference to state.'
+    : `Global Δ ${raw > 0 ? '+' : ''}${Math.round(raw * 100)} pts (your rate minus the baseline, unadjusted).`
 
 function sortValue(r: ItemRow, key: SortKey): number | string | null {
   switch (key) {
@@ -123,26 +131,50 @@ export function ItemTable({ rows }: { rows: ItemRow[] }) {
 
   return (
     <div className="table-scroll">
-    <table className="data-table">
+    <table className="data-table wide-table">
       <thead>
         <tr>
           {COLUMNS.map((c) => {
             const active = sort.key === c.key
+            const alsoActive = c.also !== undefined && sort.key === c.also.key
+            const caret = sort.dir === 'asc' ? '▲' : '▼'
             return (
               <th
                 key={c.key}
                 title={c.title}
-                aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                aria-sort={
+                  active || alsoActive
+                    ? sort.dir === 'asc'
+                      ? 'ascending'
+                      : 'descending'
+                    : 'none'
+                }
                 className={
                   (c.key === 'name' ? 'col-hero ' : '') +
                   (c.key === 'winrate' ? 'col-interval ' : '') +
                   'th-sortable' +
-                  (active ? ' active' : '')
+                  (active || alsoActive ? ' active' : '')
                 }
                 onClick={() => onHeader(c.key)}
               >
                 {c.label}
-                <span className="sort-caret">{active ? (sort.dir === 'asc' ? '▲' : '▼') : ''}</span>
+                <span className="sort-caret">{active ? caret : ''}</span>
+                {/* Second sort key in the same cell, for the value drawn on the
+                    bar. stopPropagation so it doesn't also trigger the th's own
+                    sort, which wraps the rest of the cell. */}
+                {c.also && (
+                  <span
+                    className={alsoActive ? 'th-split active' : 'th-split'}
+                    title={c.also.title}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onHeader(c.also!.key)
+                    }}
+                  >
+                    · {c.also.label}
+                    <span className="sort-caret">{alsoActive ? caret : ''}</span>
+                  </span>
+                )}
               </th>
             )
           })}
@@ -168,16 +200,12 @@ export function ItemTable({ rows }: { rows: ItemRow[] }) {
                 ciHigh={r.ci_high}
                 globalRate={r.global_rate}
                 verdict={r.verdict}
+                deltaLabel={<DeltaCell value={r.delta} games={r.games} />}
+                extraTip={rawDeltaTip(r.raw_delta)}
               />
             </td>
             <td>
               <BaselineCell rate={r.global_rate} matches={r.global_matches} />
-            </td>
-            <td className="col-delta">
-              <DeltaCell value={r.raw_delta} games={r.games} />
-            </td>
-            <td className="col-delta">
-              <DeltaCell value={r.delta} games={r.games} />
             </td>
             <td className="col-delta">{fmtTiming(r.purchase_timing_delta_s)}</td>
             <td>

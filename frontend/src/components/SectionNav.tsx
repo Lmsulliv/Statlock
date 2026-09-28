@@ -12,9 +12,15 @@ export interface SectionNavItem {
 // natively, and the narrow-width variant is a native <details> dropdown.
 //
 // Layout: the parent wraps content + this nav in `.sectionnav-layout`; the CSS
-// places the rail in the right column on desktop and swaps to the dropdown
-// below 1100px. The sections themselves live in the sibling content column and
-// carry matching `id`s (plus `.anchor-section` for the scroll offset).
+// places the rail in the right column on desktop and swaps to a sticky
+// horizontal bar below 1100px. The sections themselves live in the sibling
+// content column and carry matching `id`s (plus `.anchor-section` for the
+// scroll offset).
+//
+// The narrow variant is a bar rather than a "Jump to…" dropdown because it has
+// to stay useful while scrolling a long page: a dropdown that scrolls away is
+// only reachable by scrolling back to it, which is the problem the nav exists
+// to solve. Both variants render the same anchors from the same list.
 export function SectionNav({ sections }: { sections: SectionNavItem[] }) {
   const [activeId, setActiveId] = useState<string | null>(null)
 
@@ -47,8 +53,6 @@ export function SectionNav({ sections }: { sections: SectionNavItem[] }) {
     // Optional call: jsdom doesn't implement scrollIntoView (see Insights.tsx).
     document.getElementById(id)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
     setActiveId(id)
-    // Close the narrow-width dropdown after a pick.
-    event.currentTarget.closest('details')?.removeAttribute('open')
   }
 
   const list = (
@@ -70,10 +74,7 @@ export function SectionNav({ sections }: { sections: SectionNavItem[] }) {
   return (
     <nav className="section-nav" aria-label="Sections">
       <div className="section-nav-rail">{list}</div>
-      <details className="section-nav-dropdown">
-        <summary>Jump to…</summary>
-        {list}
-      </details>
+      <div className="section-nav-bar">{list}</div>
     </nav>
   )
 }

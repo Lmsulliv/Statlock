@@ -31,6 +31,14 @@ code {
   padding: 0 20px 60px;
 }
 
+/* Heroes only (see App.tsx isWideScreen): that tab puts a hero list, a detail
+   column and a section rail side by side, and the detail column holds the two
+   widest tables in the app. 1100px leaves them ~550px and they scroll sideways
+   at every viewport size; this gives them room to lay out flat instead. */
+.app.app-wide {
+  max-width: 1500px;
+}
+
 /* Decorative page frame. Fixed to the viewport, tints the edges, never blocks
    clicks; content sits above it. Re-theme via --vignette-color in tokens.css. */
 .vignette {
@@ -301,9 +309,24 @@ a.btn {
   background: var(--surface);
 }
 
+/* The hero/item column is pinned to the left edge of .table-scroll, so a table
+   that still overflows on a narrow viewport keeps its row labels in view rather
+   than scrolling the reader away from what each row is about. The background is
+   required: a sticky cell paints over the cells sliding beneath it, and the
+   card's own surface is what sits behind the table. */
 .col-hero {
   font-weight: 600;
   white-space: nowrap;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+/* The hovered row repaints its cells, so the sticky one has to follow or it
+   reads as a gap in the highlight. Same color, stated twice. */
+.data-table tbody tr:hover .col-hero {
+  background: var(--surface);
 }
 
 /* Enemy hero cell: icon slot + name, vertically centered. */
@@ -339,8 +362,21 @@ a.btn {
   color: var(--text-muted);
 }
 
+/* The interval column now carries the delta too (it replaced two columns), and
+   its label row is allowed to wrap here, so it no longer needs 300px to keep
+   everything on one line. The 60px this gives back is most of what the matchup
+   table was overflowing by. */
 .col-interval {
-  width: 300px;
+  width: 240px;
+}
+
+/* The two widest tables (matchups, items) trim their horizontal cell padding so
+   they fit without scrolling. Padding, not type size — the text stays exactly
+   as legible, the columns just sit closer together. */
+.data-table.wide-table th,
+.data-table.wide-table td {
+  padding-left: 7px;
+  padding-right: 7px;
 }
 
 /* Performance screen: one block per scope row (overall, then each hero). */
@@ -388,6 +424,34 @@ a.btn {
   margin-left: 5px;
   font-size: 9px;
   color: var(--text-muted);
+}
+
+/* Second sort key sharing one header cell, for a value drawn on the interval
+   bar instead of in a column of its own. Dimmer than the primary label so the
+   cell still reads as one column with a secondary control. */
+.th-split {
+  margin-left: 4px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.th-split:hover,
+.th-split.active {
+  color: var(--text);
+}
+
+/* A qualifier every metric in the block shares ("@ lane end"), stated once in
+   the column header instead of repeating on every row. */
+.col-qualifier {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+
+/* A metric whose sample doesn't match its block's game count, where the Sample
+   column is hidden (see MetricScopeBlock). */
+.metric-odd-sample {
+  font-weight: 400;
 }
 
 /* Segmented toggle (Overall / In-lane) */
@@ -650,11 +714,14 @@ a.btn {
   border-radius: 4px;
 }
 
+/* Portaled to <body> and positioned `fixed`, so it has no ancestor whose scroll
+   region it could extend — that is what used to grow .table-scroll's horizontal
+   scroll and the document's scrollWidth. top/left are set inline by InfoTip,
+   which also flips and shifts it to stay on screen. z-index clears the header
+   (100), the highest layer on the page. */
 .infotip-panel {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 60;
+  position: fixed;
+  z-index: 200;
   width: max-content;
   max-width: 260px;
   padding: 8px 10px;
@@ -668,6 +735,15 @@ a.btn {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  /* Inert while merely hovered (see InfoTip: the panel is no longer inside the
+     trigger, so catching the pointer would close it). */
+  pointer-events: none;
+}
+
+/* Pinned by a deliberate tap/keypress: takes pointer events so the text can be
+   selected and the panel itself doesn't fall through to the backdrop. */
+.infotip-panel-pinned {
+  pointer-events: auto;
 }
 
 .infotip-summary {
@@ -676,11 +752,21 @@ a.btn {
   font-weight: 600;
 }
 
-/* Full-screen catch layer so a tap outside a pinned tip dismisses it. */
+/* A figure that no longer has a column of its own, stated between the numeric
+   summary and the plain-language explainer. */
+.infotip-extra {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+}
+
+/* Full-screen catch layer so a tap outside a pinned tip dismisses it. Portaled
+   to <body> alongside the panel, so it sits just below it (200) and above
+   everything else, including the header. */
 .infotip-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 190;
 }
 
 /* Provisional badge: marks a still-deepening result. `is-hidden` keeps the box
@@ -769,6 +855,10 @@ a.btn {
   --mark: var(--neg-weak);
 }
 
+/* The rail the interval sits on. Its color is a dedicated token, never a
+   surface: a surface color is invisible on any element painted that same
+   surface (see tokens.css --interval-track). Selection/hover state must never
+   change it — the bar looks identical on a default, hovered and selected row. */
 .interval-track {
   position: absolute;
   top: 50%;
@@ -776,7 +866,7 @@ a.btn {
   right: 0;
   height: 2px;
   transform: translateY(-50%);
-  background: var(--surface-2);
+  background: var(--interval-track);
   border-radius: 2px;
 }
 
@@ -873,6 +963,30 @@ a.btn {
   content: '';
   width: 10px;
   border-top: 2px dashed var(--baseline);
+}
+
+/* The delta, pushed to the far end of the label row — it replaces a whole table
+   column, so it reads as part of this bar rather than as its own field. */
+.interval-delta {
+  margin-left: auto;
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Inside a table cell the label row may wrap: below the stats floor the delta
+   spells out "not enough info" rather than a short number, and the honest
+   wording matters more than a uniform row height. */
+.col-interval .interval-labels {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+/* In the matchup and item tables the baseline already has its own column one
+   cell to the right, so repeating it in the bar's labels only pushed the delta
+   onto a second line. The bar still draws the gold baseline marker, and the
+   tooltip still states the number — this drops a duplicate, not a fact. */
+.wide-table .col-interval .interval-baseline-key {
+  display: none;
 }
 
 /* ── Empty / loading / error states ───────────────────────────────────────── */
@@ -2213,9 +2327,13 @@ a.toggle-opt.active {
    wide table (300px interval column) would push the grid past the viewport and
    scroll the page sideways. minmax(0, …) lets the track shrink and the table
    scroll inside its own card instead. */
+/* 240px, not 280: the selector rows lost their verdict and provisional chips
+   (both moved to the detail panel, which is the only place they fit), so a row
+   is now a name, a record and a bar — and the 40px this frees goes to the
+   detail column's tables, which are what was scrolling. */
 .heroes-layout {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 240px minmax(0, 1fr);
   gap: 18px;
   align-items: start;
 }
@@ -2258,12 +2376,29 @@ a.toggle-opt.active {
   border-color: var(--text-muted);
 }
 
+/* min-width:0 all the way down to the name: a flex item's default min-width is
+   `auto`, i.e. its content's intrinsic width, so without this a long hero name
+   ("Mo & Krill", "Grey Talon") refuses to shrink and pushes out of the 280px
+   column instead of ellipsising. Same chain as .hero-card-head / .hero-card-name. */
 .hero-list-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   font-weight: 600;
+  min-width: 0;
+}
+
+.hero-list-head .enemy-cell {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.hero-list-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .hero-list-sub {
@@ -2273,23 +2408,8 @@ a.toggle-opt.active {
   font-size: 12px;
 }
 
-/* Hero detail: a stack of section cards. */
-.hero-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-.hero-detail-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.hero-detail-title .card-title {
-  margin: 0;
-}
-
+/* Hero detail: a stack of section cards in .sectionnav-layout's content column,
+   which supplies the stacking (see the SectionNav block below). */
 .hero-detail-record {
   display: flex;
   align-items: center;
@@ -2302,9 +2422,55 @@ a.toggle-opt.active {
   min-width: 260px;
 }
 
+/* The verdict, stated in full. The hero list can't carry a verdict chip (a
+   nowrap badge doesn't fit a 280px column), so this is where the call is made:
+   the tier as a heading, then the sentence explaining why it reads that way —
+   text that used to be reachable only by hovering the chip. Tone comes from the
+   same VERDICT_TONE map the badges use, so the color still means significance. */
+.hero-verdict {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--verdict-mark, var(--neutral));
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.hero-verdict.tone-pos {
+  --verdict-mark: var(--pos);
+}
+.hero-verdict.tone-pos-weak {
+  --verdict-mark: var(--pos-weak);
+}
+.hero-verdict.tone-neutral {
+  --verdict-mark: var(--neutral);
+}
+.hero-verdict.tone-neg-weak {
+  --verdict-mark: var(--neg-weak);
+}
+.hero-verdict.tone-neg {
+  --verdict-mark: var(--neg);
+}
+
+.hero-verdict-label {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--verdict-mark);
+}
+
+.hero-verdict-why {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.hero-detail-provisional,
 .hero-detail-note {
   font-size: 12px;
-  margin: 4px 0 0;
+  margin: 8px 0 0;
 }
 
 /* Insights: stacked section cards; scroll-margin keeps a deep-linked section's
@@ -2382,49 +2548,60 @@ a.toggle-opt.active {
   font-weight: 600;
 }
 
-/* The narrow-width dropdown; hidden on desktop where the rail shows instead. */
-.section-nav-dropdown {
+/* The narrow-width segmented bar; hidden on desktop where the rail shows
+   instead. Styled off the .toggle idiom the Performance segment nav uses, so
+   the two read as the same kind of control. */
+.section-nav-bar {
   display: none;
 }
 
-.section-nav-dropdown > summary {
-  cursor: pointer;
-  padding: 7px 10px;
+.section-nav-bar .section-nav-list {
+  flex-direction: row;
+  gap: 0;
+  padding-left: 0;
+  border-left: none;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  color: var(--text);
+  /* Many sections scroll sideways inside the bar rather than wrapping it onto
+     a second line, which would change the page's layout as you scroll. */
+  overflow-x: auto;
+}
+
+.section-nav-bar .section-nav-link {
+  border-radius: 0;
+  white-space: nowrap;
+  padding: 7px 12px;
   font-size: 13px;
-  list-style: none;
 }
 
-.section-nav-dropdown > summary::-webkit-details-marker {
-  display: none;
+.section-nav-bar .section-nav-link + .section-nav-link {
+  border-left: 1px solid var(--border);
 }
 
-.section-nav-dropdown[open] > summary {
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
-}
-
-.section-nav-dropdown .section-nav-list {
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-top: none;
-  border-bottom-left-radius: var(--radius);
-  border-bottom-right-radius: var(--radius);
-  background: var(--surface);
+.section-nav-bar .section-nav-link.active {
+  background: var(--surface-2);
 }
 
 @media (max-width: 1100px) {
   .sectionnav-layout {
     grid-template-columns: minmax(0, 1fr);
   }
-  /* Nav first (it's first in DOM), content below it. */
+  /* Nav first (it's first in DOM), content below it. The bar stays pinned to
+     the top of the viewport as the page scrolls — a jump list that scrolls out
+     of reach is only reachable by scrolling back to it. z-index 15 sits under
+     the scope bar (20) and the header (100), neither of which is sticky, so
+     nothing is covered; the background is opaque so content passes behind it
+     rather than showing through. */
   .sectionnav-layout > .section-nav {
     grid-column: 1;
     grid-row: 1;
-    position: static;
+    position: sticky;
+    top: 0;
+    z-index: 15;
+    background: var(--bg);
+    padding: 8px 0;
+    margin-bottom: -4px;
   }
   .sectionnav-layout > .sectionnav-content {
     grid-column: 1;
@@ -2433,7 +2610,12 @@ a.toggle-opt.active {
   .section-nav-rail {
     display: none;
   }
-  .section-nav-dropdown {
+  .section-nav-bar {
     display: block;
+  }
+  /* Clear the pinned bar when jumping, so a section's heading doesn't land
+     underneath it. */
+  .anchor-section {
+    scroll-margin-top: 60px;
   }
 }
