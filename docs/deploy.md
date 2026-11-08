@@ -168,7 +168,9 @@ npm --prefix frontend run build
 pip install -r requirements.txt
 python -m tracker.migrate data/tracker.db          # DEADLOCK_DB default is data/tracker.db
 
-# 3. Serve the API + SPA on one origin.
+# 3. Serve the API + SPA on one origin. Set DEADLOCK_BASE_URL or
+#    DEADLOCK_OPEN_WRITES=1 in this process's environment first, or every
+#    write returns 403 (see the table above).
 uvicorn api.app:app --host 0.0.0.0 --port 8000
 
 # 4. In a second process, run the worker against the same DB.

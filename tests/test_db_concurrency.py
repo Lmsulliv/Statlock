@@ -1,4 +1,5 @@
-"""Regression tests for the concurrency pragmas set by tracker.db.connect().
+"""Regression tests for SQLite concurrency: the pragmas set by tracker.db.connect(),
+and the worker never holding the write lock across a network call or backoff sleep.
 
 These prove the deploy gate: the drain daemon and the API can share one SQLite
 file. WAL lets readers proceed while a writer holds the lock, and a non-zero
@@ -8,10 +9,14 @@ raising "database is locked".
 All connections are file-backed (pytest's tmp_path), so WAL actually engages and
 the -wal / -shm sidecars are auto-cleaned with the temp dir after each test.
 """
+import json
 import sqlite3
 import threading
 import time
 
+from ingest import runner
+from ingest.client import NetworkError
+from ingest.maintenance import refresh_baselines
 from tracker.db import connect
 
 
@@ -104,3 +109,88 @@ def test_competing_writer_waits_then_succeeds(db, tmp_path):
         ]
         == "2"
     )
+
+
+# ── No write transaction may stay open across a network call ─────────────────
+#
+# client.get() waits on the token bucket (5 s + up to 2 s jitter) before it even
+# sends the request. If the worker's connection has an uncommitted write open at
+# that moment, it holds SQLite's single write lock for longer than the 5 s
+# busy_timeout, and every API write in the meantime fails with "database is
+# locked". These tests pin that no worker path sleeps or fetches mid-transaction.
+
+_COUNTER_BODY = json.dumps(
+    [{"hero_id": 1, "enemy_hero_id": 2, "wins": 5, "matches_played": 10}])
+_ITEM_BODY = json.dumps(
+    [{"bucket": 1, "item_id": 7, "wins": 5, "matches": 10, "avg_buy_time_s": 300}])
+
+
+class _BaselineClient:
+    """Answers every analytics URL with one row, calling on_get(url) first so a
+    test can inspect the worker's connection at the moment of the network call."""
+
+    def __init__(self, on_get=lambda url: None):
+        self.on_get = on_get
+
+    def get(self, url):
+        self.on_get(url)
+        return 200, {}, _ITEM_BODY if "item-stats" in url else _COUNTER_BODY
+
+
+def test_baseline_refresh_has_no_open_transaction_during_fetch(db):
+    """Every client.get() in a baseline span runs with the write lock released."""
+    in_txn_at_get = []
+    client = _BaselineClient(lambda url: in_txn_at_get.append(db.in_transaction))
+
+    refresh_baselines(db, client, max_spans=1)
+
+    assert in_txn_at_get, "refresh_baselines made no fetches"
+    assert not any(in_txn_at_get), (
+        f"{sum(in_txn_at_get)}/{len(in_txn_at_get)} fetches ran inside a write transaction")
+
+
+def test_api_write_succeeds_during_baseline_fetch(db, tmp_path):
+    """End-to-end shape of the bug: a second connection (the API) writes while the
+    worker is mid-fetch. A short busy_timeout keeps the test fast; with the lock
+    released during fetches the write needs no waiting at all."""
+    errors = []
+
+    def competing_write(url):
+        api = connect(tmp_path / "test.db")
+        try:
+            api.execute("PRAGMA busy_timeout = 100")
+            api.execute("INSERT OR REPLACE INTO worker_meta(key, value) VALUES ('api', ?)",
+                        (url,))
+            api.commit()
+        except sqlite3.OperationalError as exc:   # "database is locked"
+            errors.append(exc)
+        finally:
+            api.close()
+
+    refresh_baselines(db, _BaselineClient(competing_write), max_spans=1)
+
+    assert errors == [], f"{len(errors)} API write(s) failed: {errors[0]!r}"
+
+
+def test_daemon_backoff_sleep_releases_write_lock(db, monkeypatch):
+    """An unexpected error mid-transaction (here a network timeout partway through
+    a baseline span) must not leave the write lock held through the daemon's 30 s
+    backoff sleep."""
+    monkeypatch.setattr(runner, "_touch_heartbeat", lambda: None)
+    # Maintenance not due; no accounts or queue rows -> the idle baseline branch runs.
+    db.execute("INSERT INTO worker_meta(key, value) VALUES ('last_maintenance_at', '9999')")
+    db.commit()
+
+    calls = []
+
+    def fail_on_third(url):
+        calls.append(url)
+        if len(calls) == 3:
+            raise NetworkError("timed out")
+
+    sleeps = []
+    runner.run_daemon(db, _BaselineClient(fail_on_third),
+                      sleep=lambda s: sleeps.append((s, db.in_transaction)),
+                      max_iterations=1)
+
+    assert sleeps == [(runner.UNEXPECTED_ERROR_SLEEP_S, False)]

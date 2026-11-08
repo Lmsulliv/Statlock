@@ -156,6 +156,10 @@ def run_daemon(conn, client, *, now=utcnow, sleep=time.sleep, max_iterations=Non
                         sleep(IDLE_SLEEP_S)
             except Exception:
                 log.exception("daemon iteration failed; backing off %ds", UNEXPECTED_ERROR_SLEEP_S)
+                # The failed iteration may have left a write transaction open;
+                # sleeping on it would hold SQLite's write lock (blocking every API
+                # write) for the whole backoff. Its unfinished work is redone later.
+                conn.rollback()
                 sleep(UNEXPECTED_ERROR_SLEEP_S)
     except KeyboardInterrupt:
         log.info("daemon stopped (keyboard interrupt)")

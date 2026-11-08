@@ -263,6 +263,10 @@ def refresh_baselines(conn, client, *, now=utcnow, max_spans: int | None = None)
                      (snapshot_id, span.era_id))
         conn.execute("DELETE FROM baseline_hero_item_stats WHERE snapshot_id = ? AND era_id = ?",
                      (snapshot_id, span.era_id))
+        # Commit before fetching: an open transaction would hold SQLite's single
+        # write lock through the rate-limited client.get() (5 s+, longer than the
+        # busy_timeout), and every API write in the meantime would fail as locked.
+        conn.commit()
         _fetch_era_baselines(conn, client, snapshot_id, span, fetched_at)
         conn.execute(
             "INSERT INTO baseline_refresh_state(era_id, last_refreshed_at) VALUES (?, ?)"
@@ -313,6 +317,7 @@ def _fetch_era_baselines(conn, client, snapshot_id: int, span: EraSpan,
                       badge_min, badge_max, same_lane, r["wins"], r["matches_played"], fetched_at)
                      for r in _parse_baseline_rows(body, url)],
                 )
+                conn.commit()   # release the write lock before the next client.get()
             else:
                 log.warning("baselines: hero-counter-stats HTTP %s for era %s badge %d-%d "
                             "same_lane=%d", status, span.era_id, badge_min, badge_max, same_lane)
@@ -331,6 +336,7 @@ def _fetch_era_baselines(conn, client, snapshot_id: int, span: EraSpan,
                   r["wins"], r["matches"], r.get("avg_buy_time_s"), fetched_at)
                  for r in _parse_baseline_rows(item_body, item_url)],
             )
+            conn.commit()   # release the write lock before the next client.get()
         else:
             log.warning("baselines: item-stats HTTP %s for era %s badge %d-%d",
                         item_status, span.era_id, badge_min, badge_max)

@@ -1,13 +1,41 @@
 import type { Scope } from '../scope/useScope'
 
+// `detail` is the server's own explanation (FastAPI's {"detail": "..."} body),
+// when it sent a human-readable one. It names the real cause -- e.g. "Writes are
+// disabled: set DEADLOCK_OPEN_WRITES=1..." -- where a status code alone is
+// ambiguous (403 means both "stale CSRF token" and "writes not enabled").
 export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    public detail: string | null = null,
   ) {
     super(message)
     this.name = 'ApiError'
   }
+}
+
+// The string `detail` from an error response, or null. Validation errors (422)
+// carry a list there, and an unhandled 500 is plain text, not JSON; both yield
+// null so callers fall back to their own wording.
+async function readDetail(res: Response): Promise<string | null> {
+  try {
+    const body: unknown = await res.json()
+    if (body && typeof body === 'object' && 'detail' in body) {
+      const detail = (body as { detail: unknown }).detail
+      return typeof detail === 'string' && detail.trim() !== '' ? detail : null
+    }
+  } catch {
+    // Not JSON: nothing the server wanted to tell us.
+  }
+  return null
+}
+
+// The server's explanation for a failed request, if it gave one. A network
+// failure (backend down) throws a TypeError rather than an ApiError, so it lands
+// here as null too.
+export function serverDetail(error: unknown): string | null {
+  return error instanceof ApiError ? error.detail : null
 }
 
 // Translate the frontend Scope into the API's query params. Badge range, min
@@ -36,7 +64,11 @@ export async function fetchJson<T>(
   const url = qs ? `${path}?${qs}` : path
   const res = await fetch(url, { headers: { Accept: 'application/json' } })
   if (!res.ok) {
-    throw new ApiError(res.status, `Request to ${url} failed (${res.status})`)
+    throw new ApiError(
+      res.status,
+      `Request to ${url} failed (${res.status})`,
+      await readDetail(res),
+    )
   }
   return (await res.json()) as T
 }
@@ -70,7 +102,11 @@ async function sendJson<T>(
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
   if (!res.ok) {
-    throw new ApiError(res.status, `Request to ${path} failed (${res.status})`)
+    throw new ApiError(
+      res.status,
+      `Request to ${path} failed (${res.status})`,
+      await readDetail(res),
+    )
   }
   // 204 No Content (e.g. logout) has no body to parse.
   if (res.status === 204) return undefined as T

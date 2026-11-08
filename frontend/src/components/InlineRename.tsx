@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { serverDetail } from '../api/client'
 import { useClearName, useRenameName } from '../api/queries'
 import { useCanManage } from '../api/useCanManage'
 
@@ -77,7 +78,11 @@ export function InlineRename({
       <button type="button" className="btn" disabled={busy} onClick={() => setEditing(false)}>
         Cancel
       </button>
-      {failed && <span className="state-error">Rename failed. Are you the owner?</span>}
+      {failed && (
+        <span className="state-error">
+          {serverDetail(rename.error ?? clear.error) ?? 'Rename failed. Are you the owner?'}
+        </span>
+      )}
     </span>
   )
 }

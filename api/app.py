@@ -85,7 +85,11 @@ def require_user(request: Request,
         cookie = request.cookies.get(CSRF_COOKIE)
         header = request.headers.get("X-CSRF-Token")
         if not cookie or not header or not secrets.compare_digest(cookie, header):
-            raise HTTPException(status_code=403, detail="Invalid or missing CSRF token.")
+            raise HTTPException(
+                status_code=403,
+                detail="Your session looks stale (invalid or missing CSRF token). "
+                       "Reload the page and log in again.",
+            )
         return user_id
     if open_writes():
         return DEFAULT_USER_ID

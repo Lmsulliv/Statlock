@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ApiError } from '../api/client'
+import { ApiError, serverDetail } from '../api/client'
 import { useAccounts, useAddAccount, useSyncStatus } from '../api/queries'
 import type { SyncStatus, TrackedAccount } from '../api/types'
 import { AccountProgressCard } from '../components/AccountProgressCard'
@@ -14,21 +14,23 @@ const fmtTime = (iso: string | null) => {
 }
 
 // Turn a failed mutation into a human sentence. An unparseable id (400), a lost
-// login (401), a stale session/CSRF token (403), and hitting the per-user account
-// cap (409) are the ones the user can act on; anything else is most likely the
-// backend being down.
+// login (401), and hitting the per-user account cap (409) each have one meaning,
+// so they get our own wording. A 403 has two -- a stale session/CSRF token, or a
+// server with writes not enabled (DEADLOCK_OPEN_WRITES unset) -- so the server's
+// own detail wins there, as it does for anything else it explains. Only with no
+// explanation at all (network failure, plain-text 500) do we guess the backend.
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 400)
       return "That doesn’t look like an account id, SteamID64, or profile URL."
     if (error.status === 401)
       return 'Please log in to manage accounts.'
-    if (error.status === 403)
-      return 'Your session looks stale. Reload the page and log in again.'
     if (error.status === 409)
       return 'You’ve reached the limit of 5 tracked accounts per user.'
+    if (error.status === 403)
+      return error.detail ?? 'Your session looks stale. Reload the page and log in again.'
   }
-  return 'Something went wrong. Is the backend running?'
+  return serverDetail(error) ?? 'Something went wrong. Is the backend running?'
 }
 
 export function Accounts() {

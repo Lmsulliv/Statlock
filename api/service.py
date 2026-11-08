@@ -58,7 +58,7 @@ _METRIC_DP = 2  # decimal places for continuous metrics (net worth/min, KDA, ...
 
 # How many accounts one user may link (user_accounts rows). Their self account
 # from first login is one of these rows, so it counts toward the cap.
-MAX_ACCOUNTS_PER_USER = 5
+MAX_ACCOUNTS_PER_USER = 10
 
 
 class AccountLimitError(Exception):

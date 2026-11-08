@@ -70,6 +70,45 @@ in the background (politely: one API request per 5 seconds). See
 [docs/deploy.md](docs/deploy.md) for all environment variables and the
 bare-metal setup.
 
+## Running locally without Docker (development)
+
+For working on the code, run the API and the Vite dev server (hot reload)
+directly. Vite serves the app at <http://localhost:5173> and forwards every
+`/api/...` request to the API on port 8000.
+
+**Writes are off unless you turn them on.** Without `DEADLOCK_OPEN_WRITES=1` in
+the API's environment, reads work but every write (adding an account, renaming
+one, confirming or dismissing an era) is refused with a 403. uvicorn does not
+read `.env`, so set the variable in the shell that starts it.
+
+PowerShell (Windows), one terminal each:
+
+```powershell
+# 1. API: writes open, no login, reachable from this machine only
+$env:DEADLOCK_OPEN_WRITES = "1"
+python -m uvicorn api.app:app --host 127.0.0.1 --port 8000
+
+# 2. Frontend dev server
+cd frontend
+npm run dev
+
+# 3. Optional: the worker that actually ingests matches
+python -m ingest --db data/tracker.db run-daemon
+```
+
+bash / zsh:
+
+```sh
+DEADLOCK_OPEN_WRITES=1 python -m uvicorn api.app:app --host 127.0.0.1 --port 8000
+(cd frontend && npm run dev)
+python -m ingest --db data/tracker.db run-daemon
+```
+
+Keep `--host 127.0.0.1` while writes are open: `0.0.0.0` would let anyone on
+your network add accounts or change eras with no login. The Accounts and Era
+manager screens only appear when `frontend/.env.local` contains
+`VITE_OWNER=true` (copy `frontend/.env.example`).
+
 ## Deploying for real
 
 For a public VPS deployment (Steam login, HTTPS via Caddy, Litestream backups,

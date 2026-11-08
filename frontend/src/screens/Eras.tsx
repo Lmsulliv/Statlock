@@ -1,3 +1,4 @@
+import { serverDetail } from '../api/client'
 import { useConfirmCandidate, useDismissCandidate, useEras } from '../api/queries'
 import type { Era, EraCandidate, ErasResponse } from '../api/types'
 import { EmptyState } from '../components/EmptyState'
@@ -55,7 +56,10 @@ function Candidates({ candidates }: { candidates: EraCandidate[] }) {
         Pending candidates <span className="muted">({candidates.length})</span>
       </h2>
       {(confirm.isError || dismiss.isError) && (
-        <p className="state-error">Couldn’t update the candidate. Is the backend running?</p>
+        <p className="state-error">
+          {serverDetail(confirm.error ?? dismiss.error) ??
+            'Couldn’t update the candidate. Is the backend running?'}
+        </p>
       )}
       {candidates.length === 0 ? (
         <p className="muted">
