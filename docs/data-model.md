@@ -44,11 +44,55 @@ CREATE TABLE abilities (               -- schema v21; hero abilities from /v1/as
     fetched_at   TEXT NOT NULL
 );
 
+CREATE TABLE ranks (                    -- schema v22: one ladder per rank system
+    rank_system  TEXT NOT NULL CHECK (rank_system IN ('legacy', 'seasonal')),
+    tier         INTEGER NOT NULL,      -- 0 Obscurus .. 11 Eternus
+    name         TEXT NOT NULL,
+    color        TEXT,                  -- hex accent; badge art is derived, not stored
+    fetched_at   TEXT NOT NULL,
+    PRIMARY KEY (rank_system, tier)
+);
+
+CREATE TABLE ranked_seasons (           -- schema v22; seeded by migration
+    slug         TEXT PRIMARY KEY,      -- 'legacy', 'beta-season-1', ...
+    label        TEXT NOT NULL,
+    rank_system  TEXT NOT NULL CHECK (rank_system IN ('legacy', 'seasonal')),
+    started_at   TEXT NOT NULL UNIQUE   -- covers [started_at, next started_at)
+);
+
 ```
 
 Refresh heroes/items on a schedule (weekly is plenty) and after any patch. `patches` can be seeded manually at first; the match metadata includes a game version you can map to it.
 
 **Eras, not builds, are the analytical unit.** Deadlock ships minor builds constantly in early access, and treating each one as a fresh meta would shred your sample sizes for no benefit. An *era* is a manually curated span of builds judged to share the same meta: when a significant gameplay patch lands, add one `patch_eras` row, and every subsequent minor build maps to it. Matches always keep their exact `patch_id` (never throw away precision), so if you later decide a patch mattered more than you thought, you redraw the era boundaries and every stat recomputes correctly. Analytics queries filter and group by `era_id` by default.
+
+**Rank systems and ranked seasons.** A badge (`tier*10 + subtier`) means different
+things before and after the Jul 30 2026 Matchmaking Update. For example, badge 55
+is Ritualist 5 in the `legacy` ladder and Mystic 5 in the `seasonal` ladder
+(api-findings "Ranked seasons and rank systems"). So `ranks` holds one row per
+`(rank_system, tier)`:
+
+- **Writers:** `refresh_assets` only ever writes `seasonal`. Migration 022 seeded
+  `legacy` from the last archived pre-cutover `/v1/assets/ranks` response, and
+  nothing overwrites it.
+- **Seasons:** each `ranked_seasons` row says which ladder it uses:
+  - `legacy` from 2024-10-10
+  - Beta Season 1 from 2026-07-30T17:00Z
+  - Beta Season 2 from 2026-11-05T20:00Z
+
+  The Beta dates are the API's own `/v1/assets/ranked-seasons` values.
+- **The one season lookup:** `api/service.season_for(seasons, timestamp)` is the
+  only code that interprets season dates. It compares parsed instants, not
+  strings.
+- **Naming a badge:** a rank point is always named in the ladder of the season
+  its own timestamp falls in.
+- **Points before the first season** belong to no season and are left out of the
+  rank series.
+- **Never compared across systems:** badges from different rank systems aren't
+  one scale, so nothing joins them. The rank chart draws each system as its own
+  line (presentation-spec, Overview), and a season's peak is taken within that
+  season only.
+- **Adding a season:** one `INSERT` in a new migration.
 
 ## Core match tables
 
@@ -103,11 +147,15 @@ CREATE TABLE match_players (
     PRIMARY KEY (match_id, player_slot)
 );
 
-CREATE TABLE account_rank_history ( -- Populated from mmr-history for tracked accounts only;
--- per-player ranks for other lobby members don't exist (see api-findings.md)
+CREATE TABLE account_rank_history ( -- Tracked accounts only; per-player ranks for
+-- other lobby members don't exist (see api-findings.md). Since Nov 2026 discovery
+-- writes it from match-history's ranked_display_badge (Ranked games, badge > 0).
+-- Older rows came from the removed mmr-history endpoint; the legacy-ladder rows
+-- exist ONLY here (the API no longer serves them) and are never overwritten.
     account_id   INTEGER NOT NULL,
     match_id     INTEGER NOT NULL,
     badge        INTEGER,
+    recorded_at  TEXT,                  -- schema v14: the match's start_time (ISO)
     PRIMARY KEY (account_id, match_id)
 );
 

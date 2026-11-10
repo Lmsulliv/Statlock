@@ -1075,6 +1075,36 @@ a.btn {
   font-weight: 600;
 }
 
+/* Which (ended) season the current rank is from. */
+.current-rank-season {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Rank card head: current rank + view selector, wrapping on a narrow column. */
+.rank-card-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 12px;
+}
+
+.rank-peak {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -4px 0 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.rank-peak-art {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
 /* ── Public profile header (the /player/:id read-only view) ───────────────── */
 
 .profile-header {
@@ -1295,6 +1325,19 @@ a.btn {
 
 .mmr-dot {
   fill: var(--baseline);
+}
+
+/* Season start: a faint dashed rule with its label above the plot. */
+.mmr-season-divider line {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+  opacity: 0.6;
+}
+
+.mmr-season-divider text {
+  fill: var(--text-muted);
+  font-size: 10px;
 }
 
 /* Hover readout: vertical guide + highlighted point + a small tooltip showing

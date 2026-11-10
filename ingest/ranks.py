@@ -1,28 +1,28 @@
-"""Rank ingestion: per-player rank-over-time for tracked accounts.
+"""Rank ingestion: per-match rank-over-time for tracked accounts.
 
-The Overview "Rank over time" chart reads account_rank_history, but nothing
-used to populate it. This module fills it from
-GET /v1/players/{account_id}/mmr-history -- the per-match rank series for a
-tracked account.
+The Overview "Rank over time" chart reads account_rank_history. Since Nov 2026
+the rows come from the match-history response discovery already fetches: every
+Ranked game (match_mode 4) carries ranked_display_badge, our tier*10+subtier
+badge (docs/api-findings.md "Ranked seasons and rank systems", spike 15). It
+matched the old mmr-history rank on 16/16 shared matches, and mmr-history itself
+now 404s -- so this costs no extra request.
 
-Shape (docs/api-findings.md "Player rank / MMR history", spike 12): a JSON array,
-one row per RANKED match, each carrying its own start_time (unix seconds),
-match_id, and rank (= division*10 + division_tier, i.e. our tier*10+subtier
-badge, 0..116). We store rank as the badge and start_time as recorded_at, so the
-read layer can order the series by its own timestamp without joining matches.
+Which rows count:
+- calibration games carry badge 0 (no rank yet) -> skipped;
+- the placement game is the first real badge -> kept (mmr-history had it too);
+- Standard games carry a null badge -> skipped.
 
-Cadence (gated by the runner): we only fetch an account's rank when discovery
-just queued new matches for it -- mmr-history only changes when you play, so a
-fetch every cycle would be wasted requests. The fetch itself is idempotent:
-re-running upserts the same rows, never duplicates (PK is (account_id, match_id)).
+Rows written before the switch (the legacy ladder, from mmr-history) can't be
+re-derived: their match-history rows have no badge. The upsert only ever touches
+the match_ids it was given, so those rows are never overwritten or deleted.
 """
-import json
 import logging
 
-from ingest.client import BASE_URL, archive_response
-from ingest.util import unix_to_iso, utcnow
+from ingest.util import unix_to_iso
 
 log = logging.getLogger(__name__)
+
+RANKED_MATCH_MODE = 4
 
 _UPSERT = (
     "INSERT INTO account_rank_history(account_id, match_id, badge, recorded_at)"
@@ -33,53 +33,35 @@ _UPSERT = (
 )
 
 
-def _mmr_history_url(account_id: int) -> str:
-    return f"{BASE_URL}/v1/players/{account_id}/mmr-history"
+def _rank_row(account_id: int, row: dict):
+    """One history entry -> an _UPSERT params tuple, or None if it carries no rank.
 
-
-def fetch_account_rank(conn, client, account_id: int, *, now=utcnow) -> int:
-    """Fetch + upsert the rank history for one account. Returns rows upserted.
-
-    Idempotent: the upsert keys on (account_id, match_id), so re-fetching the
-    same series writes the same rows in place rather than duplicating them."""
-    url = _mmr_history_url(account_id)
-    fetched_at = now().isoformat()
-    status, _headers, body = client.get(url)
-    # Hard rule 2: archive raw before parsing.
-    archive_response(conn, url, status, body, fetched_at)
-    if status != 200:
-        log.warning("ranks: account %s mmr-history HTTP %s", account_id, status)
-        return 0
-    if not body or not body.strip():
-        log.warning("ranks: account %s empty mmr-history body", account_id)
-        return 0
-
-    # A 200 doesn't guarantee a JSON array (empty/truncated/error-shaped bodies
-    # happen); an unhandled raise here would crash the rank sync. Treat any
-    # unparseable or non-list body as "no rows" rather than letting it propagate.
+    `type(...) is int` rather than isinstance: a JSON true would pass isinstance
+    (bool is an int subclass) and must not become badge 1."""
+    if row.get("match_mode") != RANKED_MATCH_MODE:
+        return None
+    badge = row.get("ranked_display_badge")
+    if type(badge) is not int or badge <= 0:
+        return None
+    match_id = row.get("match_id")
+    if match_id is None:
+        return None
     try:
-        rows = json.loads(body)
-    except json.JSONDecodeError as exc:
-        log.warning("ranks: account %s malformed mmr-history body (%s)", account_id, exc)
-        return 0
-    if not isinstance(rows, list):
-        log.warning("ranks: account %s mmr-history body was %s, not a list",
-                    account_id, type(rows).__name__)
-        return 0
-
-    upserts = [
-        (account_id, r["match_id"], r["rank"], unix_to_iso(r["start_time"]))
-        for r in rows
-        if r.get("match_id") is not None and r.get("rank") is not None
-    ]
-    conn.executemany(_UPSERT, upserts)
-    conn.commit()
-    log.info("ranks: account %s upserted %d rank row(s)", account_id, len(upserts))
-    return len(upserts)
+        recorded_at = unix_to_iso(row.get("start_time"))
+    except (TypeError, ValueError, OverflowError, OSError):
+        log.warning("ranks: account %s match %s bad start_time; skipping rank row",
+                    account_id, match_id)
+        return None
+    return (account_id, match_id, badge, recorded_at)
 
 
-def run_rank_sync(conn, client, account_ids, *, now=utcnow) -> int:
-    """Fetch rank history for the given accounts (those discovery just found new
-    matches for). Returns total rows upserted across them."""
-    return sum(fetch_account_rank(conn, client, account_id, now=now)
-               for account_id in account_ids)
+def upsert_ranks_from_history(conn, account_id: int, history: list[dict]) -> int:
+    """Upsert a rank row for each Ranked game in a parsed match-history.
+
+    Does NOT commit: discovery calls this inside its own transaction, so the
+    summaries, the queue and the rank rows from one response land together.
+    Idempotent -- the upsert keys on (account_id, match_id)."""
+    rows = [params for row in history
+            if (params := _rank_row(account_id, row)) is not None]
+    conn.executemany(_UPSERT, rows)
+    return len(rows)

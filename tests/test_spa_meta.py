@@ -45,9 +45,8 @@ def test_personalized_title_for_player_path(api_db):
 
 
 def _seed_rank(api_db):
-    """Give ME a current rank of Archon 2 (badge 52 = tier 5, subtier 2)."""
-    api_db.execute("INSERT INTO ranks(tier, name, color, fetched_at)"
-                   " VALUES (5, 'Archon', '#abc', '2026-06-15T12:00:00+00:00')")
+    """Give ME a current rank of Ritualist 2 (badge 52 = tier 5, subtier 2, in the
+    legacy ladder migration 022 seeds -- June 2026 predates the seasonal one)."""
     api_db.execute(
         "INSERT INTO account_rank_history(account_id, match_id, badge, recorded_at)"
         " VALUES (?, 900, 52, '2026-06-10T00:00:00+00:00')", (ME,))
@@ -57,7 +56,7 @@ def _seed_rank(api_db):
 def test_personalized_title_includes_rank(api_db):
     _seed_rank(api_db)
     out = meta.render_index(SHELL, f"player/{ME}", api_db)
-    assert "Archon 2" in out
+    assert "Ritualist 2" in out
 
 
 def test_ranked_player_gets_badge_og_image(api_db):

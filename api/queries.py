@@ -943,18 +943,28 @@ def ability_assets(conn: sqlite3.Connection) -> dict[int, dict]:
 
 
 def list_ranks(conn: sqlite3.Connection) -> list[dict]:
-    """Rank tiers ordered low to high (name + color; art derived in service)."""
-    return [dict(r) for r in
-            conn.execute("SELECT tier, name, color FROM ranks ORDER BY tier").fetchall()]
+    """Rank tiers of both rank systems, ordered low to high (name + color; art
+    derived in service)."""
+    return [dict(r) for r in conn.execute(
+        "SELECT rank_system, tier, name, color FROM ranks ORDER BY rank_system, tier"
+    ).fetchall()]
+
+
+def list_ranked_seasons(conn: sqlite3.Connection) -> list[dict]:
+    """Ranked seasons, oldest first. Each covers [started_at, next started_at)."""
+    return [dict(r) for r in conn.execute(
+        "SELECT slug, label, rank_system, started_at FROM ranked_seasons ORDER BY started_at"
+    ).fetchall()]
 
 
 # ── Overview / sync / eras ───────────────────────────────────────────────────
 
 def mmr_series(conn: sqlite3.Connection, account_id: int) -> list[dict]:
     """The full rank-over-time series for an account, ordered by the rank rows'
-    OWN timestamp (account_rank_history.recorded_at, from the mmr-history
-    endpoint). Deliberately no join to matches: the old INNER JOIN dropped every
-    rank point whose match we never ingested (api-findings, spike 12)."""
+    OWN timestamp (account_rank_history.recorded_at: the match's start_time, from
+    match-history since Nov 2026 and mmr-history before). Deliberately no join to
+    matches: the old INNER JOIN dropped every rank point whose match we never
+    ingested (api-findings, spike 12)."""
     rows = conn.execute(
         "SELECT match_id, badge, recorded_at AS start_time"
         " FROM account_rank_history"

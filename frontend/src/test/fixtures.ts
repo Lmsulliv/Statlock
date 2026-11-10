@@ -26,6 +26,7 @@ export function playerProfile(accountId: number, overrides = {}) {
     account_id: accountId,
     display_name: String(accountId),
     current_rank: null,
+    seasons: [],
     has_data: true,
     ...overrides,
   }

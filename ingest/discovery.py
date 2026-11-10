@@ -17,6 +17,7 @@ import logging
 from datetime import timedelta
 
 from ingest.client import BASE_URL, archive_response
+from ingest.ranks import upsert_ranks_from_history
 from ingest.util import unix_to_iso, utcnow
 
 log = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ FRESH_PRIORITY = 1
 # data within seconds, long before the rate-limited drain loop fetches full match
 # metadata. Idempotent: the upsert keys on (account_id, match_id), so re-running
 # discovery rewrites the same rows in place rather than duplicating them (mirrors
-# the mmr-history upsert in ingest/ranks.py). See migration 017 for the rationale.
+# the rank upsert in ingest/ranks.py). See migration 017 for the rationale.
 _SUMMARY_UPSERT = (
     "INSERT INTO account_match_summaries("
     "  account_id, match_id, hero_id, start_time, game_mode, won,"
@@ -232,6 +233,9 @@ def discover_account(conn, client, account_id: int, *, now=utcnow) -> int:
     summary_rows = [params for row in history
                     if (params := _summary_row(account_id, row, fetched_at)) is not None]
     conn.executemany(_SUMMARY_UPSERT, summary_rows)
+    # Same response, same transaction: Ranked games carry their badge, which is
+    # the account's rank-over-time series (mmr-history was removed, spike 15).
+    ranked = upsert_ranks_from_history(conn, account_id, history)
 
     max_seen = max(match_ids, default=high_water)
     # Schedule the next visit by activity (reads the summaries just upserted).
@@ -242,8 +246,8 @@ def discover_account(conn, client, account_id: int, *, now=utcnow) -> int:
         (max_seen, fetched_at, next_at, account_id),
     )
     conn.commit()
-    log.info("discovery: account %s found %d new match(es), high-water %d, next %s",
-             account_id, len(new_ids), max_seen, next_at)
+    log.info("discovery: account %s found %d new match(es), %d rank row(s), high-water %d, next %s",
+             account_id, len(new_ids), ranked, max_seen, next_at)
     return len(new_ids)
 
 

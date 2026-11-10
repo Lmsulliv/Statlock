@@ -1,8 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { useMe, useOverview, useRanks } from '../api/queries'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { useMe, useOverview } from '../api/queries'
 import { useCanManage } from '../api/useCanManage'
-import type { MmrPoint, Overview as OverviewData, RecentMatch, SyncStatus } from '../api/types'
+import type {
+  MmrPoint,
+  Overview as OverviewData,
+  RankedSeason,
+  RecentMatch,
+  ResolvedRank,
+  SyncStatus,
+} from '../api/types'
 import { AccountProgressCard } from '../components/AccountProgressCard'
 import { CurrentRankBadge } from '../components/CurrentRankBadge'
 import { DemoProfileLink } from '../components/DemoProfileLink'
@@ -75,15 +82,7 @@ function OverviewBody({ data }: { data: OverviewData }) {
       {normal && <FocusAreas />}
 
       <div className="overview-cols">
-        {/* Stretches to the grid row that the taller hero-cards column defines,
-            so the chart grows into that height instead of leaving it blank. */}
-        <section className="card overview-chart-card">
-          <div className="card-head">
-            <h2 className="card-title">Rank over time</h2>
-            {data.current_rank && <CurrentRankBadge rank={data.current_rank} />}
-          </div>
-          <MmrChart series={data.mmr_series} />
-        </section>
+        <RankOverTimeCard data={data} />
 
         <section className="card">
           <div className="card-head">
@@ -134,15 +133,121 @@ function EraCandidateBanner({ count }: { count: number }) {
   )
 }
 
-// Hand-rolled SVG line chart — no charting library (CLAUDE.md). Plots the rank
-// badge value over time (one point per ranked match). A "badge" encodes tier and
-// sub-rank as tier*10 + sub, so higher is better; we label the Y endpoints with
-// the rank tier name when we can resolve it.
-function MmrChart({ series }: { series: MmrPoint[] }) {
-  const ranks = useRanks()
+// ── Rank over time ───────────────────────────────────────────────────────────
 
-  // Every hook runs before the empty-series early return below — React requires
-  // a stable hook order, and an early return above them would break it.
+const RANK_VIEW_PARAM = 'rank_view'
+const DEFAULT_RANK_VIEW = 'since-launch'
+
+// "Ritualist 5": the point's own tier name (in its own rank system) plus its
+// subtier; subtier 0 shows the bare name, an unresolved tier the raw badge.
+function rankLabel(rank: ResolvedRank) {
+  if (!rank.name) return `badge ${rank.badge}`
+  return rank.subtier ? `${rank.name} ${rank.subtier}` : rank.name
+}
+
+// Which slice of the rank history the chart shows: `all`, `since-launch` (every
+// seasonal game) or one season's slug. It lives in the URL so a shared link
+// opens the same view, but it is NOT part of Scope: it only slices this chart,
+// never any analytics. Anything unrecognized (a typo, a season that hasn't
+// started, the non-selectable legacy period) falls back to the default.
+function useRankView(choices: RankedSeason[]) {
+  const [params, setParams] = useSearchParams()
+  const raw = params.get(RANK_VIEW_PARAM)
+  const valid = raw === 'all' || choices.some((s) => s.slug === raw)
+  const view = valid && raw ? raw : DEFAULT_RANK_VIEW
+  const setView = (next: string) =>
+    setParams(
+      (prev) => {
+        // Copy, so every other param (account, scope, ...) survives the change.
+        const out = new URLSearchParams(prev)
+        if (next === DEFAULT_RANK_VIEW) out.delete(RANK_VIEW_PARAM)
+        else out.set(RANK_VIEW_PARAM, next)
+        return out
+      },
+      // A view switch isn't a navigation worth a Back-button step.
+      { replace: true },
+    )
+  return [view, setView] as const
+}
+
+function inView(point: MmrPoint, view: string) {
+  if (view === 'all') return true
+  if (view === DEFAULT_RANK_VIEW) return point.rank_system === 'seasonal'
+  return point.season === view
+}
+
+// Stretches to the grid row that the taller hero-cards column defines, so the
+// chart grows into that height instead of leaving it blank.
+function RankOverTimeCard({ data }: { data: OverviewData }) {
+  // Only seasonal periods are selectable; the legacy period is reached via "All time".
+  const choices = data.seasons.filter((s) => s.rank_system === 'seasonal')
+  const [view, setView] = useRankView(choices)
+  const season = choices.find((s) => s.slug === view)
+  const visible = data.mmr_series.filter((p) => inView(p, view))
+  const seasonLabels = Object.fromEntries(data.seasons.map((s) => [s.slug, s.label]))
+
+  const emptyText =
+    view === 'all'
+      ? 'No rank history yet. It appears once ranked matches are ingested.'
+      : season
+        ? `No ranked games in ${season.label} yet.`
+        : 'No ranked games since ranked launch yet.'
+
+  return (
+    <section className="card overview-chart-card">
+      <div className="card-head">
+        <h2 className="card-title">Rank over time</h2>
+        <div className="rank-card-tools">
+          {data.current_rank && (
+            <CurrentRankBadge rank={data.current_rank} seasons={data.seasons} />
+          )}
+          <select
+            className="select-input"
+            aria-label="Rank view"
+            value={view}
+            onChange={(e) => setView(e.target.value)}
+          >
+            <option value="all">All time</option>
+            <option value={DEFAULT_RANK_VIEW}>Since ranked launch</option>
+            {choices.map((s) => (
+              <option key={s.slug} value={s.slug}>
+                {s.is_current ? `${s.label} (current)` : s.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {season?.peak && (
+        <p className="rank-peak">
+          Peak in {season.label}:{' '}
+          <img className="rank-peak-art" src={season.peak.badge_url} alt="" />
+          <strong style={season.peak.color ? { color: season.peak.color } : undefined}>
+            {rankLabel(season.peak)}
+          </strong>
+          {' · '}
+          {fmtDate(season.peak.start_time)}
+        </p>
+      )}
+      {visible.length === 0 ? (
+        <p className="muted">{emptyText}</p>
+      ) : (
+        <MmrChart series={visible} seasonLabels={seasonLabels} />
+      )}
+    </section>
+  )
+}
+
+// Hand-rolled SVG line chart — no charting library (CLAUDE.md). Plots the rank
+// badge value over time, one x step per ranked match. A "badge" encodes tier
+// and sub-rank as tier*10 + sub, so higher is better within one rank system.
+// Takes a non-empty series; the card shows the empty states.
+function MmrChart({
+  series,
+  seasonLabels,
+}: {
+  series: MmrPoint[]
+  seasonLabels: Record<string, string>
+}) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
   const [hover, setHover] = useState<number | null>(null)
@@ -152,9 +257,8 @@ function MmrChart({ series }: { series: MmrPoint[] }) {
   // has no ResizeObserver), where the old fixed size is still a sane default.
   const [box, setBox] = useState({ w: 680, h: 180 })
 
-  // Re-attached when the series arrives, because the wrapper isn't in the DOM
-  // while the empty state is showing.
-  const empty = series.length === 0
+  // The card unmounts this chart while an empty state shows, so attaching once
+  // per mount is enough.
   useEffect(() => {
     const el = wrapRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
@@ -164,20 +268,18 @@ function MmrChart({ series }: { series: MmrPoint[] }) {
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [empty])
-
-  if (empty) {
-    return <p className="muted">No rank history yet. It appears once ranked matches are ingested.</p>
-  }
+  }, [])
 
   const W = box.w
   const H = box.h
   const padX = 36
   const padY = 18
   const n = series.length
-  const badges = series.map((p) => p.badge)
-  let min = Math.min(...badges)
-  let max = Math.max(...badges)
+  // The first lowest / highest point, so Low/High can name it in its own system.
+  const lowest = series.reduce((a, p) => (p.badge < a.badge ? p : a))
+  const highest = series.reduce((a, p) => (p.badge > a.badge ? p : a))
+  let min = lowest.badge
+  let max = highest.badge
   if (min === max) {
     // A flat line still deserves vertical room rather than dividing by zero.
     min -= 5
@@ -187,22 +289,25 @@ function MmrChart({ series }: { series: MmrPoint[] }) {
   const x = (i: number) =>
     n === 1 ? W / 2 : padX + (i / (n - 1)) * (W - 2 * padX)
   const y = (b: number) => padY + (1 - (b - min) / (max - min)) * (H - 2 * padY)
-  const points = series.map((p, i) => `${x(i).toFixed(1)},${y(p.badge).toFixed(1)}`).join(' ')
 
-  const tierName = (badge: number) =>
-    ranks.data?.find((r) => r.tier === Math.floor(badge / 10))?.name
+  // One polyline per unbroken run of a single rank system. The two ladders
+  // aren't one scale (a seasonal 55 isn't a legacy 55), so a line never joins
+  // a legacy point to a seasonal one; the gap between the runs is the point.
+  const runs: number[][] = []
+  series.forEach((p, i) => {
+    if (i > 0 && series[i - 1].rank_system === p.rank_system) runs[runs.length - 1].push(i)
+    else runs.push([i])
+  })
+  const runPoints = (run: number[]) =>
+    run.map((i) => `${x(i).toFixed(1)},${y(series[i].badge).toFixed(1)}`).join(' ')
 
-  // A badge is tier*10 + subtier, so "Ritualist 5" reads off as the tier name
-  // plus its subtier (subtier 0 / unresolved tiers fall back to the raw badge).
-  const rankLabel = (badge: number) => {
-    const name = tierName(badge)
-    if (!name) return `badge ${badge}`
-    const subtier = badge % 10
-    return subtier ? `${name} ${subtier}` : name
-  }
-
-  const hiLabel = tierName(max) ?? `badge ${max}`
-  const loLabel = tierName(min) ?? `badge ${min}`
+  // A labeled divider at each season start in view, halfway between the last
+  // game of one season and the first game of the next.
+  const dividers = series.flatMap((p, i) =>
+    i > 0 && series[i - 1].season !== p.season
+      ? [{ slug: p.season, at: (x(i - 1) + x(i)) / 2, label: seasonLabels[p.season] ?? p.season }]
+      : [],
+  )
 
   // Interactive hover: map the cursor's x to the nearest data point and show the
   // rank you were at that time. getScreenCTM().inverse() converts the mouse's
@@ -224,10 +329,11 @@ function MmrChart({ series }: { series: MmrPoint[] }) {
   const active = hover === null ? null : series[hover]
   // Keep the tooltip box inside the chart: flip it to the left of the guide line
   // once the point is in the right third.
-  const tipW = 132
+  const tipW = 142
+  const tipH = 50
   const tipAnchor = active ? x(hover!) : 0
   const tipX = active ? (tipAnchor > W - tipW - padX ? tipAnchor - tipW - 8 : tipAnchor + 8) : 0
-  const tipY = active ? Math.min(Math.max(y(active.badge) - 26, padY), H - 44) : 0
+  const tipY = active ? Math.min(Math.max(y(active.badge) - tipH / 2, padY), H - tipH - 4) : 0
 
   return (
     <div className="mmr-chart-block">
@@ -245,7 +351,23 @@ function MmrChart({ series }: { series: MmrPoint[] }) {
         >
           <line className="mmr-axis" x1={padX} y1={padY} x2={padX} y2={H - padY} />
           <line className="mmr-axis" x1={padX} y1={H - padY} x2={W - padX} y2={H - padY} />
-          <polyline className="mmr-line" points={points} />
+          {dividers.map((d) => (
+            <g key={d.slug} className="mmr-season-divider">
+              <line x1={d.at} y1={padY} x2={d.at} y2={H - padY} />
+              {/* Above the plot, anchored away from the right edge so a season
+                  that started recently keeps its label on screen. */}
+              <text
+                x={d.at > W - 100 ? d.at - 4 : d.at + 4}
+                y={padY - 6}
+                textAnchor={d.at > W - 100 ? 'end' : 'start'}
+              >
+                {d.label}
+              </text>
+            </g>
+          ))}
+          {runs.map((run) => (
+            <polyline key={run[0]} className="mmr-line" points={runPoints(run)} />
+          ))}
           {series.map((p, i) => (
             <circle key={p.match_id} className="mmr-dot" cx={x(i)} cy={y(p.badge)} r={2.5} />
           ))}
@@ -254,13 +376,17 @@ function MmrChart({ series }: { series: MmrPoint[] }) {
             <g className="mmr-hover" pointerEvents="none">
               <line className="mmr-hover-line" x1={tipAnchor} y1={padY} x2={tipAnchor} y2={H - padY} />
               <circle className="mmr-hover-dot" cx={tipAnchor} cy={y(active.badge)} r={4} />
-              <g transform={`translate(${tipX}, ${tipY})`}>
-                <rect className="mmr-tooltip-box" width={tipW} height={36} rx={4} />
-                <text className="mmr-tooltip-rank" x={8} y={15}>
-                  {rankLabel(active.badge)}
+              <g className="mmr-tooltip" transform={`translate(${tipX}, ${tipY})`}>
+                <rect className="mmr-tooltip-box" width={tipW} height={tipH} rx={4} />
+                <image href={active.badge_url} x={6} y={6} width={24} height={24} />
+                <text className="mmr-tooltip-rank" x={36} y={17}>
+                  {rankLabel(active)}
                 </text>
-                <text className="mmr-tooltip-date" x={8} y={29}>
+                <text className="mmr-tooltip-date" x={36} y={31}>
                   {fmtDate(active.start_time)}
+                </text>
+                <text className="mmr-tooltip-date" x={36} y={44}>
+                  {seasonLabels[active.season] ?? active.season}
                 </text>
               </g>
             </g>
@@ -278,9 +404,11 @@ function MmrChart({ series }: { series: MmrPoint[] }) {
         </svg>
       </div>
       <div className="mmr-axis-labels">
-        <span>Low: {loLabel}</span>
-        <span>{n} ranked matches</span>
-        <span>High: {hiLabel}</span>
+        <span>Low: {rankLabel(lowest)}</span>
+        <span>
+          {n} ranked {n === 1 ? 'match' : 'matches'}
+        </span>
+        <span>High: {rankLabel(highest)}</span>
       </div>
     </div>
   )

@@ -271,6 +271,160 @@ returns a JSON array, one row per **ranked** match, ascending by `start_time`.
   note it equals the most-recent `mmr-history` row, so current rank can also be
   derived as `MAX(start_time)` from the stored series without an extra call.
 
+> **Superseded 2026-11-10 (spike 15).** Both endpoints above are gone (HTTP 404
+> for every account). `mmr-history` stopped returning legacy rows after the Jul 30
+> cutover and later disappeared entirely; the "full history" it once returned now
+> survives only in our `account_rank_history`. See "Ranked seasons and rank
+> systems" below.
+
+---
+
+## Ranked seasons and rank systems (verified 2026-11-10, spike 15)
+
+Spike `spikes/15_ranked_seasons.py`; raw bodies in `spikes/out/15_*`. Part A is
+read-only over `data/tracker.db` and the archive, and Part B made 8 live
+requests through the shared `TokenBucket` stamp.
+
+**Two rank systems share one badge encoding.** The badge is still
+`tier*10 + subtier`, but the names behind each tier changed at the Jul 30 2026
+Matchmaking Update:
+
+| tier | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| legacy | Obscurus | Initiate | Seeker | Alchemist | Arcanist | Ritualist | Emissary | Archon | Oracle | Phantom | Ascendant | Eternus |
+| seasonal | Obscurus | Initiate | Seeker | Acolyte | Sentinel | Mystic | Ritualist | Emissary | Oracle | Phantom | Ascendant | Eternus |
+
+So badge 55 is Ritualist 5 (legacy) and Mystic 5 (seasonal).
+- **Colors are unchanged per tier position.** Tier 5 is `#DDA326` in both
+  systems. The API kept each color on its tier, not on its name.
+- **Legacy metadata is archived:** `raw_api_responses` id 3551, fetched
+  2026-07-29T01:56:01Z. This was the last legacy body; 4042, fetched 2026-08-02,
+  is the first seasonal one.
+- **The `ranks` table has already been overwritten** with the seasonal names,
+  because `refresh_assets` upserts by tier.
+- **Beta Season 2 did not change names, colors or art.** The `/v1/assets/ranks`
+  body is identical from 2026-09-07 through 2026-11-09 (ids 4406 to 5782), so
+  S1 and S2 are one rank system.
+
+**Season windows: `GET /v1/assets/ranked-seasons`** (`out/15_ranked_seasons.json`).
+This endpoint is new since the June spec. It takes `language` and `client_version`
+params and returns one object per season, with `intervals[]` carrying
+`start_timestamp` and `end_timestamp` (unix seconds):
+
+| season (`name` / `class_name`) | start (UTC) | end (UTC) | calibration_matches | calibration_max_rank |
+| --- | --- | --- | --- | --- |
+| Beta Season 1 / `season_1` | 2026-07-30T17:00:00 | 2026-11-05T20:00:00 | 8 | 86 |
+| Beta Season 2 / `season_2` | 2026-11-05T20:00:00 | 2027-03-11T22:00:00 | 8 | 101 |
+
+Notes on the season windows:
+- **Contiguous intervals:** each season ends exactly where the next begins.
+- **Legacy is not listed.** Nothing before S1 appears in this endpoint.
+- **Other fields** (recorded, not used): `ranked_type`, `min_wins`,
+  `min_hero_wins` / `min_hero_unlock_points`, `min_hero_unlocks`,
+  `base_win_loss_point_grant`, `valid_party_sizes`, `leaderboard_id`, and
+  `rank_info[]` (`sub_rank_xp`, `rank_end`, `badge_shields`, `sub_rank_shields`).
+
+The archive agrees with these boundaries:
+- **S1 start:** the last legacy rank row (any account) is 2026-07-28 22:31:30.
+  The first Ranked game in any archived match-history is 2026-07-30 20:08:50.
+  The "Matchmaking Update" Steam news post (archive 4043, GetNewsForApp
+  `gid 1839676055886206`) went up 2026-07-30 19:14:37, about 2 h after the
+  17:00 start.
+- **S2 start:**
+  - The "Ranked - Beta Season 2" post went up 2026-11-05 19:58:14 ("begins now").
+  - The self account's first S2 game, 131908805 at 21:40:11, already has
+    `ranked_display_badge = 45`.
+  - Its last S1 game, Nov 4 22:09, had 36.
+- **The Steam news text disagrees with the API.** It said "2pm PDT", which would
+  be 21:00 UTC (and DST had already ended, so 2pm Pacific was 22:00 UTC).
+  The API's 20:00 is the value the game client ships, so it is the one to trust.
+
+**Badge art for the two systems is at two different paths, and both resolve** (B4):
+
+| path | status | content | image |
+| --- | --- | --- | --- |
+| `.../images/ranks/rank{tier}/badge_lg.png` | 200, 241 849 B | legacy art | tier 5 is the Ritualist dagger |
+| `.../images/ranks/rank{tier:02d}_lg.png` | 200, 101 791 B | seasonal art | tier 5 is the Mystic creature |
+
+- **Different images:** the two files have different sha256 hashes.
+- **What the API now returns:** `/v1/assets/ranks` `images.large` gives the
+  seasonal path. It also adds `chalk`, `chalk_webp` and `subrank{1..6}` keys.
+- **Subrank art moved:** `large_subrank{n}` now points at
+  `api.deadlock-api.com/v1/assets/ranks/{tier}/{subrank}/image`.
+- **The app is out of date:** it still builds the legacy path for every badge.
+- **`client_version` param:** it still exists on `/v1/assets/ranks`. It was not
+  needed, because the legacy art is still served at the old path.
+
+**Per-match rank source after the cutover:**
+- `GET /v1/players/{id}/mmr-history`, `/v1/players/mmr` and
+  `/v1/players/mmr/distribution` all return **HTTP 404** as of 2026-11-10. The
+  worker's ranks loop has been getting 404 for every account (archive ids
+  6439–6445). The last 200 was 2026-11-02.
+- Their replacements, `/v1/players/{account_id}/rank`, `/v1/players/rank?account_ids=`
+  and `/v1/players/rank/distribution`, return only the **latest** rank
+  (`{badge, rank, subrank, last_match}`).
+  - These replacements were read from the spec only. No live call was made.
+  - Their description says the badge includes the progress from the last match.
+  - Within Eternus, the subrank is a percentile cut that Valve recomputes daily.
+- Before it disappeared, mmr-history had already **dropped legacy history**.
+  The self account's body went from 193 rows (Jul 29) to `[]` (Aug 2), then to
+  3, 6 and 17 rows, all of them post-cutover. **Our legacy rows exist only in
+  `account_rank_history`**, and an account added from now on cannot get legacy
+  history.
+- **mmr-history rows were Ranked-only after the cutover.** All 16 seasonal rows
+  for the self account are on `match_mode == 4` games, and none of the 139
+  `match_mode == 1` games has a row. Before the cutover, every row was
+  `match_mode == 1`, because there was one queue.
+
+**Match-history now carries per-match rank: four new fields.** These are on
+every row of `GET /v1/players/{id}/match-history` (`out/15_match_history.json`,
+597 rows):
+
+```text
+ranked_calibration_match (int), ranked_display_badge (int | null),
+ranked_delta (int, rank points), ranked_used_demotion_protection
+```
+
+`ranked_display_badge` is an int only on Ranked rows (30 of 30). It is `null`
+on the other 567 rows, including every pre-cutover row, so legacy ranks cannot
+be re-derived from match-history.
+
+- **On Ranked games (`match_mode == 4`):**
+  - Calibration games count `ranked_calibration_match` 1→8 with
+    `ranked_display_badge = 0`. On the self account, games 3–7 had no
+    mmr-history row.
+  - The 8th game (placement) carries the first real badge (34), and so did its
+    mmr-history row.
+  - After that, `ranked_calibration_match = 0`.
+- **`ranked_display_badge` equals the stored mmr-history `rank` on 16 of 16
+  shared matches** (S1, Aug 5 → Oct 31). It covers the S2 games too (45). So
+  match-history is a drop-in per-match source for the seasonal system.
+  `match_mode == 4` means Ranked; `1` is the standard unranked queue.
+- **`start_time` equals the stored `recorded_at`** on all 209 matches that
+  appear in both. **Ingestion now uses this source:** discovery writes
+  `account_rank_history` from every `match_mode == 4` row with a badge above 0
+  (`ingest/ranks.py`), and the mmr-history fetch has been removed.
+- **Returning players do not recalibrate in S2.** The self account's first S2
+  game has `ranked_calibration_match = 0`.
+
+**Other observations:**
+- **Encoding:** `rank == division*10 + division_tier` held for 63 of 63 seasonal
+  mmr-history rows.
+- **Duplicate row:** the API sent match 98476826 twice. The
+  `(account_id, match_id)` upsert absorbs it.
+- **Eternus:** not observed in either system. The highest badges seen are
+  legacy 105 and seasonal 86. Assume tier 11 is `11x` in both, as `tier*10`
+  implies, but this is unverified.
+- **Ground truth on 2026-11-10:** the self account is Sentinel V (badge 45) in
+  game. The latest stored `account_rank_history` row is 36 (Acolyte VI,
+  2026-10-31), which is **stale**, because no S2 row was ever ingested.
+  Match-history `ranked_display_badge` on the S2 games is **45, which agrees**.
+- **Pre-ranked rows:** 11 `account_rank_history` rows predate 2024-10-10, all on
+  account 1271661760 and all with badge 0. The first non-zero badge in our data
+  is from 2024-11-23.
+- **`average_badge_team0/1`** in match metadata is 0 on all 487 post-cutover
+  matches we hold (pre-cutover: 26 of 384 were 0).
+
 ---
 
 ## Match history response shape
@@ -546,6 +700,12 @@ which the asset depicts with stars). **Currently unused:** because the badge
 filter only partitions cleanly at decade/tier granularity (finding 6), the rank
 selector and baselines are tier-granular, so `/api/ranks` derives only the
 per-tier `badge_lg.png` and does not expand subranks.
+
+> **Changed 2026-08-02 (spike 15).** The names above are the *legacy* ladder.
+> Since the Jul 30 2026 cutover `/v1/assets/ranks` returns the seasonal names,
+> `images.large` moved to `.../ranks/rank{tier:02d}_lg.png`, and subrank art moved
+> to `api.deadlock-api.com/v1/assets/ranks/{tier}/{subrank}/image`. See "Ranked
+> seasons and rank systems".
 
 Endpoint specifics:
 

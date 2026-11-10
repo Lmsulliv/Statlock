@@ -70,7 +70,16 @@ class TokenBucket:
         self._last_refill = now
 
     def acquire(self) -> None:
-        """Block until a token is available, spend it, then add jitter."""
+        """Add jitter, then block until a token is available and spend it.
+
+        Jitter comes FIRST: the caller sends its request as soon as this
+        returns, so the token must be spent (and the stamp written) at that
+        moment. Sleeping jitter after spending let the next token be timed
+        from before the jitter -- requests could land ~3 s apart.
+        """
+        extra = self._jitter()
+        if extra > 0:
+            self._sleep(extra)
         self._refill()
         if self._tokens < 1.0:
             wait = (1.0 - self._tokens) / self.rate
@@ -78,7 +87,4 @@ class TokenBucket:
             self._sleep(wait)
             self._refill()
         self._tokens -= 1.0
-        extra = self._jitter()
-        if extra > 0:
-            self._sleep(extra)
         self._write_stamp()

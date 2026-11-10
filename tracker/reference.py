@@ -106,15 +106,19 @@ def load_ranks(conn: sqlite3.Connection, ranks_json: list[dict], fetched_at: str
     Stores the semantic bits (tier, name, accent color). The badge art URL is a
     pure function of the tier and is derived in the read layer, not stored here.
     Idempotent upsert: re-running with the same data is a no-op.
+
+    Writes ONLY the 'seasonal' ladder: the endpoint has served the post-Jul-30-2026
+    names since the cutover, and the legacy ladder (seeded by migration 022 from
+    the archive) must never be overwritten by them.
     """
     rows = [
         (rank["tier"], rank["name"], rank.get("color"), fetched_at)
         for rank in ranks_json
     ]
     conn.executemany(
-        """INSERT INTO ranks(tier, name, color, fetched_at)
-           VALUES(?, ?, ?, ?)
-           ON CONFLICT(tier) DO UPDATE SET
+        """INSERT INTO ranks(rank_system, tier, name, color, fetched_at)
+           VALUES('seasonal', ?, ?, ?, ?)
+           ON CONFLICT(rank_system, tier) DO UPDATE SET
                name       = excluded.name,
                color      = excluded.color,
                fetched_at = excluded.fetched_at""",

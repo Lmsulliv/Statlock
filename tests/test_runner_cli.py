@@ -26,8 +26,11 @@ def _no_idle_baselines(monkeypatch):
 
 def full_client() -> FakeClient:
     client = FakeClient()
-    client.add(f"/v1/players/{ME}/match-history", ok(fixture_text(f"match_history_{ME}.json")))
-    client.add(f"/v1/players/{ME}/mmr-history", ok(fixture_text("mmr_history_891231519.json")))
+    # One game marked Ranked, so discovery has a rank row to write (the stored
+    # fixture predates the ranked_* fields; see test_rank_ingestion.py for real rows).
+    history = load_fixture(f"match_history_{ME}.json")
+    history[0].update(match_mode=4, ranked_display_badge=45)
+    client.add(f"/v1/players/{ME}/match-history", ok(json.dumps(history)))
     meta = load_fixture("match_metadata_86714494.json")
     for match_id in (86704689, 86707774, 86714494):
         meta["match_info"]["match_id"] = match_id
@@ -61,16 +64,16 @@ def test_run_once_does_maintenance_discovery_drain(db):
     assert db.execute(
         "SELECT value FROM worker_meta WHERE key='last_maintenance_at'"
     ).fetchone() is not None
-    # Discovery found new matches, so rank ingestion fired and populated the
-    # rank-over-time series.
-    assert db.execute("SELECT COUNT(*) FROM account_rank_history").fetchone()[0] > 0
-    assert len(client.calls_matching("mmr-history")) == 1
+    # Discovery wrote the rank-over-time series from match-history itself; the
+    # removed mmr-history endpoint is never called.
+    assert db.execute("SELECT COUNT(*) FROM account_rank_history").fetchone()[0] == 1
+    assert client.calls_matching("mmr-history") == []
 
-    # Second run within 24h: maintenance skipped (still one news poll). Discovery
-    # finds nothing new, so the rank fetch is gated off (still just one call).
+    # Second run within 24h: maintenance skipped (still one news poll), and
+    # re-discovery rewrites the same rank row instead of duplicating it.
     run_once(db, client, now=now, sleep=FakeSleep(now))
     assert len(client.calls_matching("GetNewsForApp")) == 1
-    assert len(client.calls_matching("mmr-history")) == 1
+    assert db.execute("SELECT COUNT(*) FROM account_rank_history").fetchone()[0] == 1
 
 
 def test_maintenance_due(db):
@@ -144,9 +147,8 @@ def test_daemon_immediately_picks_up_new_account(db, monkeypatch):
     run_daemon(db, client, now=now, sleep=sleep, max_iterations=2)
 
     # Discovery timer was NOT due on iteration 2 (only seconds passed), yet the new
-    # account got its match-history and mmr-history fetched exactly once each.
+    # account got its match-history fetched exactly once.
     assert len(client.calls_matching("match-history")) == 1
-    assert len(client.calls_matching("mmr-history")) == 1
     # Summaries, queue, and the rank series are all populated within that iteration.
     assert db.execute(
         "SELECT COUNT(*) FROM account_match_summaries WHERE account_id = ?", (ME,)
@@ -280,7 +282,6 @@ def test_fresh_import_drains_all_prioritized_before_any_baseline_span(db):
     client = FakeClient()
     history = [{"match_id": 1000 + i, "start_time": 1780538995 + i} for i in range(55)]
     client.add(f"/v1/players/{ME}/match-history", ok(json.dumps(history)))
-    client.add(f"/v1/players/{ME}/mmr-history", ok(fixture_text("mmr_history_891231519.json")))
     meta = load_fixture("match_metadata_86714494.json")
     for i in range(55):
         meta["match_info"]["match_id"] = 1000 + i

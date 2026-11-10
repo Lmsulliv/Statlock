@@ -53,10 +53,9 @@ def test_profile_never_leaks_private_labels(api_db):
 
 
 def test_profile_reports_current_rank(api_db):
-    # Seed a two-point rank history + the ranks table; the current rank is the
-    # last (latest) point resolved against its tier.
-    api_db.execute("INSERT INTO ranks(tier, name, color, fetched_at)"
-                   " VALUES (5, 'Archon', '#abc', '2026-06-15T12:00:00+00:00')")
+    # Seed a two-point rank history; the current rank is the last (latest) point
+    # resolved against its tier -- in June 2026 that's the legacy ladder, which
+    # migration 022 seeds (tier 5 = Ritualist).
     for match_id, badge, ts in ((900, 40, "2026-06-01T00:00:00+00:00"),
                                 (901, 52, "2026-06-10T00:00:00+00:00")):
         api_db.execute(
@@ -67,12 +66,14 @@ def test_profile_reports_current_rank(api_db):
     assert rank["badge"] == 52
     assert rank["tier"] == 5
     assert rank["subtier"] == 2
-    assert rank["name"] == "Archon"
+    assert rank["name"] == "Ritualist"
+    assert rank["season"] == "legacy"
 
 
 def test_profile_tolerates_empty_ranks_table(api_db):
     # Rank history exists but the ranks asset table is empty (never refreshed):
     # still 200, tier/subtier present, name None (not a crash).
+    api_db.execute("DELETE FROM ranks")
     api_db.execute(
         "INSERT INTO account_rank_history(account_id, match_id, badge, recorded_at)"
         " VALUES (?, 902, 33, '2026-06-10T00:00:00+00:00')", (ME,))

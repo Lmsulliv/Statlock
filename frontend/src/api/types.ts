@@ -290,6 +290,8 @@ export interface PlayerProfile {
   account_id: number
   display_name: string
   current_rank: CurrentRank | null
+  // So the header can say which season current_rank is from.
+  seasons: RankedSeason[]
   has_data: boolean
 }
 
@@ -445,20 +447,41 @@ export interface ErasResponse {
   message?: string
 }
 
-export interface MmrPoint {
-  match_id: number
-  badge: number
-  start_time: string
-}
+// Two rank ladders share one badge encoding: badge 55 is Ritualist 5 on the
+// legacy ladder and Mystic 5 on the seasonal one. The server always says which.
+export type RankSystem = 'legacy' | 'seasonal'
 
-// The account's current (most-recent) rank, resolved to display name + color.
-export interface CurrentRank {
+// A badge resolved in ONE rank system: that system's tier name, color and art.
+export interface ResolvedRank {
   badge: number // tier*10 + subtier, 0..116
   tier: number
   subtier: number
   name: string | null
   color: string | null
   badge_url: string
+  rank_system: RankSystem
+}
+
+// One ranked match on the rank-over-time chart, resolved in its own season.
+export interface MmrPoint extends ResolvedRank {
+  match_id: number
+  start_time: string
+  season: string // a RankedSeason slug
+}
+
+// The account's current (most-recent) rank: the last point of the series.
+export type CurrentRank = MmrPoint
+
+// A ranked period that has started (newest first). The legacy period is one too,
+// but only `seasonal` entries are selectable; peak is null for legacy and for a
+// season with no ranked games yet.
+export interface RankedSeason {
+  slug: string
+  label: string
+  rank_system: RankSystem
+  started_at: string
+  is_current: boolean
+  peak: MmrPoint | null
 }
 
 export interface RecentMatch {
@@ -482,6 +505,7 @@ export interface Overview {
   account_id: number | null
   mmr_series: MmrPoint[]
   current_rank: CurrentRank | null
+  seasons: RankedSeason[]
   last_matches: RecentMatch[]
   sync: SyncStatus
   // True when any recent-match row is still a discovery summary awaiting full

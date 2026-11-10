@@ -1,0 +1,98 @@
+[
+ {
+  "tier": 0,
+  "name": "Obscurus",
+  "color": "#333333",
+  "images": {
+   "large": "https://assets-bucket.deadlock-api.com/assets-api-res/images/ranks/rank00_lg.png"
+  }
+ },
+ {
+  "tier": 1,
+  "name": "Initiate",
+  "color": "#6A3E1E",
+  "images": {
+   "large": "https://assets-bucket.deadlock-api.com/assets-api-res/images/ranks/rank01_lg.png"
+  }
+ },
+ {
+  "tier": 2,
+  "name": "Seeker",
+  "color": "#882355",
+  "images": {
+   "large": "https://assets-bucket.deadlock-api.com/assets-api-res/images/ranks/rank02_lg.png"
+  }
+ },
+ {
+  "tier": 3,
+  "name": "Acolyte",
+  "color": "#5C6DAB",
+  "images": {
+   "large": "https://assets-bucket.deadlock-api.com/assets-api-res/images/ranks/rank03_lg.png"
+  }
+ },
+ {
+  "tier": 4,
+  "name": "Sentinel",
+  "color": "#719C47",
+  "images": {
+   "large": "https://assets-bucket.deadlock-api.com/assets-api-res/images/ranks/rank04_lg.png"
+  }
+ },
+ {
+  "tier": 5,
+  "name": "Mystic",
+  "color": "#DDA326",
+  "images": {
+   "large": "https://assets-bucket.deadlock-api.com/assets-api-res/images/ranks/rank05_lg.png"
+  }
+ },
+ {
+  "tier": 6,
+  "name": "Ritualist",
+  "color": "#EE4F57",
+  "images": {
+   "large": "https://assets-bucket.deadlock-api.com/assets-api-res/images/ranks/rank06_lg.png"
+  }
+ },
+ {
+  "tier": 7,
+  "name": "Emissary",
+  "color": "#B47FEB",
+  "images": {
+   "large": "https://assets-bucket.deadlock-api.com/assets-api-res/images/ranks/rank07_lg.png"
+  }
+ },
+ {
+  "tier": 8,
+  "name": "Oracle",
+  "color": "#955138",
+  "images": {
+   "large": "https://assets-bucket.deadlock-api.com/assets-api-res/images/ranks/rank08_lg.png"
+  }
+ },
+ {
+  "tier": 9,
+  "name": "Phantom",
+  "color": "#7C7C7C",
+  "images": {
+   "large": "https://assets-bucket.deadlock-api.com/assets-api-res/images/ranks/rank09_lg.png"
+  }
+ },
+ {
+  "tier": 10,
+  "name": "Ascendant",
+  "color": "#C39751",
+  "images": {
+   "large": "https://assets-bucket.deadlock-api.com/assets-api-res/images/ranks/rank10_lg.png"
+  }
+ },
+ {
+  "tier": 11,
+  "name": "Eternus",
+  "color": "#5CE9A9",
+  "images": {
+   "large": "https://assets-bucket.deadlock-api.com/assets-api-res/images/ranks/rank11_lg.png"
+  }
+ }
+]

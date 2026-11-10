@@ -33,6 +33,22 @@ def test_requests_are_at_least_five_seconds_apart():
     assert all(gap >= 5.0 for gap in gaps), gaps
 
 
+def test_uneven_jitter_never_brings_requests_closer_than_five_seconds():
+    # Regression (spike 15, 2026-11-10): jitter used to be slept AFTER the
+    # token was spent, so the next token was timed from before the jitter. A
+    # long jitter followed by a short one put requests ~3 s apart. The request
+    # goes out when acquire() returns, so those return times are what count.
+    clock = SimClock()
+    jitters = iter([2.0, 0.0, 2.0, 0.0, 1.0, 0.0])
+    bucket = make_bucket(clock, jitter=lambda: next(jitters))
+    times = []
+    for _ in range(6):
+        bucket.acquire()
+        times.append(clock.t)
+    gaps = [b - a for a, b in zip(times, times[1:])]
+    assert all(gap >= 5.0 for gap in gaps), gaps
+
+
 def test_no_wait_when_idle_long_enough():
     clock = SimClock()
     bucket = make_bucket(clock)
@@ -68,7 +84,7 @@ def test_configured_rate_spaces_requests_accordingly():
     assert 1.0 <= gap < 5.0, gap
 
 
-def test_jitter_added_after_acquire():
+def test_jitter_is_slept():
     clock = SimClock()
     bucket = TokenBucket(rate=0.2, capacity=1, clock=clock, sleep=clock.sleep,
                          jitter=lambda: 1.5)

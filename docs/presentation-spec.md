@@ -77,7 +77,12 @@ Reads are open by design (the honesty contract below applies to every viewer, no
 
 The landing page: "how am I doing, and where should I look next."
 
-- Rank/MMR graph over time (from the MMR endpoint data), with the current badge beside the title.
+- **Rank over time** — a graph of the rank series (the rank timeline contract below), with the current badge and a view selector beside the title:
+  - **Views:** All time, Since ranked launch (the default: every `seasonal` point), and one entry per selectable (`seasonal`) season, newest first, the current one suffixed "(current)". The view is the `rank_view` search param (`all`, `since-launch` or a season slug). It is omitted at the default, and any other value falls back to the default. It is NOT a scope parameter: it only slices this chart, and the scope bar doesn't carry it.
+  - **Rank systems are never connected on the chart.** Each unbroken run of one `rank_system` is its own line; a legacy point and a seasonal point are never joined, because the two ladders aren't one scale. A labeled divider marks each season start in view.
+  - **Every name is the point's own.** Tooltip (badge art, name + subtier, date, season label) and the Low/High labels read the resolved name on each point, never a lookup against `/api/ranks`. The x axis is one step per ranked match.
+  - **A single season** shows its server-computed `peak` above the chart, or "No ranked games in {season} yet." when it has none.
+  - **The current badge** (here and in the public profile header) appends the season label when `current_rank` is from a season that is no longer current.
 - **Focus areas** — the 30-second hook: the top three entries of the improvement digest (`/api/improvement`; confirmed weaknesses first, then the watch list — both arrive server-ranked largest-first, so the strip is a slice, never a re-ranking), each a compact card with its verdict, linking into Improvement. Hidden when the digest is empty and under Street Brawl (the digest is Normal-only).
 - **Your heroes** — the most-played heroes as compact cards (games, win rate + interval, verdict color, per-row provisional flag) from `/api/hero-records`, sorted by games client-side (presentation ordering), each linking into that hero's detail on the Heroes tab. Shares a two-column row with the rank chart on wide screens.
 - Last 10 matches: hero, result, KDA, souls, link to match detail.
@@ -256,7 +261,7 @@ GET /api/eras                  (+ POST confirm/dismiss for candidates)
 GET /api/sync-status
 GET /api/accounts              (scope-free; backs the Account picker — account_id, display_name, is_self)
 GET /api/accounts/{id}/progress (scope-free; polled onboarding counts — known/analyzed/queued-by-tier)
-GET /api/players/{id}/profile   (public, label-free profile header for /player/:id — display_name, current_rank, has_data; side-effect-free)
+GET /api/players/{id}/profile   (public, label-free profile header for /player/:id — display_name, current_rank, seasons, has_data; side-effect-free)
 ```
 
 Example response row for /api/matchups:
@@ -308,6 +313,27 @@ The anti-join is the no-double-count guarantee: the instant a match's metadata i
 - **Narrowed scope drops summaries.** Era- and badge-narrowed scopes exclude summary rows automatically, because NULL fails both `era_id IN (…)` and the badge `BETWEEN`. At the default all-time, full-range scope (no era filter, badge predicate dropped) summaries are included. The population baseline on Performance/Trends is always `full`-only — a baseline must rest on real metadata, never another account's provisional guess.
 
 **The `provisional` flag (contract).** Any response that can mix sources carries a top-level `"provisional": true|false`, true iff any contributing row is summary-backed, so the UI can badge the result "these numbers will improve" and re-poll. It appears on `/api/overview`, `/api/performance`, `/api/trends`, `/api/tilt`, and `/api/hero-records` (which also flags each hero row individually; Overview also carries per-row `source`). **Absent means always-full**: endpoints that never read summaries omit the flag entirely rather than hard-coding `false`. `/api/performance` returns `{"provisional": bool, "rows": [...]}` (the rows were a bare list before this contract).
+
+**Rank timeline (contract, schema v22).** `/api/overview` carries three rank
+fields: `mmr_series`, `seasons` and `current_rank`. `/api/players/{id}/profile`
+carries `current_rank` and `seasons` only, not the series. All three are computed
+server-side by `service.rank_timeline`.
+
+- **`mmr_series`:** one point per rank row, oldest first:
+  `{match_id, badge, start_time, season, rank_system, tier, subtier, name, color, badge_url}`.
+  - Each point is named in the ladder of the season it falls in, so badge 55 is
+    "Ritualist" in `legacy` and "Mystic" in `seasonal`.
+  - Points before the first season are omitted.
+- **`seasons`:** the seasons that have started, newest first:
+  `{slug, label, rank_system, started_at, is_current, peak}`.
+  - `peak` is that season's highest point (the first time it was reached), in the
+    same shape as a series point.
+  - `peak` is `null` for a season with no ranked games yet, and always `null`
+    for `legacy`.
+- **`current_rank`:** the latest series point, carrying its own `season`, or
+  `null`.
+- **No account:** the no-account overview returns `seasons: []`.
+- **`/api/ranks`:** unchanged. It lists the current (`seasonal`) ladder only.
 
 **Progress endpoint.** `GET /api/accounts/{id}/progress` backs the onboarding UI's poll with cheap indexed counts: `known` (summary rows held), `analyzed` (matches with full metadata), and remaining queue depth by tier (`prioritized_pending`, `backfill_pending`, `deferred`, `unavailable`, keyed on `fetch_queue.discovered_for_account`). As the drain loop works, `analyzed` climbs toward `known` and the pending tiers fall. When `deferred + unavailable > 0` the progress card shows a quiet hint that some matches are waiting on data submission to deadlock-api, linking to the community ingest tool (the likely cause: the match salts were never submitted).
 

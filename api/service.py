@@ -12,7 +12,7 @@ import dataclasses
 import json
 import math
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from stats import (
     VERDICT_CLEAR_STRENGTH,
@@ -988,50 +988,127 @@ def account_progress(conn: sqlite3.Connection, account_id: int, *, now=utcnow) -
     return {"account_id": account_id, **queries.account_progress_counts(conn, account_id)}
 
 
-# ── Rank tiers (for the rank-range selector) ─────────────────────────────────
+# ── Rank tiers, rank systems and ranked seasons ──────────────────────────────
 
 _RANK_ART_BASE = "https://assets-bucket.deadlock-api.com/assets-api-res/images/ranks"
+# Each rank system has its own badge art on the CDN, and both paths still
+# resolve (api-findings "Ranked seasons and rank systems", spike 15).
+_RANK_ART_PATHS = {
+    "legacy": "rank{tier}/badge_lg.png",
+    "seasonal": "rank{tier:02d}_lg.png",
+}
 
 
-def _rank_badge_url(tier: int) -> str:
+def _rank_badge_url(tier: int, rank_system: str) -> str:
     """Derive the tier badge-art URL from the assets CDN layout. The URL is a
-    pure function of the tier, so we derive it rather than storing it."""
-    return f"{_RANK_ART_BASE}/rank{tier}/badge_lg.png"
+    pure function of (system, tier), so we derive it rather than storing it."""
+    return f"{_RANK_ART_BASE}/{_RANK_ART_PATHS[rank_system].format(tier=tier)}"
 
 
-def resolve_badge(badge: int | None, rank_tiers: list[dict]) -> dict | None:
+def resolve_badge(badge: int | None, rank_system: str, rank_tiers: list[dict]) -> dict | None:
     """Map a numeric badge (tier*10 + subtier, 0..116; api-findings spike 12) to a
-    display rank: the tier name + accent color from the ranks table, the subtier,
-    and the derived tier badge art. None for a missing badge, so "current rank" is
+    display rank IN ONE RANK SYSTEM: the tier name + accent color from that
+    system's ranks rows, the subtier, and that system's badge art. The same badge
+    names different ranks per system (55 = Ritualist 5 legacy, Mystic 5 seasonal),
+    so the caller must say which. None for a missing badge, so "current rank" is
     simply absent rather than faked. rank_tiers is queries.list_ranks(conn)."""
     if badge is None:
         return None
     tier = badge // 10
-    by_tier = {r["tier"]: r for r in rank_tiers}
-    row = by_tier.get(tier)
+    row = next((r for r in rank_tiers
+                if r["rank_system"] == rank_system and r["tier"] == tier), None)
     return {
         "badge": badge,
         "tier": tier,
         "subtier": badge % 10,
         "name": row["name"] if row else None,
         "color": row["color"] if row else None,
-        "badge_url": _rank_badge_url(tier),
+        "badge_url": _rank_badge_url(tier, rank_system),
+        "rank_system": rank_system,
     }
+
+
+def _instant(iso: str) -> datetime:
+    parsed = datetime.fromisoformat(iso)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def season_for(seasons: list[dict], when: str) -> dict | None:
+    """The ranked season an ISO timestamp falls in, or None before the first one.
+
+    The ONLY code that interprets season dates; everything else asks this.
+    seasons is queries.list_ranked_seasons(conn), oldest first; each covers
+    [started_at, next started_at). Compares parsed instants, not strings: "...Z"
+    and "...+00:00" spell the same instant but sort differently as text, which
+    would misfile a timestamp at the exact boundary second."""
+    at = _instant(when)
+    found = None
+    for season in seasons:
+        if _instant(season["started_at"]) > at:
+            break
+        found = season
+    return found
+
+
+def rank_timeline(conn: sqlite3.Connection, account_id: int, *, now=utcnow) -> dict:
+    """The rank-over-time block shared by overview() and player_profile().
+
+    - mmr_series: every rank point resolved in its OWN season's rank system (plus
+      its season slug). Points before the first season are left out: they predate
+      ranked play and no rank system can name them.
+    - seasons: the seasons that have started, newest first. is_current marks the
+      one `now` falls in. peak is the season's highest point (the first time it was
+      reached), or None when the season has no games -- and always None for the
+      legacy period, which isn't a selectable season.
+    - current_rank: the latest point (with its season), or None."""
+    seasons = queries.list_ranked_seasons(conn)
+    tiers = queries.list_ranks(conn)
+    series = []
+    for point in queries.mmr_series(conn, account_id):
+        season = season_for(seasons, point["start_time"])
+        if season is None:
+            continue
+        series.append({**point,
+                       **resolve_badge(point["badge"], season["rank_system"], tiers),
+                       "season": season["slug"]})
+
+    current = season_for(seasons, now().isoformat())
+    started = seasons[:seasons.index(current) + 1] if current else []
+    return {
+        "mmr_series": series,
+        "seasons": [_season_entry(s, series, is_current=s is current)
+                    for s in reversed(started)],
+        "current_rank": series[-1] if series else None,
+    }
+
+
+def _season_entry(season: dict, series: list[dict], *, is_current: bool) -> dict:
+    peak = None
+    if season["rank_system"] == "seasonal":
+        # badge > 0 keeps a calibration game (no rank yet) from ever being a
+        # peak. Ingestion already skips them; this is belt and braces.
+        in_season = [p for p in series if p["season"] == season["slug"] and p["badge"] > 0]
+        # max() returns the FIRST maximal point; the series is oldest first.
+        peak = max(in_season, key=lambda p: p["badge"]) if in_season else None
+    return {**season, "is_current": is_current, "peak": peak}
 
 
 def ranks(conn: sqlite3.Connection) -> list[dict]:
     """Rank tiers (name + color from the DB) plus a derived badge-art URL. One
     entry per tier: the analytics badge filter only partitions cleanly at decade
     (tier) granularity, so the rank selector is tier-granular (api-findings
-    finding 6)."""
+    finding 6). The current (seasonal) ladder only. Its art is still the legacy
+    path the selector always used -- /api/ranks is deliberately unchanged by the
+    season work (a Follow-up)."""
     return [
         {
             "tier": r["tier"],
             "name": r["name"],
             "color": r["color"],
-            "badge_url": _rank_badge_url(r["tier"]),
+            "badge_url": _rank_badge_url(r["tier"], "legacy"),
         }
         for r in queries.list_ranks(conn)
+        if r["rank_system"] == "seasonal"
     ]
 
 
@@ -1058,7 +1135,7 @@ def me(conn: sqlite3.Connection, user_id: int) -> dict:
     return {"user_id": user_id, "account_id": self_id, "display_name": name}
 
 
-def player_profile(conn: sqlite3.Connection, account_id: int) -> dict:
+def player_profile(conn: sqlite3.Connection, account_id: int, *, now=utcnow) -> dict:
     """Public profile header for /api/players/{id}/profile and the link-preview
     og tags: a label-free display name, the current rank, and whether we hold any
     data for the account.
@@ -1074,15 +1151,16 @@ def player_profile(conn: sqlite3.Connection, account_id: int) -> dict:
     renders a profile; an unknown id gets has_data=False and the caller shows a
     friendly "not tracked here" page instead of empty screens."""
     display_name = queries.resolve_names(conn, [account_id], user_id=None)[account_id]
-    series = queries.mmr_series(conn, account_id)
-    current_rank = (resolve_badge(series[-1]["badge"], queries.list_ranks(conn))
-                    if series else None)
+    timeline = rank_timeline(conn, account_id, now=now)
     counts = queries.account_progress_counts(conn, account_id)
     has_data = counts["known"] > 0 or counts["analyzed"] > 0
     return {
         "account_id": account_id,
         "display_name": display_name,
-        "current_rank": current_rank,
+        "current_rank": timeline["current_rank"],
+        # The header labels current_rank with its season when it isn't the
+        # current one; the series itself stays on the Overview payload.
+        "seasons": timeline["seasons"],
         "has_data": has_data,
     }
 
@@ -1236,7 +1314,7 @@ def overview(conn: sqlite3.Connection, scope: Scope, *, now=utcnow) -> dict:
         _maybe_request_discovery(conn, resolved.account_id, now=now)
     if resolved is None:
         return {
-            "account_id": None, "mmr_series": [], "current_rank": None,
+            "account_id": None, "mmr_series": [], "current_rank": None, "seasons": [],
             "last_matches": [], "sync": sync, "provisional": False,
             "message": "No tracked account yet. Add one with:"
                        " python -m ingest add-account <id> --self",
@@ -1249,15 +1327,13 @@ def overview(conn: sqlite3.Connection, scope: Scope, *, now=utcnow) -> dict:
         m["hero_name"] = names.get(m["hero_id"], str(m["hero_id"]))
         m["image_url"] = images.get(m["hero_id"])
         m["won"] = bool(m["won"])
-    # The series is ordered ascending by recorded_at, so its last point is the
-    # current rank -- which the Batch MMR endpoint confirmed equals the live rank
-    # (api-findings spike 12), so no extra request is needed.
-    series = queries.mmr_series(conn, resolved.account_id)
-    current_rank = resolve_badge(series[-1]["badge"], queries.list_ranks(conn)) if series else None
+    # mmr_series + seasons + current_rank (the series' last point, which equals
+    # the live rank -- api-findings spike 12/15), each named in its own season's
+    # rank system.
+    timeline = rank_timeline(conn, resolved.account_id, now=now)
     result = {
         "account_id": resolved.account_id,
-        "mmr_series": series,
-        "current_rank": current_rank,
+        **timeline,
         "last_matches": recent,
         "sync": sync,
         # Provisional when any recent row is still a discovery summary; each row

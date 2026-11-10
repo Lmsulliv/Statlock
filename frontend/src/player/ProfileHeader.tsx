@@ -12,7 +12,9 @@ export function ProfileHeader({ profile }: { profile: PlayerProfile }) {
         <span className="profile-eyebrow">Public profile</span>
         <h1 className="profile-name">{profile.display_name}</h1>
       </div>
-      {profile.current_rank && <CurrentRankBadge rank={profile.current_rank} />}
+      {profile.current_rank && (
+        <CurrentRankBadge rank={profile.current_rank} seasons={profile.seasons} />
+      )}
     </div>
   )
 }

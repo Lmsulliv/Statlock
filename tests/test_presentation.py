@@ -378,8 +378,8 @@ def test_api_ranks_returns_per_tier_entries(api_db):
     derived per-tier badge URL, ordered low to high."""
     for tier, name in ((0, "Obscurus"), (1, "Initiate"), (8, "Oracle")):
         api_db.execute(
-            "INSERT INTO ranks(tier, name, color, fetched_at)"
-            " VALUES (?, ?, '#abcdef', '2026-06-15T12:00:00+00:00')",
+            "INSERT INTO ranks(rank_system, tier, name, color, fetched_at)"
+            " VALUES ('seasonal', ?, ?, '#abcdef', '2026-06-15T12:00:00+00:00')",
             (tier, name),
         )
     api_db.commit()
